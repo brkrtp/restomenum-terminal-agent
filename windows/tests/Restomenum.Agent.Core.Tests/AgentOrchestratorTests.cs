@@ -34,7 +34,8 @@ public class AgentOrchestratorTests : IDisposable
         new(_store, t, _clock, RecoveryPolicy.Immediate);
 
     private static SaleRequest Req(string id = "cmd1") =>
-        new(CommandId: id, PaymentId: "pay1", TerminalId: "t1", AmountMinor: 24000, Currency: "TRY");
+        new(CommandId: id, PaymentId: "pay1", TerminalId: "t1", AmountMinor: 24000,
+            Currency: "TRY", Exponent: 2, ProviderPluginId: "prov");
 
     private long Gelecek => _clock.ServerNow() + 60_000;
 

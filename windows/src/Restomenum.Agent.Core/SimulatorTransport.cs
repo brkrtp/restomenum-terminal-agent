@@ -20,6 +20,14 @@ public sealed class SimulatorTransport : ITerminalTransport
     public TimeSpan Delay { get; set; } = TimeSpan.Zero;
 
     public List<SaleRequest> SaleCalls { get; } = new();
+
+    /// <summary>
+    /// Aynı anda kaç satışın içeride olduğunun tepe değeri. Değişmez #4'ü (terminal başına tek
+    /// işlem) ölçmenin tek dürüst yolu: çağrı SAYISI seri olup olmadığını göstermez, ÇAKIŞMA gösterir.
+    /// </summary>
+    public int MaxConcurrentSales { get; private set; }
+    private int _aktif;
+    private readonly object _sayacGate = new();
     public int ReadTicketCalls { get; private set; }
     public bool EchoResult { get; set; } = true;
 
@@ -40,11 +48,24 @@ public sealed class SimulatorTransport : ITerminalTransport
 
     public async Task<TransportResult> SaleAsync(SaleRequest request, CancellationToken ct = default)
     {
-        SaleCalls.Add(request);
-        if (Delay > TimeSpan.Zero) await Task.Delay(Delay, ct);
-        // Plan bittiyse `Unknown` döner: testte "beklenmedik ikinci çağrı" sessizce başarılı
-        // görünmesin — en tehlikeli dala düşsün ki fark edilsin.
-        return _plan.Count > 0 ? _plan.Dequeue() : new TransportResult(TransportOutcome.Unknown);
+        lock (_sayacGate)
+        {
+            SaleCalls.Add(request);
+            _aktif++;
+            if (_aktif > MaxConcurrentSales) MaxConcurrentSales = _aktif;
+        }
+        try
+        {
+            if (Delay > TimeSpan.Zero) await Task.Delay(Delay, ct);
+            // Plan bittiyse `Unknown` döner: testte "beklenmedik ikinci çağrı" sessizce başarılı
+            // görünmesin — en tehlikeli dala düşsün ki fark edilsin.
+            lock (_sayacGate)
+                return _plan.Count > 0 ? _plan.Dequeue() : new TransportResult(TransportOutcome.Unknown);
+        }
+        finally
+        {
+            lock (_sayacGate) { _aktif--; }
+        }
     }
 
     public async Task<TicketState> ReadTicketAsync(CancellationToken ct = default)

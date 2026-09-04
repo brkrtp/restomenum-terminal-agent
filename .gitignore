@@ -2,5 +2,9 @@ build/
 .gradle/
 local.properties
 *.db
+
+# .NET derleme ciktilari — depoya girmez (onlarca MB ikili, her makinede yeniden uretilir)
+bin/
+obj/
 # Makineye ozgu JDK yolu — depoda tutulmaz (README'ye bak)
 gradle.properties

@@ -63,6 +63,32 @@ public sealed class AgentOrchestrator
         _recovery = recovery ?? new RecoveryPolicy();
     }
 
+    /// <summary>
+    /// Komutu <b>yalnız kaydeder</b> — terminale dokunmaz. <c>command.ack</c> bunun sonucuna göre
+    /// gönderilir (§12.2/1).
+    ///
+    /// <para><b>Neden kabul ve çalıştırma ayrı:</b> gateway <c>command.ack</c>'i 3 saniye içinde
+    /// bekliyor, ama kartlı ödeme sahada <b>20–32 saniye</b> sürüyor. Tek adımda yapılsaydı her
+    /// komut zaman aşımına uğrar, dispatcher kabul görmediği için mesajı yeniden teslim eder ve
+    /// aynı ödeme tekrar tekrar denenirdi. <c>ack</c> "aldım ve dayanıklı olarak yazdım" demektir,
+    /// "tahsilat başarılı" değil.</para>
+    /// </summary>
+    /// <returns><c>false</c> ise yazılamadı — <c>accepted:false</c> gönderilmeli ki komut kaybolmasın.</returns>
+    public bool Accept(SaleRequest req, long expiresAt)
+    {
+        try
+        {
+            _store.Save(req.CommandId, req.PaymentId, req.TerminalId, expiresAt);
+            return true;
+        }
+        catch (Exception)
+        {
+            // Yazamadıysak "aldım" DEMEYİZ. Komut JetStream'de kalır ve yeniden teslim edilir;
+            // sessizce kabul etmek onu hem kaybetmek hem aldığını söylemek olurdu.
+            return false;
+        }
+    }
+
     /// <summary>Komutu işler. Aynı <c>CommandId</c> ile ikinci çağrı terminale GİTMEZ.</summary>
     public async Task<AgentOutcome> HandleAsync(SaleRequest req, long expiresAt, CancellationToken ct = default)
     {
@@ -71,6 +97,12 @@ public sealed class AgentOrchestrator
         if (saved is SaveResult.Duplicate dup)
             return await HandleDuplicateAsync(dup.Command, req, ct);
 
+        return await RunAsync(req, expiresAt, ct);
+    }
+
+    /// <summary>Kaydedilmiş bir komutu çalıştırır — saat, süre, gönderim, sonuç.</summary>
+    private async Task<AgentOutcome> RunAsync(SaleRequest req, long expiresAt, CancellationToken ct)
+    {
         // ── 2. SAAT (§5.3) — offset yoksa TAHMİN YOK ──────────────────────────────
         var expired = _clock.IsExpired(expiresAt);
         if (expired is null)
@@ -201,6 +233,15 @@ public sealed class AgentOrchestrator
                 : AgentDecision.Declined;
             return new AgentOutcome(decision, stored.State, Note: "saklanan sonuç replay edildi");
         }
+
+        // `RECEIVED` = kabul edildi ama terminale **HİÇ gönderilmedi** — durum çağrıdan ÖNCE
+        // ilerletildiği için bu kesin. İki gerçek yolla buraya düşülür: `Accept` ile `command.ack`
+        // gönderildikten sonra çalıştırma sırası gelmemiştir, ya da agent tam o aralıkta çökmüştür.
+        // Para hareket etmediği için çalıştırmak GÜVENLİ; terminale sormak ise gereksiz bir tur ve
+        // "açık fiş yok" cevabıyla komutu boşuna geri çevirirdi.
+        if (stored.State == CommandState.RECEIVED)
+            return await RunAsync(req, stored.ExpiresAt, ct);
+
         return await ResolveAsync(stored, "tekrar gelen komut, uçuşta", ct);
     }
 

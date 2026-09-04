@@ -7,7 +7,11 @@ public sealed record SaleRequest(
     string TerminalId,
     long AmountMinor,
     string Currency,
-    int Exponent);
+    /// <summary>Kuruş basamağı. <b>Varsayılanı YOKTUR</b> — 2 varsaymak JPY gibi kuruşsuz para
+    /// birimlerinde tutarı 100 katına çıkarır. Değer komutun payload'ından gelir.</summary>
+    int Exponent,
+    /// <summary>Denemenin sahibi sağlayıcı; sonuç raporunda geri gönderilir.</summary>
+    string? ProviderPluginId = null);
 
 /// <summary>
 /// Terminalden dönen sonucun **sınıfı**. Ayrım para güvenliğinin merkezinde: hangi sınıfın güvenle
