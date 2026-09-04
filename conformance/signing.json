@@ -1,0 +1,42 @@
+{
+  "aciklama": "Session imzasinin kanonik dizesi. Duz 'a|b|c' birlestirmesi BELIRSIZDIR: bir alan ayrac icerirse iki farkli uclu AYNI dizeyi uretir ve tek imza iki farkli istegi dogrular. Uzunluk oneki bunu kapatir.",
+  "kaynak": "firebase/functions/api/connectors/session.js → imzaGovdesi()",
+  "vektorler": [
+    {
+      "connectorId": "conn9",
+      "nonce": "abc",
+      "timestamp": 1788544448470,
+      "expected": "5:conn9|3:abc|13:1788544448470"
+    },
+    {
+      "connectorId": "kasa-1",
+      "nonce": "n-0001",
+      "timestamp": 1700000000000,
+      "expected": "6:kasa-1|6:n-0001|13:1700000000000"
+    },
+    {
+      "connectorId": "a",
+      "nonce": "b",
+      "timestamp": 1,
+      "expected": "1:a|1:b|1:1"
+    },
+    {
+      "connectorId": "conn|9",
+      "nonce": "abc",
+      "timestamp": 1788544448470,
+      "expected": "6:conn|9|3:abc|13:1788544448470"
+    },
+    {
+      "connectorId": "conn",
+      "nonce": "9|abc",
+      "timestamp": 1788544448470,
+      "expected": "4:conn|5:9|abc|13:1788544448470"
+    },
+    {
+      "connectorId": "uzun-connector-kimligi-0123456789",
+      "nonce": "nonce-xyz",
+      "timestamp": 1788544448470,
+      "expected": "33:uzun-connector-kimligi-0123456789|9:nonce-xyz|13:1788544448470"
+    }
+  ]
+}

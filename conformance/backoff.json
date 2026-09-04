@@ -1,0 +1,20 @@
+{
+  "aciklama": "Yeniden baglanma gecikmesi. JITTER ZORUNLU: gateway kapandiginda tum agent'lar ayni anda kopar; sabit gecikmeyle hepsi ayni saniyede doner (10.000 cihazda ~33 baglanti/sn).",
+  "kaynak": "restomenum-terminal-agent/android/core/.../Backoff.kt",
+  "basamaklar_ms": [
+    500,
+    1000,
+    2000,
+    5000,
+    10000,
+    30000
+  ],
+  "tavanda_kalir": true,
+  "jitter_yuzde": 20,
+  "kurallar": [
+    "n. cagri basamaklar[min(n, son)] tabanini kullanir",
+    "sonuc taban +/- %20 bandinda olmali",
+    "jitter CIFT YONLU olmali (yalniz pozitif, dalgayi yaymak yerine oteler)",
+    "sifirla() cagrisindan sonra ilk gecikme yeniden 500 ms tabanindan uretilir"
+  ]
+}

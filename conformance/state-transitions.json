@@ -1,0 +1,166 @@
+{
+  "aciklama": "Komut durum makinesi. GERI KENAR YOKTUR: terminale gonderilmis bir komut asla RECEIVED'a donemez — donebilseydi bir yeniden baglanma, karti cekilmis bir islemi 'hic baslamamis' gosterir ve ikinci kez gonderilmesine kapi acardi.",
+  "kaynak": "restomenum-terminal-agent/android/core/.../AgentState.kt",
+  "vektorler": [
+    {
+      "from": "RECEIVED",
+      "to": "SENT_TO_TERMINAL",
+      "expected": true
+    },
+    {
+      "from": "RECEIVED",
+      "to": "UNKNOWN",
+      "expected": true
+    },
+    {
+      "from": "RECEIVED",
+      "to": "COMPLETED",
+      "expected": false
+    },
+    {
+      "from": "RECEIVED",
+      "to": "EXPIRED",
+      "expected": true
+    },
+    {
+      "from": "RECEIVED",
+      "to": "REJECTED",
+      "expected": true
+    },
+    {
+      "from": "SENT_TO_TERMINAL",
+      "to": "RECEIVED",
+      "expected": false
+    },
+    {
+      "from": "SENT_TO_TERMINAL",
+      "to": "UNKNOWN",
+      "expected": true
+    },
+    {
+      "from": "SENT_TO_TERMINAL",
+      "to": "COMPLETED",
+      "expected": true
+    },
+    {
+      "from": "SENT_TO_TERMINAL",
+      "to": "EXPIRED",
+      "expected": false
+    },
+    {
+      "from": "SENT_TO_TERMINAL",
+      "to": "REJECTED",
+      "expected": false
+    },
+    {
+      "from": "UNKNOWN",
+      "to": "RECEIVED",
+      "expected": false
+    },
+    {
+      "from": "UNKNOWN",
+      "to": "SENT_TO_TERMINAL",
+      "expected": false
+    },
+    {
+      "from": "UNKNOWN",
+      "to": "COMPLETED",
+      "expected": true
+    },
+    {
+      "from": "UNKNOWN",
+      "to": "EXPIRED",
+      "expected": false
+    },
+    {
+      "from": "UNKNOWN",
+      "to": "REJECTED",
+      "expected": true
+    },
+    {
+      "from": "COMPLETED",
+      "to": "RECEIVED",
+      "expected": false
+    },
+    {
+      "from": "COMPLETED",
+      "to": "SENT_TO_TERMINAL",
+      "expected": false
+    },
+    {
+      "from": "COMPLETED",
+      "to": "UNKNOWN",
+      "expected": false
+    },
+    {
+      "from": "COMPLETED",
+      "to": "EXPIRED",
+      "expected": false
+    },
+    {
+      "from": "COMPLETED",
+      "to": "REJECTED",
+      "expected": false
+    },
+    {
+      "from": "EXPIRED",
+      "to": "RECEIVED",
+      "expected": false
+    },
+    {
+      "from": "EXPIRED",
+      "to": "SENT_TO_TERMINAL",
+      "expected": false
+    },
+    {
+      "from": "EXPIRED",
+      "to": "UNKNOWN",
+      "expected": false
+    },
+    {
+      "from": "EXPIRED",
+      "to": "COMPLETED",
+      "expected": false
+    },
+    {
+      "from": "EXPIRED",
+      "to": "REJECTED",
+      "expected": false
+    },
+    {
+      "from": "REJECTED",
+      "to": "RECEIVED",
+      "expected": false
+    },
+    {
+      "from": "REJECTED",
+      "to": "SENT_TO_TERMINAL",
+      "expected": false
+    },
+    {
+      "from": "REJECTED",
+      "to": "UNKNOWN",
+      "expected": false
+    },
+    {
+      "from": "REJECTED",
+      "to": "COMPLETED",
+      "expected": false
+    },
+    {
+      "from": "REJECTED",
+      "to": "EXPIRED",
+      "expected": false
+    }
+  ],
+  "final_durumlar": [
+    "COMPLETED",
+    "EXPIRED",
+    "REJECTED"
+  ],
+  "terminale_ulasmis_olabilir": [
+    "SENT_TO_TERMINAL",
+    "UNKNOWN",
+    "COMPLETED"
+  ]
+}

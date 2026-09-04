@@ -1,0 +1,6 @@
+build/
+.gradle/
+local.properties
+*.db
+# Makineye ozgu JDK yolu — depoda tutulmaz (README'ye bak)
+gradle.properties
