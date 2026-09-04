@@ -47,6 +47,22 @@ public sealed class CommandStore : IDisposable
 {
     private readonly SqliteConnection _conn;
 
+    /// <summary>
+    /// <b>Tek bağlantı paylaşıldığı için ZORUNLU.</b> <c>Microsoft.Data.Sqlite</c>'ın
+    /// <see cref="SqliteConnection"/>'ı thread-safe DEĞİLDİR; <c>PRAGMA busy_timeout</c> yalnız
+    /// <i>ayrı</i> bağlantılar arasındaki dosya kilidini bekletir, aynı nesneye eşzamanlı erişimi
+    /// korumaz.
+    ///
+    /// <para>Bu sınıfın bütün varlık sebebi eşzamanlı çift-tahsilatı önlemek olduğu için burası
+    /// kritik: oturum devrinde (§12.2/2) iki soket aynı komutu aynı anda işleyebilir ve tam o anda
+    /// iki iş parçacığı aynı bağlantıya girer. Kilitsiz bırakmak, yarışı kapatmak için yazılmış
+    /// kodun kendisini yarışa açık bırakmak olurdu.</para>
+    ///
+    /// <para>İşlemler kısa ve senkron olduğu için düz bir <c>lock</c> yeterli; ölçülen maliyeti
+    /// bir kart işleminin (20–32 sn) yanında ihmal edilebilir.</para>
+    /// </summary>
+    private readonly object _gate = new();
+
     private CommandStore(SqliteConnection conn) => _conn = conn;
 
     public static CommandStore Open(string path)
@@ -86,44 +102,50 @@ public sealed class CommandStore : IDisposable
     public SaveResult Save(
         string commandId, string paymentId, string terminalId, long expiresAt, long? now = null)
     {
-        var ts = now ?? DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
-        int affected;
-        using (var cmd = _conn.CreateCommand())
+        lock (_gate)
         {
-            // TEK ifade: oku-sonra-yaz DEĞİL. Çakışmada sessizce 0 satır etkiler.
-            cmd.CommandText = """
-                INSERT OR IGNORE INTO commands
-                    (command_id, payment_id, terminal_id, received_at, expires_at, state, updated_at)
-                VALUES ($cid, $pid, $tid, $now, $exp, $state, $now)
-                """;
-            cmd.Parameters.AddWithValue("$cid", commandId);
-            cmd.Parameters.AddWithValue("$pid", paymentId);
-            cmd.Parameters.AddWithValue("$tid", terminalId);
-            cmd.Parameters.AddWithValue("$now", ts);
-            cmd.Parameters.AddWithValue("$exp", expiresAt);
-            cmd.Parameters.AddWithValue("$state", CommandState.RECEIVED.ToString());
-            affected = cmd.ExecuteNonQuery();
+            var ts = now ?? DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            int affected;
+            using (var cmd = _conn.CreateCommand())
+            {
+                // TEK ifade: oku-sonra-yaz DEĞİL. Çakışmada sessizce 0 satır etkiler.
+                cmd.CommandText = """
+                    INSERT OR IGNORE INTO commands
+                        (command_id, payment_id, terminal_id, received_at, expires_at, state, updated_at)
+                    VALUES ($cid, $pid, $tid, $now, $exp, $state, $now)
+                    """;
+                cmd.Parameters.AddWithValue("$cid", commandId);
+                cmd.Parameters.AddWithValue("$pid", paymentId);
+                cmd.Parameters.AddWithValue("$tid", terminalId);
+                cmd.Parameters.AddWithValue("$now", ts);
+                cmd.Parameters.AddWithValue("$exp", expiresAt);
+                cmd.Parameters.AddWithValue("$state", CommandState.RECEIVED.ToString());
+                affected = cmd.ExecuteNonQuery();
+            }
+            var stored = Read(commandId) ?? throw new InvalidOperationException($"kayıt sonrası okunamadı: {commandId}");
+            return affected == 1 ? new SaveResult.New(stored) : new SaveResult.Duplicate(stored);
         }
-        var stored = Read(commandId) ?? throw new InvalidOperationException($"kayıt sonrası okunamadı: {commandId}");
-        return affected == 1 ? new SaveResult.New(stored) : new SaveResult.Duplicate(stored);
     }
 
     public StoredCommand? Read(string commandId)
     {
-        using var cmd = _conn.CreateCommand();
-        cmd.CommandText = "SELECT * FROM commands WHERE command_id = $cid";
-        cmd.Parameters.AddWithValue("$cid", commandId);
-        using var r = cmd.ExecuteReader();
-        if (!r.Read()) return null;
-        return new StoredCommand(
-            r.GetString(r.GetOrdinal("command_id")),
-            r.GetString(r.GetOrdinal("payment_id")),
-            r.GetString(r.GetOrdinal("terminal_id")),
-            r.GetInt64(r.GetOrdinal("received_at")),
-            r.GetInt64(r.GetOrdinal("expires_at")),
-            Enum.Parse<CommandState>(r.GetString(r.GetOrdinal("state"))),
-            r.IsDBNull(r.GetOrdinal("terminal_reference")) ? null : r.GetString(r.GetOrdinal("terminal_reference")),
-            r.IsDBNull(r.GetOrdinal("result_json")) ? null : r.GetString(r.GetOrdinal("result_json")));
+        lock (_gate)
+        {
+            using var cmd = _conn.CreateCommand();
+            cmd.CommandText = "SELECT * FROM commands WHERE command_id = $cid";
+            cmd.Parameters.AddWithValue("$cid", commandId);
+            using var r = cmd.ExecuteReader();
+            if (!r.Read()) return null;
+            return new StoredCommand(
+                r.GetString(r.GetOrdinal("command_id")),
+                r.GetString(r.GetOrdinal("payment_id")),
+                r.GetString(r.GetOrdinal("terminal_id")),
+                r.GetInt64(r.GetOrdinal("received_at")),
+                r.GetInt64(r.GetOrdinal("expires_at")),
+                Enum.Parse<CommandState>(r.GetString(r.GetOrdinal("state"))),
+                r.IsDBNull(r.GetOrdinal("terminal_reference")) ? null : r.GetString(r.GetOrdinal("terminal_reference")),
+                r.IsDBNull(r.GetOrdinal("result_json")) ? null : r.GetString(r.GetOrdinal("result_json")));
+        }
     }
 
     /// <summary>
@@ -137,22 +159,25 @@ public sealed class CommandStore : IDisposable
         string commandId, CommandState expected, CommandState next,
         string? terminalReference = null, string? resultJson = null, long? now = null)
     {
-        if (!AgentStateRules.CanTransition(expected, next)) return false;
-        using var cmd = _conn.CreateCommand();
-        cmd.CommandText = """
-            UPDATE commands
-               SET state = $next, updated_at = $now,
-                   terminal_reference = COALESCE($ref, terminal_reference),
-                   result_json = COALESCE($res, result_json)
-             WHERE command_id = $cid AND state = $expected
-            """;
-        cmd.Parameters.AddWithValue("$next", next.ToString());
-        cmd.Parameters.AddWithValue("$now", now ?? DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
-        cmd.Parameters.AddWithValue("$ref", (object?)terminalReference ?? DBNull.Value);
-        cmd.Parameters.AddWithValue("$res", (object?)resultJson ?? DBNull.Value);
-        cmd.Parameters.AddWithValue("$cid", commandId);
-        cmd.Parameters.AddWithValue("$expected", expected.ToString());
-        return cmd.ExecuteNonQuery() == 1;
+        lock (_gate)
+        {
+            if (!AgentStateRules.CanTransition(expected, next)) return false;
+            using var cmd = _conn.CreateCommand();
+            cmd.CommandText = """
+                UPDATE commands
+                   SET state = $next, updated_at = $now,
+                       terminal_reference = COALESCE($ref, terminal_reference),
+                       result_json = COALESCE($res, result_json)
+                 WHERE command_id = $cid AND state = $expected
+                """;
+            cmd.Parameters.AddWithValue("$next", next.ToString());
+            cmd.Parameters.AddWithValue("$now", now ?? DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+            cmd.Parameters.AddWithValue("$ref", (object?)terminalReference ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("$res", (object?)resultJson ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("$cid", commandId);
+            cmd.Parameters.AddWithValue("$expected", expected.ToString());
+            return cmd.ExecuteNonQuery() == 1;
+        }
     }
 
     /// <summary>
@@ -161,11 +186,14 @@ public sealed class CommandStore : IDisposable
     /// </summary>
     public int Purge(long olderThan)
     {
-        using var cmd = _conn.CreateCommand();
-        cmd.CommandText =
-            "DELETE FROM commands WHERE updated_at < $t AND state IN ('COMPLETED','EXPIRED','REJECTED')";
-        cmd.Parameters.AddWithValue("$t", olderThan);
-        return cmd.ExecuteNonQuery();
+        lock (_gate)
+        {
+            using var cmd = _conn.CreateCommand();
+            cmd.CommandText =
+                "DELETE FROM commands WHERE updated_at < $t AND state IN ('COMPLETED','EXPIRED','REJECTED')";
+            cmd.Parameters.AddWithValue("$t", olderThan);
+            return cmd.ExecuteNonQuery();
+        }
     }
 
     public void Dispose() => _conn.Dispose();
