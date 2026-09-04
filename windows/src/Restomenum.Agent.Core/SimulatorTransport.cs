@@ -78,4 +78,33 @@ public sealed class SimulatorTransport : ITerminalTransport
     }
 
     public Task<bool> EchoAsync(CancellationToken ct = default) => Task.FromResult(EchoResult);
+
+    /// <summary>
+    /// Varsayılan davranış <b>fişten türetilir</b>: açık fiş yoksa ödeme işlenmemiştir; varsa ve
+    /// üzerinde en az bir ödeme kayıtlıysa işlenmiştir. <see cref="ProbeResult"/> ile ezilebilir.
+    /// </summary>
+    public PaymentProbe? ProbeResult { get; set; }
+
+    public async Task<PaymentProbe> ProbeAsync(SaleRequest request, CancellationToken ct = default)
+    {
+        ProbeCalls++;
+        if (Delay > TimeSpan.Zero) await Task.Delay(Delay, ct);
+        if (_readThrows)
+            return new PaymentProbe(ProbeVerdict.Indeterminate, Note: "terminale ulaşılamıyor");
+        if (_busyReads > 0) { _busyReads--; throw new TerminalBusyException(); }
+        if (ProbeResult is not null) return ProbeResult;
+
+        if (!_ticket.HasOpenTicket && _ticket.PaymentCount == 0)
+            return new PaymentProbe(ProbeVerdict.NotLanded);
+        if (_ticket.PaymentCount > 0 || _ticket.PaidAmountMinor > 0)
+        {
+            return new PaymentProbe(ProbeVerdict.Landed,
+                ApprovedAmountMinor: _ticket.PaidAmountMinor,
+                RemainingMinor: Math.Max(0, _ticket.TotalAmountMinor - _ticket.PaidAmountMinor),
+                Rrn: _ticket.Rrn, CardLast4: _ticket.CardLast4);
+        }
+        return new PaymentProbe(ProbeVerdict.NotLanded);
+    }
+
+    public int ProbeCalls { get; private set; }
 }

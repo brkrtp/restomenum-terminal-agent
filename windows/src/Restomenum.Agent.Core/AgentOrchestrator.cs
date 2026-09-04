@@ -32,7 +32,7 @@ public sealed record AgentOutcome(
 /// ## Tasarımın merkezindeki ilke: VARSAYMA, SOR
 ///
 /// Belirsiz her sonuç — `Busy`, `Unknown`, `TicketAlreadyOpen` — **tek bir yola** girer:
-/// <see cref="ITerminalTransport.ReadTicketAsync"/>. Terminale sorulur.
+/// <see cref="ITerminalTransport.ProbeAsync"/>. Terminale sorulur.
 ///
 /// Saha "`RECV_BUSY` komut ulaşmadan döner, güvenle tekrarlanabilir" diyor ve muhtemelen doğru —
 /// ama bu **kanıtlanmadı**. Paranın hareket edip etmediğinin tek otoritesi terminaldir. Varsayımla
@@ -122,22 +122,23 @@ public sealed class AgentOrchestrator
         {
             // Yarış: başka bir iş parçacığı aynı komutu ilerletmiş. Kendi başımıza gönderemeyiz.
             var current = _store.Read(req.CommandId)!;
-            return await ResolveAsync(current, "eşzamanlı ilerletme — durum başkası tarafından değişti", ct);
+            return await ResolveAsync(current, req, "eşzamanlı ilerletme — durum başkası tarafından değişti", ct);
         }
 
         var result = await _transport.SaleAsync(req, ct);
-        return await ApplyAsync(req.CommandId, result, ct);
+        return await ApplyAsync(req, result, ct);
     }
 
     /// <summary>Terminal sonucunu duruma çevirir.</summary>
-    private async Task<AgentOutcome> ApplyAsync(string commandId, TransportResult result, CancellationToken ct)
+    private async Task<AgentOutcome> ApplyAsync(
+        SaleRequest req, TransportResult result, CancellationToken ct)
     {
         switch (result.Outcome)
         {
             case TransportOutcome.Approved:
             case TransportOutcome.Declined:
                 // Kesin sonuç — terminal cevapladı.
-                _store.Advance(commandId, CommandState.SENT_TO_TERMINAL, CommandState.COMPLETED,
+                _store.Advance(req.CommandId, CommandState.SENT_TO_TERMINAL, CommandState.COMPLETED,
                     terminalReference: result.Rrn, resultJson: Serialize(result));
                 return new AgentOutcome(
                     result.Outcome == TransportOutcome.Approved ? AgentDecision.Approved : AgentDecision.Declined,
@@ -148,9 +149,9 @@ public sealed class AgentOrchestrator
             case TransportOutcome.Unknown:
             default:
                 // BELİRSİZ — hepsi AYNI yola girer: terminale sor. Varsayım yok.
-                _store.Advance(commandId, CommandState.SENT_TO_TERMINAL, CommandState.UNKNOWN);
-                var current = _store.Read(commandId)!;
-                return await ResolveAsync(current, $"transport={result.Outcome}", ct);
+                _store.Advance(req.CommandId, CommandState.SENT_TO_TERMINAL, CommandState.UNKNOWN);
+                var current = _store.Read(req.CommandId)!;
+                return await ResolveAsync(current, req, $"transport={result.Outcome}", ct);
         }
     }
 
@@ -161,9 +162,10 @@ public sealed class AgentOrchestrator
     /// 6.5 saniyeyi boşa harcadı; terminal kart işlemini bitirmek için ~25–30 sn daha meşgul
     /// kalıyor. Gecikme <see cref="RecoveryPolicy"/>'dedir ve tahmin değil ölçümdür.</para>
     /// </summary>
-    private async Task<AgentOutcome> ResolveAsync(StoredCommand cmd, string note, CancellationToken ct)
+    private async Task<AgentOutcome> ResolveAsync(
+        StoredCommand cmd, SaleRequest req, string note, CancellationToken ct)
     {
-        TicketState? ticket = null;
+        PaymentProbe? sonuc = null;
         string? sonHata = null;
 
         for (var deneme = 0; deneme < _recovery.MaxAttempts; deneme++)
@@ -171,7 +173,10 @@ public sealed class AgentOrchestrator
             await _recovery.Sleep(_recovery.DelayFor(deneme), ct);
             try
             {
-                ticket = await _transport.ReadTicketAsync(ct);
+                // "Fiş ödendi mi" DEĞİL, "BENİM ödemem işlendi mi". Artımlı modelde (Türkiye)
+                // kısmen ödenmiş açık fiş NORMALDİR — onu "ödeme olmadı" saymak aynı tahsilatı
+                // ikinci kez denetirdi.
+                sonuc = await _transport.ProbeAsync(req, ct);
                 break;
             }
             catch (TerminalBusyException e)
@@ -181,44 +186,42 @@ public sealed class AgentOrchestrator
             }
             catch (Exception e)
             {
-                // Terminale ulaşılamıyor → GERÇEK belirsizlik. Tahmin yok, SALE tekrarı yok.
                 return new AgentOutcome(AgentDecision.Unresolved, cmd.State,
                     Note: $"{note}; terminale ulaşılamadı: {e.Message}");
             }
         }
 
-        if (ticket is null)
+        if (sonuc is null)
         {
             // Sorgu bütçesi tükendi. **Tahmin edilmez** — insana gider.
             return new AgentOutcome(AgentDecision.Unresolved, cmd.State,
                 Note: $"{note}; {_recovery.MaxAttempts} denemede terminal cevap vermedi ({sonHata})");
         }
 
-        if (ticket.IsFullyPaid)
+        if (sonuc.Verdict == ProbeVerdict.Landed)
         {
-            // Para HAREKET ETTİ. Belirsizlik kesin sonuca indi.
+            // Para HAREKET ETTİ. `RemainingMinor > 0` olabilir ve bu arıza DEĞİLDİR: artımlı
+            // modelde kasiyer kalanı ayrı bir ödemeyle ekleyecek.
             var result = new TransportResult(TransportOutcome.Approved,
-                ApprovedAmountMinor: ticket.PaidAmountMinor, Rrn: ticket.Rrn, CardLast4: ticket.CardLast4);
+                ApprovedAmountMinor: sonuc.ApprovedAmountMinor, Rrn: sonuc.Rrn, CardLast4: sonuc.CardLast4);
             _store.Advance(cmd.CommandId, cmd.State, CommandState.COMPLETED,
-                terminalReference: ticket.Rrn, resultJson: Serialize(result));
+                terminalReference: sonuc.Rrn, resultJson: Serialize(result));
             return new AgentOutcome(AgentDecision.Approved, CommandState.COMPLETED, result,
-                Note: $"{note}; terminalden doğrulandı");
+                Note: $"{note}; terminalden doğrulandı (kalan {sonuc.RemainingMinor})");
         }
 
-        if (!ticket.HasOpenTicket)
+        if (sonuc.Verdict == ProbeVerdict.NotLanded)
         {
-            // Açık fiş YOK → komut terminale ulaşmadı, para hareket etmedi. **Doğrulandı**, varsayılmadı.
-            // Durum `UNKNOWN`'da bırakılır: aynı `commandId` ile tekrar gelirse burada tekrar çözülür.
+            // Ödeme işlenmedi — **kanıtlandı**, varsayılmadı. Durum `UNKNOWN`'da bırakılır: aynı
+            // `commandId` ile tekrar gelirse burada yeniden çözülür.
             return new AgentOutcome(AgentDecision.RetryLater, cmd.State,
-                Note: $"{note}; terminalde açık fiş yok — güvenle tekrar denenebilir");
+                Note: $"{note}; ödeme terminalde işlenmemiş — güvenle tekrar denenebilir");
         }
 
-        // Açık fiş VAR ama tam ödenmemiş. Sahada bu KISMİ ödeme olarak gerçekleşti (3000 fişe 1000):
-        // fiş açık bırakıldı, kalan ikinci bir ödemeyle kapandı ve çift tahsilat OLMADI. Bu yüzden
-        // burada fişi kendi başımıza kapatmayız — tahsil edilmiş tutarı bildirip kararı yukarı bırakırız.
         return new AgentOutcome(AgentDecision.Unresolved, cmd.State,
-            Note: $"{note}; fiş açık, {ticket.PaidAmountMinor}/{ticket.TotalAmountMinor} tahsil edildi — kalan ödeme gerekiyor");
+            Note: $"{note}; akıbet belirlenemedi ({sonuc.Note})");
     }
+
 
     /// <summary>
     /// Tekrar gelen komut. **Terminal ÇAĞRILMAZ** (§12.2/3) — kesin sonuç saklıysa replay edilir,
@@ -242,7 +245,7 @@ public sealed class AgentOrchestrator
         if (stored.State == CommandState.RECEIVED)
             return await RunAsync(req, stored.ExpiresAt, ct);
 
-        return await ResolveAsync(stored, "tekrar gelen komut, uçuşta", ct);
+        return await ResolveAsync(stored, req, "tekrar gelen komut, uçuşta", ct);
     }
 
     /// <summary>Sonucu saklanabilir hâle getirir. **Kart verisi TAŞIMAZ** (§12.3).</summary>

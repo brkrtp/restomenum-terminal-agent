@@ -101,7 +101,7 @@ public class AgentOrchestratorTests : IDisposable
 
         Assert.Equal(AgentDecision.Approved, sonuc.Decision);   // para gerçekten hareket etmişti
         Assert.Single(sim.SaleCalls);                           // ← ÇİVİ: tekrar GÖNDERİLMEDİ
-        Assert.Equal(1, sim.ReadTicketCalls);                   // varsaymak yerine soruldu
+        Assert.Equal(1, sim.ProbeCalls);                        // varsaymak yerine soruldu
     }
 
     [Fact]
@@ -119,19 +119,40 @@ public class AgentOrchestratorTests : IDisposable
     }
 
     [Fact]
-    public async Task Timeout_KismiOdeme_CiftTahsilatUretmez()
+    public async Task Timeout_KismiOdeme_ONAYDIR_ciftTahsilatUretmez()
     {
-        // SAHA VAKASI 1: fiş 3000, tahsil 1000 (kart). Kalan ikinci bir ödemeyle kapandı.
-        // Agent kendi başına ikinci SALE göndermemeli — o mükerrer tahsilat olurdu.
+        // SAHA VAKASI 1: fiş 3000, tahsil 1000 (kart), kalan ikinci bir ödemeyle kapandı.
+        //
+        // Bu testin ilk hâli `Unresolved` bekliyordu ve YANLIŞTI: soruyu "fiş tamamen ödendi mi"
+        // diye sormuştum. Türkiye'de ödeme fişe parça parça eklenir, dolayısıyla doğru soru
+        // "BENİM ödemem işlendi mi"dir — ve bu vakada işlenmişti, para HAREKET ETMİŞTİ.
+        // "Belirsiz" demek hem yanlış hem tehlikeliydi: gereksiz yere insana çıkarıyordu.
         var sim = new SimulatorTransport()
             .Expect(new TransportResult(TransportOutcome.Unknown))
-            .WithTicket(new TicketState(HasOpenTicket: true, TotalAmountMinor: 3000, PaidAmountMinor: 1000));
+            .WithTicket(new TicketState(HasOpenTicket: true, TotalAmountMinor: 3000,
+                PaidAmountMinor: 1000, PaymentCount: 1));
 
         var sonuc = await Orch(sim).HandleAsync(Req(), Gelecek);
 
-        Assert.Equal(AgentDecision.Unresolved, sonuc.Decision);
+        Assert.Equal(AgentDecision.Approved, sonuc.Decision);
+        Assert.Single(sim.SaleCalls);               // ← ÇİVİ: ikinci SALE gitmedi
+        Assert.Contains("kalan 2000", sonuc.Note);  // fiş açık; kalanı ayrı bir komut kapatacak
+    }
+
+    [Fact]
+    public async Task Odeme_islenmemisse_RetryLater()
+    {
+        // Aynı vakanın karşıtı: fiş açık ama ÜZERİNDE ÖDEME YOK. Burada tekrar güvenlidir ve
+        // bu sonuç varsayımla değil, terminale sorularak elde edilir.
+        var sim = new SimulatorTransport()
+            .Expect(new TransportResult(TransportOutcome.Unknown))
+            .WithTicket(new TicketState(HasOpenTicket: true, TotalAmountMinor: 3000,
+                PaidAmountMinor: 0, PaymentCount: 0));
+
+        var sonuc = await Orch(sim).HandleAsync(Req(), Gelecek);
+
+        Assert.Equal(AgentDecision.RetryLater, sonuc.Decision);
         Assert.Single(sim.SaleCalls);
-        Assert.Contains("1000/3000", sonuc.Note);   // tahsil edilen tutar operatöre bildirilir
     }
 
     [Fact]
@@ -144,7 +165,7 @@ public class AgentOrchestratorTests : IDisposable
         var sonuc = await Orch(sim).HandleAsync(Req(), Gelecek);
 
         Assert.Equal(AgentDecision.RetryLater, sonuc.Decision);
-        Assert.Equal(1, sim.ReadTicketCalls);   // "güvenli" sonucu bile SORARAK elde edildi
+        Assert.Equal(1, sim.ProbeCalls);   // "güvenli" sonucu bile SORARAK elde edildi
     }
 
     // ────────────────────────────────────────────────────────────────────────
@@ -163,7 +184,7 @@ public class AgentOrchestratorTests : IDisposable
         var sonuc = await Orch(sim).HandleAsync(Req(), Gelecek);
 
         Assert.Equal(AgentDecision.Approved, sonuc.Decision);
-        Assert.Equal(3, sim.ReadTicketCalls);   // 2 meşgul + 1 başarılı
+        Assert.Equal(3, sim.ProbeCalls);        // 2 meşgul + 1 başarılı
         Assert.Single(sim.SaleCalls);           // meşguliyet boyunca ASLA tekrar gönderilmedi
     }
 
