@@ -38,6 +38,13 @@ public static class PaymentDetailParser
                 var amounts = ptx.GetProperty("AmountsReq");
                 var ext = data.GetProperty("RestomenumExt");
 
+                // Çarpan exponent'ten türetilir (10^exponent); para biriminden TAHMİN edilmez.
+                // Alan yoksa TR varsayılanı 2 (yalnız TR'de SaleItem/terminal sürüşü var; platform
+                // artık her yanıtta Exponent yolluyor — yokluğu beklenmez ama defansif).
+                var exponent = ext.TryGetProperty("Exponent", out var expEl) && expEl.ValueKind == JsonValueKind.Number
+                    ? expEl.GetInt32()
+                    : 2;
+
                 var items = new List<SaleLine>();
                 // SaleItem yalnız TR'de; EU'da HİÇ yok → boş liste. (null/eksik kontrolü.)
                 if (ptx.TryGetProperty("SaleItem", out var arr) && arr.ValueKind == JsonValueKind.Array)
@@ -56,7 +63,7 @@ public static class PaymentDetailParser
                             ProductLabel: StrOr(it, "ProductLabel", ""),
                             Quantity: it.GetProperty("Quantity").GetInt32(),
                             // ItemAmount OTORİTE — birim fiyattan HESAPLANMAZ.
-                            ItemAmountMinor: Money.ToMinor(it.GetProperty("ItemAmount").GetDecimal()),
+                            ItemAmountMinor: Money.ToMinor(it.GetProperty("ItemAmount").GetDecimal(), exponent),
                             TaxCode: StrOr(it, "TaxCode", ""),
                             CategoryId: catId,
                             LineId: lineId));
@@ -67,8 +74,9 @@ public static class PaymentDetailParser
                     PaymentId: StrOr(ext, "PaymentId", ""),
                     SaleReferenceId: data.TryGetProperty("SaleData", out var sd) ? StrOr(sd, "SaleReferenceID", "") : "",
                     Currency: StrOr(amounts, "Currency", ""),
-                    RequestedAmountMinor: Money.ToMinor(amounts.GetProperty("RequestedAmount").GetDecimal()),
-                    SaleTotalAmountMinor: ext.TryGetProperty("SaleTotalAmount", out var st) ? Money.ToMinor(st.GetDecimal()) : 0,
+                    Exponent: exponent,
+                    RequestedAmountMinor: Money.ToMinor(amounts.GetProperty("RequestedAmount").GetDecimal(), exponent),
+                    SaleTotalAmountMinor: ext.TryGetProperty("SaleTotalAmount", out var st) ? Money.ToMinor(st.GetDecimal(), exponent) : 0,
                     Market: StrOr(ext, "Market", ""),
                     State: StrOr(ext, "State", ""),
                     ExpiresAtMs: ext.TryGetProperty("ExpiresAt", out var exp) ? exp.GetInt64() : 0,

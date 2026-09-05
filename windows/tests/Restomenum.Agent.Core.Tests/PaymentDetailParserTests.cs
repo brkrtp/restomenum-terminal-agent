@@ -12,7 +12,7 @@ public class PaymentDetailParserTests
     // Peer'in birebir yolladığı 200 gövdesi (paymentId ellipsis'i geçerli bir id ile değiştirildi).
     private const string TrBody =
         """
-        {"success":true,"data":{"SaleData":{"SaleReferenceID":"9001"},"PaymentTransaction":{"AmountsReq":{"Currency":"TRY","RequestedAmount":240},"SaleItem":[{"ItemID":0,"ProductCode":"e2e-prod-1","ProductLabel":"E2E Adana","Quantity":2,"UnitPrice":120,"ItemAmount":240,"TaxCode":"10","RestomenumExt":{"CategoryId":"e2e-cat","LineId":"l1"}}]},"RestomenumExt":{"PaymentId":"pay_f462abcd","State":"ACCEPTED","Market":"TR","ExpiresAt":1788626365044,"ItemsScope":"fullSale","SaleTotalAmount":240}}}
+        {"success":true,"data":{"SaleData":{"SaleReferenceID":"9001"},"PaymentTransaction":{"AmountsReq":{"Currency":"TRY","RequestedAmount":240},"SaleItem":[{"ItemID":0,"ProductCode":"e2e-prod-1","ProductLabel":"E2E Adana","Quantity":2,"UnitPrice":120,"ItemAmount":240,"TaxCode":"10","RestomenumExt":{"CategoryId":"e2e-cat","LineId":"l1"}}]},"RestomenumExt":{"PaymentId":"pay_f462abcd","State":"ACCEPTED","Market":"TR","ExpiresAt":1788626365044,"Exponent":2,"ItemsScope":"fullSale","SaleTotalAmount":240}}}
         """;
 
     [Fact]
@@ -26,6 +26,7 @@ public class PaymentDetailParserTests
         Assert.Equal(24000, d.RequestedAmountMinor);      // 240 → 24000 kuruş
         Assert.Equal(24000, d.SaleTotalAmountMinor);
         Assert.Equal("TR", d.Market);
+        Assert.Equal(2, d.Exponent);
         Assert.Equal("ACCEPTED", d.State);
         Assert.Equal(1788626365044, d.ExpiresAtMs);
         Assert.Equal("fullSale", d.ItemsScope);
@@ -55,12 +56,25 @@ public class PaymentDetailParserTests
         // Avrupa: SaleItem alanı HİÇ yok (boş dizi değil).
         var body =
             """
-            {"success":true,"data":{"SaleData":{"SaleReferenceID":"55"},"PaymentTransaction":{"AmountsReq":{"Currency":"EUR","RequestedAmount":12.5}},"RestomenumExt":{"PaymentId":"pay_eu","State":"ACCEPTED","Market":"EU","ExpiresAt":1788626365044,"ItemsScope":"fullSale","SaleTotalAmount":12.5}}}
+            {"success":true,"data":{"SaleData":{"SaleReferenceID":"55"},"PaymentTransaction":{"AmountsReq":{"Currency":"EUR","RequestedAmount":12.5}},"RestomenumExt":{"PaymentId":"pay_eu","State":"ACCEPTED","Market":"EU","ExpiresAt":1788626365044,"Exponent":2,"ItemsScope":"fullSale","SaleTotalAmount":12.5}}}
             """;
         var r = Assert.IsType<PaymentDetailResult.Ok>(PaymentDetailParser.Parse(200, body));
         Assert.Empty(r.Detail.Items);
         Assert.Equal(1250, r.Detail.RequestedAmountMinor);
         Assert.Equal("EUR", r.Detail.Currency);
+    }
+
+    [Fact]
+    public void Exponent0_para_birimi_carpani_100_DEGIL()
+    {
+        // Kuruşsuz para birimi (exp=0): 240 → 240 minor, 24000 DEĞİL. Sabit-100 hatasının çivisi.
+        var body =
+            """
+            {"success":true,"data":{"SaleData":{"SaleReferenceID":"77"},"PaymentTransaction":{"AmountsReq":{"Currency":"XYZ","RequestedAmount":240}},"RestomenumExt":{"PaymentId":"pay_z0","State":"ACCEPTED","Market":"EU","ExpiresAt":1788626365044,"Exponent":0,"ItemsScope":"fullSale","SaleTotalAmount":240}}}
+            """;
+        var r = Assert.IsType<PaymentDetailResult.Ok>(PaymentDetailParser.Parse(200, body));
+        Assert.Equal(0, r.Detail.Exponent);
+        Assert.Equal(240, r.Detail.RequestedAmountMinor);   // exp=0 → çarpan 1
     }
 
     [Theory]

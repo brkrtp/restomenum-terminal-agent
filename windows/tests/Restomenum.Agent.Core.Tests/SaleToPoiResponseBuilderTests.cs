@@ -15,9 +15,9 @@ public class SaleToPoiResponseBuilderTests
         PaymentId: "pay_0123456789abcdef0123456789abcdef01234567",
         SaleReferenceId: "1042", TimeStamp: DateTimeOffset.UtcNow);
 
-    private static JsonElement Build(TransportResult r)
+    private static JsonElement Build(TransportResult r, int exponent = 2)
     {
-        var json = SaleToPoiResponseBuilder.BuildResult(Req, r, DateTimeOffset.UtcNow);
+        var json = SaleToPoiResponseBuilder.BuildResult(Req, r, exponent, DateTimeOffset.UtcNow);
         return JsonDocument.Parse(json).RootElement.GetProperty("SaleToPOIResponse");
     }
 

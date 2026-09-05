@@ -20,8 +20,12 @@ namespace Restomenum.Agent.Core;
 /// </summary>
 public static class SaleToPoiResponseBuilder
 {
-    /// <summary>Terminal sonucu → sonuç gövdesi (<c>PaymentResponse</c>). Kasaya senkron + platforma bildirim.</summary>
-    public static string BuildResult(SaleToPoiRequest req, TransportResult result, DateTimeOffset now)
+    /// <summary>
+    /// Terminal sonucu → sonuç gövdesi (<c>PaymentResponse</c>). Kasaya senkron + platforma bildirim.
+    /// <paramref name="exponent"/> AuthorizedAmount'ı tel ondalığına çevirmek için (para biriminin
+    /// minor basamağı, GET yanıtından; sabit değil).
+    /// </summary>
+    public static string BuildResult(SaleToPoiRequest req, TransportResult result, int exponent, DateTimeOffset now)
     {
         var (success, errorCondition) = MapOutcome(result.Outcome);
 
@@ -34,8 +38,8 @@ public static class SaleToPoiResponseBuilder
         {
             paymentResult["AmountsResp"] = new JsonObject
             {
-                // AuthorizedAmount ondalık, ≤2 basamak (ToWire minor/100 hiç >2 basamak üretmez).
-                ["AuthorizedAmount"] = JsonValue.Create(Money.ToWire(amt)),
+                // AuthorizedAmount ondalık; çarpan exponent'ten (sabit değil).
+                ["AuthorizedAmount"] = JsonValue.Create(Money.ToWire(amt, exponent)),
             };
         }
 

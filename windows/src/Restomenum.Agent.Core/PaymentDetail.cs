@@ -15,6 +15,9 @@ public sealed record PaymentDetail(
     string PaymentId,
     string SaleReferenceId,
     string Currency,
+    /// <summary>Minor unit basamağı (<c>RestomenumExt.Exponent</c>). Tutar dönüşümünde çarpan
+    /// <c>10^Exponent</c>; para biriminden TAHMİN edilmez, GET yanıtından okunur.</summary>
+    int Exponent,
     long RequestedAmountMinor,
     long SaleTotalAmountMinor,
     string Market,
