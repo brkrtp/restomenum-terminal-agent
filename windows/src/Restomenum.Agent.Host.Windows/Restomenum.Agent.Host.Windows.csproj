@@ -1,0 +1,31 @@
+<Project Sdk="Microsoft.NET.Sdk.Worker">
+  <PropertyGroup>
+    <!--
+      Windows ÜRETİM kompozisyon kökü. net8.0-windows: donanıma bağlı projelere (Windows cihaz
+      anahtarı + GMP sarmalayıcısı) referans verdiği için Windows'a özgüdür. Mac'te DERLENMEZ —
+      bilerek. Çapraz-platform host (Restomenum.Agent.Host) ayrı kalır ve Mac'te derlenmeye devam eder.
+    -->
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+    <TreatWarningsAsErrors>true</TreatWarningsAsErrors>
+    <!-- GmpSmartDLL.dll native 64-bit; süreç x64 olmalı (Gmp projesiyle aynı gerekçe). -->
+    <PlatformTarget>x64</PlatformTarget>
+    <UserSecretsId>restomenum-agent-host</UserSecretsId>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <PackageReference Include="Microsoft.Extensions.Hosting" Version="8.0.1" />
+    <PackageReference Include="Microsoft.Extensions.Options.DataAnnotations" Version="8.0.0" />
+    <PackageReference Include="Microsoft.Extensions.Hosting.WindowsServices" Version="8.0.1" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <!-- Temel yapılandırma + AgentWorker/AgentOptions buradan; donanıma bağlı uygulamalar Windows/Gmp'ten. -->
+    <ProjectReference Include="../Restomenum.Agent.Core/Restomenum.Agent.Core.csproj" />
+    <ProjectReference Include="../Restomenum.Agent.Host/Restomenum.Agent.Host.csproj" />
+    <ProjectReference Include="../Restomenum.Agent.Windows/Restomenum.Agent.Windows.csproj" />
+    <ProjectReference Include="../Restomenum.Agent.Gmp/Restomenum.Agent.Gmp.csproj" />
+  </ItemGroup>
+</Project>
