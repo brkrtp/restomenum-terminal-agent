@@ -39,7 +39,14 @@ public class LocalSaleHandlerTests : IDisposable
     private sealed class FakeResolver : ILineDepartmentResolver
     {
         public int? Dept = 3;
-        public int? Resolve(string? categoryId) => Dept;
+        public string? LastProductCode;
+        public string? LastCategoryId;
+        public int? Resolve(string? productCode, string? categoryId)
+        {
+            LastProductCode = productCode;
+            LastCategoryId = categoryId;
+            return Dept;
+        }
     }
 
     private sealed class FakeNotifier : IResultNotifier

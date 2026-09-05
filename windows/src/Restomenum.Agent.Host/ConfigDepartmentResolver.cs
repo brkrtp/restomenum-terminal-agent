@@ -5,8 +5,9 @@ using Restomenum.Agent.Core;
 namespace Restomenum.Agent.Host;
 
 /// <summary>
-/// <see cref="ILineDepartmentResolver"/>'ın dosya-tabanlı uygulaması: <c>CategoryId → cihaz departman
-/// indeksi</c> eşlemesini bir JSON dosyasından okur (<c>{ "kategori-id": 1 }</c>).
+/// <see cref="ILineDepartmentResolver"/>'ın dosya-tabanlı uygulaması: <c>kimlik → cihaz departman
+/// indeksi</c> eşlemesini bir JSON dosyasından okur. Anahtar ProductCode VEYA CategoryId olabilir
+/// (§20.2); çözümleme ÖNCE ProductCode dener. Örn. <c>{ "1043-1601": 10 }</c> (Espresso → dept 10=%10).
 ///
 /// <para><b>Veri kaynağı GEÇİCİ:</b> §20.2'ye göre eşlemeyi işletme eklentinin kurulum ekranından
 /// girer ve ajan onu hem çözer hem cihaza yazar (<c>SetDepartments</c>). O kanal (ekran→ajan) henüz
@@ -44,6 +45,12 @@ public sealed class ConfigDepartmentResolver : ILineDepartmentResolver
         _map = map;
     }
 
-    public int? Resolve(string? categoryId) =>
-        categoryId is not null && _map.TryGetValue(categoryId, out var dept) ? dept : null;
+    // ÖNCE ProductCode (en özgül), yoksa CategoryId. Aynı düz sözlük her iki kimlik türünü de tutar
+    // (§20.2: productId ve/veya categoryId); ürün anahtarı kategoriyi ezer.
+    public int? Resolve(string? productCode, string? categoryId)
+    {
+        if (productCode is not null && _map.TryGetValue(productCode, out var byProduct)) return byProduct;
+        if (categoryId is not null && _map.TryGetValue(categoryId, out var byCategory)) return byCategory;
+        return null;
+    }
 }

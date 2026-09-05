@@ -3,20 +3,33 @@ namespace Restomenum.Agent.Core;
 /// <summary>
 /// Kalem → cihaz departman indeksi çözümleyici (yerel mimari, K-21 / §20.2). <b>Departman eşlemesi
 /// cihaz kurulumuna aittir</b> (sağlayıcı=ajan), platformun veri modelinde DEĞİL — o yüzden GET
-/// yanıtında <c>DepartmentNo</c> gelmez; ajan onu <see cref="SaleLine.CategoryId"/> (kararlı kimlik)
-/// üzerinden çözer.
+/// yanıtında <c>DepartmentNo</c> gelmez; ajan onu <see cref="SaleLine.ProductCode"/> (en özgül kararlı
+/// kimlik), yoksa <see cref="SaleLine.CategoryId"/> üzerinden çözer.
 ///
-/// <para><b>Neden CategoryId, TaxCode değil:</b> KDV oranı departmanı belirlemez (çok departman aynı
-/// oranı paylaşır) ve <c>TaxCode</c> kimlik taşımaz. Ada göre eşleme de yasak — ad değişince eşleme
-/// sessizce kopar. §20.2 eşlemenin KARARLI KİMLİK üzerinden kurulmasını zorunlu tutar.</para>
+/// <para><b>Neden ProductCode önce (peer ölçtü):</b> tek bir kategori KARMA KDV taşıyabilir — ör. bir
+/// kategori altında %10 ve %7 ürünler bir arada. Kategoriyi tek departmana eşlersen o kategorideki
+/// FARKLI oranlı ürünler de o departmana (dolayısıyla yanlış KDV'ye) yazılır. ProductCode kalemi tek
+/// başına tanımlar; kategori yalnız tüm ürünleri gerçekten aynı oranı paylaşıyorsa güvenli bir yedektir.
+/// §20.2 eşlemeye <c>productId</c> VE/VEYA <c>categoryId</c> izin verir; ürün eşlemesi kategoriyi EZER.</para>
+///
+/// <para><b>Neden TaxCode/ad değil:</b> KDV oranı departmanı belirlemez (çok departman aynı oranı
+/// paylaşır) ve <c>TaxCode</c> kimlik taşımaz. Ayrıca <c>TaxCode</c> YÜZDE-string'dir (<c>"10"</c>),
+/// cihaz departman oranı BAZ PUAN'dır (<c>1000</c>); doğrudan karşılaştırma her zaman ıskalar — o yüzden
+/// eşleme kimlik üzerinden, KDV departmandan türetilir (fiş satırı <c>VatRate=0</c> gönderir). Ada göre
+/// eşleme de yasak — ad değişince eşleme sessizce kopar.</para>
 ///
 /// <para><b>Arayüz arkasında:</b> eşleme verisinin (eklenti kurulum ekranından ajana) hangi yolla
 /// ulaşacağı ayrı bir karar; bu arayüz veri kaynağını gizler, dinleyici ona bağlanır.</para>
 /// </summary>
 public interface ILineDepartmentResolver
 {
-    /// <summary>Kararlı kimlikten departman indeksi. Eşleme yoksa <c>null</c> → PRODUCT_UNMAPPED (terminale gitmeden ret).</summary>
-    int? Resolve(string? categoryId);
+    /// <summary>
+    /// Kararlı kimlikten departman indeksi. ÖNCE <paramref name="productCode"/> denenir, yoksa
+    /// <paramref name="categoryId"/>'ye düşülür (ürün eşlemesi kategoriyi ezer — karma-KDV kategoride tek
+    /// ürünü doğru departmana yazmanın tek yolu). Hiçbiri eşleşmezse <c>null</c> → PRODUCT_UNMAPPED
+    /// (terminale gitmeden ret).
+    /// </summary>
+    int? Resolve(string? productCode, string? categoryId);
 }
 
 /// <summary>

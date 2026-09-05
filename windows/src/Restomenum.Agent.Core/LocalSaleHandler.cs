@@ -100,7 +100,7 @@ public sealed class LocalSaleHandler
         var lines = new List<FiscalLine>();
         foreach (var item in d.Items)
         {
-            var dept = _departments.Resolve(item.CategoryId);
+            var dept = _departments.Resolve(item.ProductCode, item.CategoryId);
             if (dept is null)
             {
                 // GET başarılıydı (deneme ACCEPTED) → platforma bildir ki takılı kalmasın. Ürünü SÖYLE.
