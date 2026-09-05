@@ -53,7 +53,7 @@ public class SaleToPoiRequestParserTests
     }
 
     [Fact]
-    public void PaymentTransaction_varsa_reddedilir()
+    public void RequestedAmount_varsa_reddedilir()
     {
         // Tutar bu zarfta taşınamaz → sahte/bozuk.
         var body = Gecerli.Replace(
@@ -61,6 +61,16 @@ public class SaleToPoiRequestParserTests
             "\"PaymentTransaction\":{\"AmountsReq\":{\"RequestedAmount\":240}},\"SaleData\":{");
         var inv = Assert.IsType<SaleToPoiParseResult.Invalid>(SaleToPoiRequestParser.Parse(body));
         Assert.Equal(SaleToPoiRejectReason.AmountNotAllowed, inv.Reason);
+    }
+
+    [Fact]
+    public void Currency_only_PaymentTransaction_KABUL_edilir()
+    {
+        // Kasanın ÖLÇÜLEN gerçek gövdesi: PaymentTransaction var ama yalnız Currency (tutar YOK) → meşru.
+        var body = Gecerli.Replace(
+            "\"SaleData\":{",
+            "\"PaymentTransaction\":{\"AmountsReq\":{\"Currency\":\"TRY\"}},\"SaleData\":{");
+        Assert.IsType<SaleToPoiParseResult.Ok>(SaleToPoiRequestParser.Parse(body));
     }
 
     [Theory]

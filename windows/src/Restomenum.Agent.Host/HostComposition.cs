@@ -55,6 +55,52 @@ public static class HostComposition
         // Taşıma katmanının gördüğü anlık görüntü deposu, komut deposunun ta kendisi.
         builder.Services.AddSingleton<ITicketSnapshotStore>(sp => sp.GetRequiredService<CommandStore>());
 
+        // ── Yerel mimari: kimlik + HTTP istemcileri + orkestrasyon (K-21) ─────────────────
+        // Saat ORTAK: HttpSessionProvider oturum yanıtından senkronlar, AgentOrchestrator IsExpired'da okur.
+        builder.Services.AddSingleton<ClockOffset>();
+        // Tek HttpClient (session/GET/notify hepsi hızlı; terminal sürüşü HTTP değil, GMP P/Invoke).
+        builder.Services.AddSingleton(_ => new HttpClient { Timeout = TimeSpan.FromSeconds(30) });
+
+        builder.Services.AddSingleton<ISessionProvider>(sp =>
+        {
+            var o = sp.GetRequiredService<IOptions<AgentOptions>>().Value;
+            return new HttpSessionProvider(sp.GetRequiredService<HttpClient>(), sp.GetRequiredService<IDeviceKey>(),
+                o.ServerId, new Uri(o.SessionUrl), sp.GetRequiredService<ClockOffset>());
+        });
+        builder.Services.AddSingleton<IPaymentDetailClient>(sp =>
+        {
+            var o = sp.GetRequiredService<IOptions<AgentOptions>>().Value;
+            return new HttpPaymentDetailClient(sp.GetRequiredService<HttpClient>(),
+                sp.GetRequiredService<ISessionProvider>(), new Uri(o.PluginsApiUrl));
+        });
+        builder.Services.AddSingleton<IResultNotifier>(sp =>
+        {
+            var o = sp.GetRequiredService<IOptions<AgentOptions>>().Value;
+            return new HttpResultNotifier(sp.GetRequiredService<HttpClient>(),
+                sp.GetRequiredService<ISessionProvider>(), new Uri(o.PluginsApiUrl));
+        });
+        // AgentOrchestrator ITerminalTransport'u TEMBEL çözer — pure Host'ta fırlatan varsayılan (fail-closed),
+        // Windows'ta gerçek GmpTerminalTransport. Çekirdek (dedupe/durum-makinesi/UNKNOWN) korundu.
+        builder.Services.AddSingleton(sp => new AgentOrchestrator(
+            sp.GetRequiredService<CommandStore>(), sp.GetRequiredService<ITerminalTransport>(),
+            sp.GetRequiredService<ClockOffset>()));
+        builder.Services.AddSingleton<ILineDepartmentResolver>(sp =>
+        {
+            var o = sp.GetRequiredService<IOptions<AgentOptions>>().Value;
+            var log = sp.GetRequiredService<ILoggerFactory>().CreateLogger("Departments");
+            var dir = Path.GetDirectoryName(o.ResolveStorePath());
+            return new ConfigDepartmentResolver(Path.Combine(string.IsNullOrEmpty(dir) ? "." : dir, "departments.json"), log);
+        });
+        builder.Services.AddSingleton(sp =>
+        {
+            var log = sp.GetRequiredService<ILoggerFactory>().CreateLogger("LocalSale");
+            return new LocalSaleHandler(
+                sp.GetRequiredService<IPaymentDetailClient>(), sp.GetRequiredService<AgentOrchestrator>(),
+                sp.GetRequiredService<CommandStore>(), sp.GetRequiredService<ILineDepartmentResolver>(),
+                sp.GetRequiredService<IResultNotifier>(), sp.GetRequiredService<Outbox>(),
+                log: (m, d) => log.LogInformation("{Mesaj} {Detay}", m, d));
+        });
+
         builder.Services.AddSingleton<IDeviceKey>(sp =>
         {
             var opt = sp.GetRequiredService<IOptions<AgentOptions>>().Value;

@@ -14,8 +14,22 @@ public sealed class AgentOptions
 {
     public const string Section = "Agent";
 
-    /// <summary>Gateway WSS adresi, örn. <c>wss://payment-gateway…/v1/agent</c>.</summary>
-    [Required] public string GatewayUrl { get; set; } = "";
+    /// <summary>
+    /// Plugin API kök adresi (GET tutar + POST sonuç), örn. <c>https://plugins-….run.app/</c>.
+    /// Yerel mimaride ajan tutarı buradan çeker ve sonucu buraya bildirir (Bearer = oturum JWT).
+    /// </summary>
+    [Required] public string PluginsApiUrl { get; set; } = "";
+
+    /// <summary>
+    /// Yerel HTTP dinleyici ön eki (HttpListener), örn. <c>http://127.0.0.1:7788/</c>. Kasa buraya
+    /// <c>POST /nexo</c> ile SaleToPOIRequest yollar. Terminal kaydındaki <c>endpoint</c> ile eşleşmeli.
+    /// </summary>
+    public string ListenPrefix { get; set; } = "http://127.0.0.1:7788/";
+
+    /// <summary>
+    /// Yerel dinleyicinin kabul ettiği yol. Terminal kaydı <c>http://127.0.0.1:7788/nexo</c> ise <c>/nexo</c>.
+    /// </summary>
+    public string ListenPath { get; set; } = "/nexo";
 
     /// <summary>Oturum ucu, örn. <c>https://…/v1/connectors/session</c>.</summary>
     [Required] public string SessionUrl { get; set; } = "";

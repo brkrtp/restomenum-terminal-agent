@@ -299,7 +299,14 @@ public sealed class GmpTerminalTransport : ITerminalTransport
         GmpCodes.AlreadyDone => new TransportResult(TransportOutcome.TicketAlreadyOpen, ProviderResultCode: $"{adim}:{r}"),
         GmpCodes.RecvBusy => new TransportResult(TransportOutcome.Busy, ProviderResultCode: $"{adim}:{r}"),
         _ when GmpCodes.IsTimeout(r.Code) => new TransportResult(TransportOutcome.Unknown, ProviderResultCode: $"{adim}:{r}"),
-        // Ödeme ÖNCESİ adımların hatası para hareketi üretmez; kesin ret olarak raporlanır.
+        // 2086 (banka kodlu başarısızlık) BELİRSİZ: "İŞLEM ONAYLANMADI" (gerçek ret, para hareket
+        // etmedi) ile "NO RESPONSE" (yanıt kayıp, para hareket etmiş OLABİLİR) aynı kod altında.
+        // Ayırt edilemediği için GÜVENLİ taraf = Unknown (peer platform ölçümüyle de birebir:
+        // 2086 → unknown, DECLINED değil). Kesin-ret deseydik, para çekilmişken kasiyer "başka kart"
+        // ister ve müşteri iki kez öderdi.
+        GmpCodes.PaymentFailedWithBankCode => new TransportResult(TransportOutcome.Unknown, ProviderResultCode: $"{adim}:{r}"),
+        // Ödeme ÖNCESİ adım hataları (Start/TicketHeader/ItemSale) ve 2085 (kart hiç okutulmadı):
+        // para hareketi YOK, kesin ret.
         _ => new TransportResult(TransportOutcome.Declined, ProviderResultCode: $"{adim}:{r}"),
     };
 

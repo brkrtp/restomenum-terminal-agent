@@ -50,9 +50,13 @@ public static partial class SaleToPoiRequestParser
             if (!env.TryGetProperty("PaymentRequest", out var pr) || pr.ValueKind != JsonValueKind.Object)
                 return Red(SaleToPoiRejectReason.Malformed, "PaymentRequest yok");
 
-            // Kural 1: PaymentTransaction OLMAMALI — tutar bu zarfta taşınmaz. Varsa bozuk/sahte.
-            if (pr.TryGetProperty("PaymentTransaction", out _))
-                return Red(SaleToPoiRejectReason.AmountNotAllowed, "PaymentTransaction bu zarfta olamaz");
+            // Kural 1: TUTAR (RequestedAmount) taşınmaz — ajan tutarı platformdan çeker. Kasanın GERÇEK
+            // gövdesi currency-only bir PaymentTransaction (AmountsReq.Currency, RequestedAmount YOK)
+            // yolluyor; o MEŞRU. Yalnız RequestedAmount VARSA reddet (bozuk/sahte).
+            if (pr.TryGetProperty("PaymentTransaction", out var ptx) && ptx.ValueKind == JsonValueKind.Object
+                && ptx.TryGetProperty("AmountsReq", out var amt) && amt.ValueKind == JsonValueKind.Object
+                && amt.TryGetProperty("RequestedAmount", out _))
+                return Red(SaleToPoiRejectReason.AmountNotAllowed, "RequestedAmount bu zarfta olamaz — tutar platformdan çekilir");
 
             if (!pr.TryGetProperty("SaleData", out var sd) || sd.ValueKind != JsonValueKind.Object)
                 return Red(SaleToPoiRejectReason.Malformed, "SaleData yok");

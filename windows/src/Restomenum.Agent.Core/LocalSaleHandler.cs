@@ -16,24 +16,71 @@ public sealed class LocalSaleHandler
 {
     private readonly IPaymentDetailClient _amounts;
     private readonly AgentOrchestrator _orch;
+    private readonly CommandStore _store;
     private readonly ILineDepartmentResolver _departments;
     private readonly IResultNotifier _notifier;
     private readonly Outbox _outbox;
     private readonly Func<DateTimeOffset> _now;
     private readonly Action<string, object?> _log;
 
+    /// <summary>
+    /// Terminal başına TEK işlem (değişmez #4) — silinen <c>AgentSession</c>'dan taşındı. İki satış
+    /// aynı cihaz oturumunda eşzamanlı sürülemez: ikinci <c>StartTicket</c> birincinin fişini sessizce
+    /// iptal eder ve üzerindeki para kaybolur. Yerel dinleyici istekleri eşzamanlı gelebildiği için şart.
+    /// </summary>
+    private readonly SemaphoreSlim _islemKilidi = new(1, 1);
+
     public LocalSaleHandler(
-        IPaymentDetailClient amounts, AgentOrchestrator orch, ILineDepartmentResolver departments,
-        IResultNotifier notifier, Outbox outbox,
+        IPaymentDetailClient amounts, AgentOrchestrator orch, CommandStore store,
+        ILineDepartmentResolver departments, IResultNotifier notifier, Outbox outbox,
         Func<DateTimeOffset>? now = null, Action<string, object?>? log = null)
     {
         _amounts = amounts;
         _orch = orch;
+        _store = store;
         _departments = departments;
         _notifier = notifier;
         _outbox = outbox;
         _now = now ?? (() => DateTimeOffset.UtcNow);
         _log = log ?? ((_, _) => { });
+    }
+
+    /// <summary>
+    /// <b>Açılış kurtarması</b> — yeniden başlatmada kesin sonuca ulaşmamış komutları çözer.
+    ///
+    /// <para>Ajan kart penceresinde ölürse komut <c>SENT_TO_TERMINAL</c>'da kalır; kasa çağrısı çoktan
+    /// bitmiştir (kasaya geri dönmeyiz). Terminale SORULUR (orkestratör dedupe→probe), sonuç platforma
+    /// bildirilir. Böylece <b>çekilmiş bir kart sessizce kaybolmaz</b>. Bu yerel mimaride WSS
+    /// <c>AgentSession.KurtarAsync</c>'ın yerini alır; aynı orkestratör+outbox mantığını kullanır.</para>
+    /// </summary>
+    public async Task RecoverPendingAsync(CancellationToken ct = default)
+    {
+        var pending = _store.Pending();
+        if (pending.Count == 0) return;
+        _log("[yerel] açılış kurtarması", new { adet = pending.Count });
+
+        foreach (var k in pending)
+        {
+            if (ct.IsCancellationRequested) return;
+            AgentOutcome outcome;
+            try
+            {
+                // Tutar/kalem probe'da kullanılmaz: HandleAsync dedupe → HandleDuplicate → terminale sorar.
+                var probe = new SaleRequest(k.CommandId, k.PaymentId, k.TerminalId, 0, "", 0);
+                outcome = await _orch.HandleAsync(probe, k.ExpiresAt, ct);
+            }
+            catch (Exception e)
+            {
+                // Çözülemeyen store'da KALIR — sonraki açılışta yeniden denenir.
+                _log("[yerel] yarım komut çözülemedi", new { k.CommandId, error = e.Message });
+                continue;
+            }
+            // Kasaya DÖNMÜYORUZ (çağrı bitti); yalnız platforma bildir. Exponent 2 (terminal sürüşü TR).
+            var geri = new SaleToPoiRequest(k.CommandId, "", k.TerminalId, k.PaymentId, "", _now());
+            var body = SaleToPoiResponseBuilder.BuildResult(geri, ToTransportResult(outcome), 2, _now());
+            await NotifyAsync(k.PaymentId, body, ct);
+            _log("[yerel] yarım komut çözüldü", new { k.CommandId, decision = outcome.Decision.ToString() });
+        }
     }
 
     /// <summary>Bir SaleToPOIRequest'i uçtan uca işler; kasaya dönecek <c>SaleToPOIResponse</c> JSON'unu verir.</summary>
@@ -72,13 +119,42 @@ public sealed class LocalSaleHandler
             CommandId: req.ServiceId, PaymentId: req.PaymentId, TerminalId: req.PoiId,
             AmountMinor: d.RequestedAmountMinor, Currency: d.Currency, Exponent: d.Exponent,
             ProviderPluginId: null, FiscalLines: lines);
-        var outcome = await _orch.HandleAsync(sale, d.ExpiresAtMs, ct);
+
+        // Terminal başına TEK işlem (değişmez #4): eşzamanlı iki satış cihaz fişini bozar.
+        AgentOutcome outcome;
+        await _islemKilidi.WaitAsync(ct);
+        try { outcome = await _orch.HandleAsync(sale, d.ExpiresAtMs, ct); }
+        finally { _islemKilidi.Release(); }
 
         // 4. Gövdeyi kur; ÖNCE platforma bildir, SONRA kasaya dön.
         var body = SaleToPoiResponseBuilder.BuildResult(req, ToTransportResult(outcome), d.Exponent, _now());
         await NotifyAsync(req.PaymentId, body, ct);
         _log("[yerel] sonuç", new { req.PaymentId, decision = outcome.Decision.ToString(), state = outcome.State.ToString() });
         return body;
+    }
+
+    /// <summary>
+    /// Outbox'ta bekleyen bildirimleri (ağ/429 nedeniyle gönderilememişler) yeniden dener. Worker
+    /// açılışta ve periyodik çağırır — WSS'te oturum bağlanınca yapılan drain'in yerini alır.
+    /// </summary>
+    public async Task DrainOutboxAsync(CancellationToken ct = default)
+    {
+        foreach (var e in _outbox.Pending())
+        {
+            if (ct.IsCancellationRequested) return;
+            try
+            {
+                var res = await _notifier.NotifyAsync(e.PaymentId, e.PayloadJson, ct);
+                if (res.IsFinal) _outbox.Confirm(e.EventId);
+                else _outbox.MarkAttempt(e.EventId);
+                if (res.IsProblem)
+                    _log("[yerel] outbox bildirim SORUNU (alarm)", new { e.PaymentId, outcome = res.Outcome.ToString(), res.StatusCode });
+            }
+            catch (Exception ex) when (ex is not OperationCanceledException)
+            {
+                _outbox.MarkAttempt(e.EventId);   // kalsın, bir sonraki drain'de tekrar
+            }
+        }
     }
 
     /// <summary>Sonucu platforma bildir — dayanıklı ÖNCE (outbox), sonra POST. Ağ/429 → outbox'ta kalır, replay.</summary>

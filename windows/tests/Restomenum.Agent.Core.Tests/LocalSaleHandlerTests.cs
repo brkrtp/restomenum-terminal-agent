@@ -67,7 +67,7 @@ public class LocalSaleHandlerTests : IDisposable
         if (terminal is not null) sim.Expect(terminal);
         var orch = new AgentOrchestrator(_store, sim, _clock, RecoveryPolicy.Immediate);
         var notifier = new FakeNotifier();
-        var h = new LocalSaleHandler(new FakeAmounts { Result = amounts }, orch, new FakeResolver { Dept = dept }, notifier, _outbox);
+        var h = new LocalSaleHandler(new FakeAmounts { Result = amounts }, orch, _store, new FakeResolver { Dept = dept }, notifier, _outbox);
         return (h, sim, notifier);
     }
 
