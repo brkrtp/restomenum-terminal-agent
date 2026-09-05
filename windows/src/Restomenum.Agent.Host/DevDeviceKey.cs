@@ -27,7 +27,11 @@ public sealed class DevDeviceKey : IDeviceKey, IDisposable
     public string Fingerprint => "dev-insecure-" +
         Convert.ToHexString(SHA256.HashData(_ecdsa.ExportSubjectPublicKeyInfo()))[..16].ToLowerInvariant();
 
-    public byte[] Sign(byte[] data) => _ecdsa.SignData(data, HashAlgorithmName.SHA256);
+    /// <summary>DER — sunucu P1363'ü reddeder (ölçüldü, bkz. <c>conformance/signing.json</c>).</summary>
+    public byte[] Sign(byte[] data) =>
+        _ecdsa.SignData(data, HashAlgorithmName.SHA256, DSASignatureFormat.Rfc3279DerSequence);
+
+    public string PublicKeyPem => _ecdsa.ExportSubjectPublicKeyInfoPem();
 
     public void Dispose() => _ecdsa.Dispose();
 }

@@ -21,7 +21,15 @@ public sealed record SaleRequest(
     /// </summary>
     IReadOnlyList<FiscalLine>? FiscalLines = null,
 
-    /// <summary>Ödeme türü. TR'de nakit/kart ayrımı iptal yolunu belirler (§8.3d).</summary>
+    /// <summary>
+    /// Ödeme türü. <b>Platform yalnız KART gönderir</b> (§20-I, ürün kararı 2026-09-05): ödeme
+    /// komutu sözleşmesinde tip alanı yoktur, dolayısıyla varsayılan tek geçerli değerdir.
+    ///
+    /// <para>Alan yine de duruyor ve <b>kaldırılmamalı</b>: fişte nakit ya da karekod ödemesi
+    /// <i>bulunabilir</i> (kasiyer terminalden eklemiş olabilir) ve iptal yolu ödeme tipine göre
+    /// ayrılır — banka bacağı yoksa <c>VoidAll</c> doğrudan temizler, varsa ters işlem gerekir
+    /// (§8.3d). Yani platformun ne istediği ile fişte ne bulunduğu farklı sorulardır.</para>
+    /// </summary>
     int PaymentType = GmpPaymentTypes.Card);
 
 /// <summary>

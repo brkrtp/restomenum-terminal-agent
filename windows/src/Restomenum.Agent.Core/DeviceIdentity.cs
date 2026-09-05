@@ -40,4 +40,20 @@ public interface IDeviceKey
 
     /// <summary>Bu cihazın enrollment sırasında aldığı kimlik.</summary>
     string ConnectorId { get; }
+
+    /// <summary>
+    /// Açık anahtar, <b>SPKI PEM</b> (<c>-----BEGIN PUBLIC KEY-----</c>). Kayıt (enrollment)
+    /// isteğinde bu değer gönderilir ve sunucu imzaları bununla doğrular.
+    ///
+    /// <para><b>Biçim pazarlık konusu değil:</b> sunucu <c>Connector.assertValidEnrollment</c>'ta
+    /// PEM başlığını regex ile kontrol ediyor ve <c>crypto.verify</c>'a düz PEM dizesi geçiyor.
+    /// Ham CNG blob'u ya da base64 DER göndermek <b>kayıt aşamasında</b> reddedilir — bu iyi
+    /// haber: hata cihazın ilk kurulumunda çıkar, aylar sonra bir ödeme sırasında değil.</para>
+    ///
+    /// <para>.NET'te: <c>ECDsa.ExportSubjectPublicKeyInfoPem()</c> (net7+) ya da
+    /// <c>ExportSubjectPublicKeyInfo()</c> + PEM sarmalama. CNG anahtarından üretmek için
+    /// <c>ECDsaCng</c> örneği üzerinden dışa aktar; <b>özel anahtar dışa aktarılmaz</b>, yalnız açık
+    /// kısım — <see cref="CngExportPolicies"/> kısıtı özel anahtara aittir.</para>
+    /// </summary>
+    string PublicKeyPem { get; }
 }
