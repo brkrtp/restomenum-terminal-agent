@@ -15,12 +15,18 @@ namespace Restomenum.Agent.Host;
 ///
 /// <para>Dosya yoksa harita BOŞ → her kalem <c>PRODUCT_UNMAPPED</c> ile terminale gitmeden reddedilir
 /// (fail-closed — tahmin edilmiş departman yanlış mali kayıt yazardı, geri alınamaz).</para>
+///
+/// <para><b>Cihaz departman-oran tablosu (ikinci dosya, opsiyonel):</b> <c>{ "10": 1000 }</c> biçiminde
+/// <c>departman indeksi → KDV oranı (baz puan)</c>. Yüklüyse çözümleme her eşleşmeyle o oranı da döner ve
+/// çağıran GET'teki <c>TaxCode</c> ile çelişkiyi (§30.12 sessiz mali sapma) yakalar. Yoksa oran <c>null</c>
+/// döner ve doğrulama atlanır — mevcut davranış korunur.</para>
 /// </summary>
 public sealed class ConfigDepartmentResolver : ILineDepartmentResolver
 {
     private readonly IReadOnlyDictionary<string, int> _map;
+    private readonly IReadOnlyDictionary<int, int> _rates;   // departman indeksi → baz puan (boş olabilir)
 
-    public ConfigDepartmentResolver(string filePath, ILogger logger)
+    public ConfigDepartmentResolver(string filePath, ILogger logger, string? ratesFilePath = null)
     {
         var map = new Dictionary<string, int>(StringComparer.Ordinal);
         try
@@ -30,7 +36,7 @@ public sealed class ConfigDepartmentResolver : ILineDepartmentResolver
                 var parsed = JsonSerializer.Deserialize<Dictionary<string, int>>(File.ReadAllText(filePath));
                 if (parsed is not null)
                     foreach (var kv in parsed) map[kv.Key] = kv.Value;
-                logger.LogInformation("departman eşlemesi yüklendi: {Count} kategori ({Path})", map.Count, filePath);
+                logger.LogInformation("departman eşlemesi yüklendi: {Count} kimlik ({Path})", map.Count, filePath);
             }
             else
             {
@@ -43,14 +49,40 @@ public sealed class ConfigDepartmentResolver : ILineDepartmentResolver
             logger.LogError(ex, "departman eşleme dosyası okunamadı ({Path}) — harita BOŞ.", filePath);
         }
         _map = map;
+
+        var rates = new Dictionary<int, int>();
+        try
+        {
+            if (!string.IsNullOrEmpty(ratesFilePath) && File.Exists(ratesFilePath))
+            {
+                var parsed = JsonSerializer.Deserialize<Dictionary<string, int>>(File.ReadAllText(ratesFilePath));
+                if (parsed is not null)
+                    foreach (var kv in parsed)
+                        if (int.TryParse(kv.Key, out var idx)) rates[idx] = kv.Value;
+                logger.LogInformation("cihaz departman-oran tablosu yüklendi: {Count} departman ({Path})", rates.Count, ratesFilePath);
+            }
+            else
+            {
+                logger.LogWarning("departman-oran tablosu yok ({Path}) — sessiz mali sapma doğrulaması KAPALI " +
+                    "(yanlış departman↔TaxCode eşleşmesi yakalanmaz). Tablo koyulunca §30.12 devreye girer.", ratesFilePath ?? "(verilmedi)");
+            }
+        }
+        catch (Exception ex)
+        {
+            logger.LogError(ex, "departman-oran tablosu okunamadı ({Path}) — doğrulama KAPALI.", ratesFilePath ?? "(verilmedi)");
+        }
+        _rates = rates;
     }
 
     // ÖNCE ProductCode (en özgül), yoksa CategoryId. Aynı düz sözlük her iki kimlik türünü de tutar
-    // (§20.2: productId ve/veya categoryId); ürün anahtarı kategoriyi ezer.
-    public int? Resolve(string? productCode, string? categoryId)
+    // (§20.2: productId ve/veya categoryId); ürün anahtarı kategoriyi ezer. Eşleşmeye departmanın KDV
+    // oranını (tablo yüklüyse) iliştirir ki çağıran TaxCode çelişkisini yakalayabilsin.
+    public DepartmentMatch? Resolve(string? productCode, string? categoryId)
     {
-        if (productCode is not null && _map.TryGetValue(productCode, out var byProduct)) return byProduct;
-        if (categoryId is not null && _map.TryGetValue(categoryId, out var byCategory)) return byCategory;
-        return null;
+        int? dept = null;
+        if (productCode is not null && _map.TryGetValue(productCode, out var byProduct)) dept = byProduct;
+        else if (categoryId is not null && _map.TryGetValue(categoryId, out var byCategory)) dept = byCategory;
+        if (dept is null) return null;
+        return new DepartmentMatch(dept.Value, _rates.TryGetValue(dept.Value, out var rate) ? rate : null);
     }
 }

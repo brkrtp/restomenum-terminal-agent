@@ -88,8 +88,10 @@ public static class HostComposition
         {
             var o = sp.GetRequiredService<IOptions<AgentOptions>>().Value;
             var log = sp.GetRequiredService<ILoggerFactory>().CreateLogger("Departments");
-            var dir = Path.GetDirectoryName(o.ResolveStorePath());
-            return new ConfigDepartmentResolver(Path.Combine(string.IsNullOrEmpty(dir) ? "." : dir, "departments.json"), log);
+            var dir = string.IsNullOrEmpty(Path.GetDirectoryName(o.ResolveStorePath())) ? "." : Path.GetDirectoryName(o.ResolveStorePath())!;
+            return new ConfigDepartmentResolver(
+                Path.Combine(dir, "departments.json"), log,
+                Path.Combine(dir, "department-rates.json"));   // cihaz departman→oran (§30.12 doğrulama)
         });
         builder.Services.AddSingleton(sp =>
         {

@@ -21,15 +21,23 @@ namespace Restomenum.Agent.Core;
 /// <para><b>Arayüz arkasında:</b> eşleme verisinin (eklenti kurulum ekranından ajana) hangi yolla
 /// ulaşacağı ayrı bir karar; bu arayüz veri kaynağını gizler, dinleyici ona bağlanır.</para>
 /// </summary>
+/// <summary>
+/// Çözümleme sonucu: cihaz departman <see cref="Index"/>'i + (biliniyorsa) o departmanın KDV oranı
+/// <see cref="TaxRateBasisPoints"/> (BAZ PUAN, ör. 1000 = %10). Oran yalnız cihaz departman tablosu
+/// yüklüyse doludur; <c>null</c> ise sessiz-mali-sapma doğrulaması atlanır.
+/// </summary>
+public readonly record struct DepartmentMatch(int Index, int? TaxRateBasisPoints);
+
 public interface ILineDepartmentResolver
 {
     /// <summary>
-    /// Kararlı kimlikten departman indeksi. ÖNCE <paramref name="productCode"/> denenir, yoksa
+    /// Kararlı kimlikten departman eşleşmesi. ÖNCE <paramref name="productCode"/> denenir, yoksa
     /// <paramref name="categoryId"/>'ye düşülür (ürün eşlemesi kategoriyi ezer — karma-KDV kategoride tek
     /// ürünü doğru departmana yazmanın tek yolu). Hiçbiri eşleşmezse <c>null</c> → PRODUCT_UNMAPPED
-    /// (terminale gitmeden ret).
+    /// (terminale gitmeden ret). Dönen eşleşme, biliniyorsa departmanın KDV oranını da taşır ki çağıran
+    /// GET'teki <c>TaxCode</c> ile çelişkiyi (sessiz mali sapma, §30.12) yakalayabilsin.
     /// </summary>
-    int? Resolve(string? productCode, string? categoryId);
+    DepartmentMatch? Resolve(string? productCode, string? categoryId);
 }
 
 /// <summary>

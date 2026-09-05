@@ -39,13 +39,14 @@ public class LocalSaleHandlerTests : IDisposable
     private sealed class FakeResolver : ILineDepartmentResolver
     {
         public int? Dept = 3;
+        public int? Rate;   // null = §30.12 doğrulaması atlanır (mevcut testler etkilenmez)
         public string? LastProductCode;
         public string? LastCategoryId;
-        public int? Resolve(string? productCode, string? categoryId)
+        public DepartmentMatch? Resolve(string? productCode, string? categoryId)
         {
             LastProductCode = productCode;
             LastCategoryId = categoryId;
-            return Dept;
+            return Dept is int d ? new DepartmentMatch(d, Rate) : (DepartmentMatch?)null;
         }
     }
 
@@ -68,13 +69,13 @@ public class LocalSaleHandlerTests : IDisposable
             new List<SaleLine> { new(0, "p1", "Adana", 2, amount, "10", "c1", "l1") });
 
     private (LocalSaleHandler, SimulatorTransport, FakeNotifier) Kur(
-        PaymentDetailResult amounts, int? dept = 3, TransportResult? terminal = null)
+        PaymentDetailResult amounts, int? dept = 3, TransportResult? terminal = null, int? rate = null)
     {
         var sim = new SimulatorTransport();
         if (terminal is not null) sim.Expect(terminal);
         var orch = new AgentOrchestrator(_store, sim, _clock, RecoveryPolicy.Immediate);
         var notifier = new FakeNotifier();
-        var h = new LocalSaleHandler(new FakeAmounts { Result = amounts }, orch, _store, new FakeResolver { Dept = dept }, notifier, _outbox);
+        var h = new LocalSaleHandler(new FakeAmounts { Result = amounts }, orch, _store, new FakeResolver { Dept = dept, Rate = rate }, notifier, _outbox);
         return (h, sim, notifier);
     }
 
@@ -118,6 +119,34 @@ public class LocalSaleHandlerTests : IDisposable
         Assert.Contains("p1", resp.GetProperty("AdditionalResponse").GetString());   // HANGİ ürün
         Assert.Empty(sim.SaleCalls);
         Assert.Single(notifier.Bodies);      // GET başarılıydı (ACCEPTED) → takılı kalmasın diye bildir
+    }
+
+    [Fact]
+    public async Task Departman_KDVsi_TaxCode_ile_celisirse_terminale_GITMEZ_mali_sapma_onlenir()
+    {
+        // Detail() SaleLine TaxCode="10" (%10). Departman oranı 2000 (%20) → 10*100=1000 ≠ 2000 → ret.
+        // Fişte %20, defterde %10 olur ve hiçbir kapı yakalamaz; §30.12 doğrulaması burada durdurur.
+        var (h, sim, notifier) = Kur(new PaymentDetailResult.Ok(Detail()), dept: 0, rate: 2000);
+
+        var resp = Resp(await h.HandleAsync(Req()));
+        Assert.Equal("Failure", resp.GetProperty("Result").GetString());
+        Assert.Equal("PaymentRestriction", resp.GetProperty("ErrorCondition").GetString());
+        Assert.Contains("PROVIDER_CONFIG_INCOMPLETE", resp.GetProperty("AdditionalResponse").GetString());
+        Assert.Contains("p1", resp.GetProperty("AdditionalResponse").GetString());   // HANGİ ürün
+        Assert.Empty(sim.SaleCalls);         // terminale GİTMEDİ (mali sapma önlendi)
+        Assert.Single(notifier.Bodies);      // GET ACCEPTED'dı → takılı kalmasın diye bildir
+    }
+
+    [Fact]
+    public async Task Departman_KDVsi_TaxCode_ile_uyusuyorsa_normal_gecer()
+    {
+        // TaxCode="10" ↔ departman oranı 1000 (%10): 10*100=1000 → uyumlu, yanlış-ret YOK, terminale gider.
+        var (h, sim, _) = Kur(new PaymentDetailResult.Ok(Detail()), dept: 10, rate: 1000,
+            terminal: new TransportResult(TransportOutcome.Approved, ApprovedAmountMinor: 24000, Rrn: "RRN1", CardLast4: "4242"));
+
+        var resp = Resp(await h.HandleAsync(Req()));
+        Assert.Equal("Success", resp.GetProperty("Result").GetString());
+        Assert.Single(sim.SaleCalls);        // doğrulama uyumluysa akış aynen sürer
     }
 
     [Fact]

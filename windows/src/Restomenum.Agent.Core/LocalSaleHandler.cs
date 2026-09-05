@@ -100,8 +100,8 @@ public sealed class LocalSaleHandler
         var lines = new List<FiscalLine>();
         foreach (var item in d.Items)
         {
-            var dept = _departments.Resolve(item.ProductCode, item.CategoryId);
-            if (dept is null)
+            var match = _departments.Resolve(item.ProductCode, item.CategoryId);
+            if (match is null)
             {
                 // GET başarılıydı (deneme ACCEPTED) → platforma bildir ki takılı kalmasın. Ürünü SÖYLE.
                 var reddi = SaleToPoiResponseBuilder.BuildFailure(req, "PaymentRestriction",
@@ -111,7 +111,26 @@ public sealed class LocalSaleHandler
                     new { req.PaymentId, item.ProductCode, item.ProductLabel });
                 return reddi;
             }
-            lines.AddRange(FiscalLineBuilder.Build(item, dept.Value));
+            var m = match.Value;
+
+            // Sessiz mali sapma koruması (§30.12): oranı TAMAMEN departman belirliyor (fiş satırı VatRate=0,
+            // cihaz KDV'yi departmandan türetir), TaxCode ise terminale hiç gitmiyor. Departman GET'teki
+            // TaxCode ile çelişirse fişte bir oran, defterde başka oran olur ve HİÇBİR kapı yakalamaz. Burada
+            // yakala: TaxCode YÜZDE-string ("10"), departman oranı BAZ-PUAN (1000) — birim dönüşümüyle
+            // karşılaştır. Oran bilinmiyorsa (cihaz tablosu yok) ya da TaxCode sayı değilse doğrulama atlanır
+            // (naif değil: yalnız gerçek, sayısal çelişkide ret; her kalemi düşürmez).
+            if (m.TaxRateBasisPoints is int deptRate
+                && int.TryParse(item.TaxCode, out var taxPct)
+                && taxPct * 100 != deptRate)
+            {
+                var reddi = SaleToPoiResponseBuilder.BuildFailure(req, "PaymentRestriction",
+                    $"PROVIDER_CONFIG_INCOMPLETE:{item.ProductCode}", _now());
+                await NotifyAsync(req.PaymentId, reddi, ct);
+                _log("[yerel] departman KDV'si TaxCode ile çelişiyor — terminale gidilmedi (mali sapma önlendi)",
+                    new { req.PaymentId, item.ProductCode, item.TaxCode, deptRate, dept = m.Index });
+                return reddi;
+            }
+            lines.AddRange(FiscalLineBuilder.Build(item, m.Index));
         }
 
         // 3. SaleRequest kur + orkestratör (dedupe/durum-makinesi/UNKNOWN korunur; CommandId = ServiceID).
