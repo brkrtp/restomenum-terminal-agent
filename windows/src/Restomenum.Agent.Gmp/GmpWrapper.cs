@@ -8,90 +8,96 @@ namespace Restomenum.Agent.Gmp;
 ///
 /// <para><b>Mali karar İÇERMEZ.</b> Her metot tek bir <c>FP3_*</c> çağrısıdır, ham dönüş kodunu
 /// (ve varsa fiş durumunu) döner, yorumlamaz. Sıra/kurtarma/kilit kararları çağırandadır
-/// (<c>GmpTerminalTransport</c>). İki yasak sözleşmedeki gibi korunur:</para>
-/// <list type="number">
-///   <item><b>Gizli retry YOK</b> — hiçbir metot kendi başına tekrar çağırmaz; <c>RECV_BUSY</c>
-///   dahil her kod olduğu gibi yukarı taşınır.</item>
-///   <item><b>Kilit YOK</b> — seri hâle getirme agent'ın işi.</item>
-/// </list>
+/// (<c>GmpTerminalTransport</c>). İki yasak: gizli retry YOK (RECV_BUSY yukarı taşınır), kilit YOK.</para>
 ///
 /// <para>Çağrılar senkrondur çünkü P/Invoke gerçekten bloke eder; <see cref="Payment"/> kartlı
 /// işlemde 90 sn'ye kadar bloke eder (GMP.XML <c>CommTimeOut</c>).</para>
 ///
-/// <para><b>Deploy:</b> <c>GmpSmartDLL.dll</c> ve <c>GMP.XML</c> çalışan sürecin dizininde olmalı.
-/// DLL, GMP.XML'den arayüzü yükler; bu sınıf <c>FP3_GetInterfaceHandleList</c> ile arayüz handle'ını alır.</para>
+/// <para><b>Deploy:</b> <c>GmpSmartDLL.dll</c> ve <c>GMP.XML</c> çalışan sürecin dizininde olmalı.</para>
 /// </summary>
 public sealed class GmpWrapper : IGmpWrapper
 {
-    // Timeout sabitleri — sertifikalı EXE 1'deki değerlerle birebir (Defines.TIMEOUT_*).
-    private const int TimeoutDefault = 10000;   // 10 sn
-    private const int TimeoutCard    = 90000;   // FP3_Payment — DLLController da 90000 kullanıyor
-    private const int TimeoutEcho    = 10000;   // 10 sn
-    private const int TimeoutPrintMf = 100000;  // 100 sn (TIMEOUT_CARD_TRANSACTIONS mertebesi)
+    private const int TimeoutDefault = 10000;
+    private const int TimeoutCard    = 90000;   // FP3_Payment
+    private const int TimeoutEcho    = 10000;
+    private const int TimeoutPrintMf = 100000;
+    private const ushort CurrencyTl = 949;
 
-    private const ushort CurrencyTl = 949;      // TL (ISO 4217)
+    /// <summary>
+    /// Arayüz alınamadı (GMP.XML eksik/bozuk ya da DLL arayüzü yükleyemedi). Değeri DLL'in
+    /// <c>DLL_RETCODE_PORT_NOT_OPEN</c>'ıyla (0xF000) aynı. Çağırana <b>ayırt edilebilir</b> bir
+    /// "cihaz hazır değil" sinyali: belirsizlik DEĞİL, kesin yapılandırma hatası.
+    /// (Peer isterse <c>GmpCodes.PortNotOpen</c> olarak sözleşmeye ekleyebilir; değer aynı kalmalı.)
+    /// </summary>
+    private const uint PortNotOpen = 0xF000;
 
-    private uint _hInt;
+    // volatile: çift kontrollü kilit deseninde görünürlük garantisi (bedava).
+    private volatile uint _hInt;
     private readonly object _initLock = new();
 
     /// <summary>
     /// Arayüz handle'ı. DLL, GMP.XML'deki <c>Interface1</c>'i yükler; ilk (varsayılan) arayüzü alırız.
-    /// Tembel + tek sefer: handle süreç ömrü boyunca sabittir.
+    /// Alınamazsa 0 döner — çağıran metotlar bunu <see cref="PortNotOpen"/>'a çevirir, sessizce
+    /// geçersiz handle ile FP3 çağrısı YAPMAZ.
     /// </summary>
-    private uint Interface
+    private uint AcquireInterface()
     {
-        get
+        if (_hInt != 0) return _hInt;
+        lock (_initLock)
         {
             if (_hInt != 0) return _hInt;
-            lock (_initLock)
-            {
-                if (_hInt != 0) return _hInt;
-                var list = new uint[20];
-                uint count = GMPSmartDLL.FP3_GetInterfaceHandleList(list, (uint)list.Length);
-                if (count > 0) _hInt = list[0];
-                return _hInt;
-            }
+            var list = new uint[20];
+            uint count = GMPSmartDLL.FP3_GetInterfaceHandleList(list, (uint)list.Length);
+            if (count > 0) _hInt = list[0];
+            return _hInt;
         }
     }
 
     public GmpResult Start(out ulong handle)
     {
         handle = 0;
+        uint h = AcquireInterface();
+        if (h == 0) return PortNotOpen;
+
         ulong hTrx = 0;
-        // uniqueId sıfır 24 byte — sertifikalı kod da böyle gönderiyor (TransactionUniqueIdList hiç doldurulmuyor).
-        var uniqueId = new byte[24];
-        // UserData "testdata" — sertifikalı StartTicketInternal ile aynı.
+        var uniqueId = new byte[24];                                   // sertifikalı kod da sıfır gönderiyor
+        // UserData "testdata": sertifikalı StartTicketInternal ile BİREBİR aynı sabit. Cihaza mali
+        // anlamı olmayan bir işaret; değiştirmek sertifikalı davranıştan sapmak olur, o yüzden korunur.
         var userData = new byte[] { 0x74, 0x65, 0x73, 0x74, 0x64, 0x61, 0x74, 0x61 };
-        uint rc = GMPSmartDLL.FP3_Start(
-            Interface, ref hTrx, 0,
-            uniqueId, uniqueId.Length,
-            null!, 0,                               // pUniqueIdSign: TSM imzası yok → null (P/Invoke null pointer)
-            userData, userData.Length,
-            TimeoutDefault);
+        uint rc = GMPSmartDLL.FP3_Start(h, ref hTrx, 0, uniqueId, uniqueId.Length,
+            null!, 0, userData, userData.Length, TimeoutDefault);
         handle = hTrx;
         return rc;
     }
 
     public GmpResult TicketHeader(ulong handle, int ticketType)
-        => GMPSmartDLL.FP3_TicketHeader(Interface, handle, (TTicketType)ticketType, TimeoutDefault);
+    {
+        uint h = AcquireInterface();
+        if (h == 0) return PortNotOpen;
+        return GMPSmartDLL.FP3_TicketHeader(h, handle, (TTicketType)ticketType, TimeoutDefault);
+    }
 
     public GmpResult OptionFlags(ulong handle, GmpEchoFlags flags)
     {
+        uint h = AcquireInterface();
+        if (h == 0) return PortNotOpen;
         ulong active = 0;
-        return GMPSmartDLL.FP3_OptionFlags(Interface, handle, ref active, (ulong)flags, 0, TimeoutDefault);
+        return GMPSmartDLL.FP3_OptionFlags(h, handle, ref active, (ulong)flags, 0, TimeoutDefault);
     }
 
     public GmpResult ItemSale(ulong handle, GmpItem item, out GmpTicket ticket)
     {
+        ticket = default;
+        uint h = AcquireInterface();
+        if (h == 0) return PortNotOpen;
+
         var st = new ST_ITEM
         {
             type      = 1,                          // ITEM_TYPE_DEPARTMENT (0 geçersiz)
             subType   = 0,
             deptIndex = checked((byte)item.DepartmentNo),
-            // taxRate = 0 KASITLI: terminal KDV'yi deptIndex'ten türetir. Canlı doğrulandı
-            // (2026-09-05): taxRate=0 gönderilen 100 ₺'lik dept-0 kalemine terminal 16,67 ₺ KDV
-            // hesapladı (= %20, dept 0'ın oranı). Yani GmpItem'ın taxRate taşımaması doğru tasarım;
-            // departman vergi kaynağıdır, ayrı taxRate alanına gerek yok.
+            // taxRate = 0 KASITLI: terminal KDV'yi deptIndex'ten türetir. Canlı doğrulandı (2026-09-05):
+            // taxRate=0 dept-0 100 ₺ kalemine 16,67 ₺ KDV (=%20). Ayrı taxRate alanına gerek yok.
             taxRate   = 0,
             unitType  = 0,
             amount    = checked((uint)item.UnitPriceMinor),
@@ -104,13 +110,17 @@ public sealed class GmpWrapper : IGmpWrapper
             barcode   = "",
         };
         var stTicket = new ST_TICKET();
-        uint rc = Json_GMPSmartDLL.FP3_ItemSale(Interface, handle, ref st, ref stTicket, TimeoutDefault);
+        uint rc = Json_GMPSmartDLL.FP3_ItemSale(h, handle, ref st, ref stTicket, TimeoutDefault);
         ticket = Map(stTicket);
         return rc;
     }
 
     public GmpResult Payment(ulong handle, GmpPaymentRequest request, out GmpTicket ticket)
     {
+        ticket = default;
+        uint h = AcquireInterface();
+        if (h == 0) return PortNotOpen;
+
         var req = new ST_PAYMENT_REQUEST
         {
             typeOfPayment         = checked((uint)request.PaymentType),
@@ -122,73 +132,105 @@ public sealed class GmpWrapper : IGmpWrapper
         };
         var stTicket = new ST_TICKET();
         // Kartlı işlemde 90 sn'ye kadar bloke eder — bu tek bloklayan çağrı.
-        uint rc = Json_GMPSmartDLL.FP3_Payment(Interface, handle, ref req, ref stTicket, TimeoutCard);
+        uint rc = Json_GMPSmartDLL.FP3_Payment(h, handle, ref req, ref stTicket, TimeoutCard);
         ticket = Map(stTicket);
         return rc;
     }
 
     public GmpResult GetTicket(ulong handle, out GmpTicket ticket)
     {
+        ticket = default;
+        uint h = AcquireInterface();
+        if (h == 0) return PortNotOpen;
+
         var stTicket = new ST_TICKET();
-        uint rc = Json_GMPSmartDLL.FP3_GetTicket(Interface, handle, ref stTicket, TimeoutDefault);
+        uint rc = Json_GMPSmartDLL.FP3_GetTicket(h, handle, ref stTicket, TimeoutDefault);
         ticket = Map(stTicket);
         return rc;
     }
 
     public GmpResult PrintTotalsAndPayments(ulong handle)
-        => GMPSmartDLL.FP3_PrintTotalsAndPayments(Interface, handle, TimeoutDefault);
+    {
+        uint h = AcquireInterface();
+        if (h == 0) return PortNotOpen;
+        return GMPSmartDLL.FP3_PrintTotalsAndPayments(h, handle, TimeoutDefault);
+    }
 
     public GmpResult PrintBeforeMF(ulong handle)
-        => GMPSmartDLL.FP3_PrintBeforeMF(Interface, handle, TimeoutDefault);
+    {
+        uint h = AcquireInterface();
+        if (h == 0) return PortNotOpen;
+        return GMPSmartDLL.FP3_PrintBeforeMF(h, handle, TimeoutDefault);
+    }
 
     public GmpResult PrintUserMessage(ulong handle)
     {
+        uint h = AcquireInterface();
+        if (h == 0) return PortNotOpen;
         var msgs = new ST_USER_MESSAGE[1];
         msgs[0] = new ST_USER_MESSAGE();
         var stTicket = new ST_TICKET();
-        return Json_GMPSmartDLL.FP3_PrintUserMessage(
-            Interface, handle, ref msgs, (ushort)msgs.Length, ref stTicket, TimeoutDefault);
+        return Json_GMPSmartDLL.FP3_PrintUserMessage(h, handle, ref msgs, (ushort)msgs.Length, ref stTicket, TimeoutDefault);
     }
 
     public GmpResult PrintMF(ulong handle)
-        => GMPSmartDLL.FP3_PrintMF(Interface, handle, TimeoutPrintMf);
+    {
+        uint h = AcquireInterface();
+        if (h == 0) return PortNotOpen;
+        return GMPSmartDLL.FP3_PrintMF(h, handle, TimeoutPrintMf);
+    }
 
     public GmpResult VoidAll(ulong handle, out GmpTicket ticket)
     {
+        ticket = default;
+        uint h = AcquireInterface();
+        if (h == 0) return PortNotOpen;
+
         var stTicket = new ST_TICKET();
-        uint rc = Json_GMPSmartDLL.FP3_VoidAll(Interface, handle, ref stTicket, TimeoutDefault);
+        uint rc = Json_GMPSmartDLL.FP3_VoidAll(h, handle, ref stTicket, TimeoutDefault);
         ticket = Map(stTicket);
         return rc;
     }
 
     public GmpResult VoidPayment(ulong handle, int paymentIndex)
     {
-        // ⚠️ İMZA TAHMİNİ (sözleşmedeki uyarı): dokuz saha logunda hiç geçmedi, canlı terminalde
-        // fiziksel kart olmadan tetiklenemedi. Buradaki eşleme (ushort Index) DLL'in tipli
-        // FP3_VoidPayment sarmalayıcısıyla uyumlu, ama davranış ölçülene kadar doğrulanmamıştır.
+        uint h = AcquireInterface();
+        if (h == 0) return PortNotOpen;
+        // ⚠️ İMZA TAHMİNİ: sahada hiç ölçülmedi. ushort Index eşlemesi DLL'in tipli sarmalayıcısıyla uyumlu.
         var stTicket = new ST_TICKET();
-        return Json_GMPSmartDLL.FP3_VoidPayment(Interface, handle, checked((ushort)paymentIndex), ref stTicket, TimeoutDefault);
+        return Json_GMPSmartDLL.FP3_VoidPayment(h, handle, checked((ushort)paymentIndex), ref stTicket, TimeoutDefault);
     }
 
     public GmpResult Close(ulong handle)
-        => GMPSmartDLL.FP3_Close(Interface, handle, TimeoutDefault);
+    {
+        uint h = AcquireInterface();
+        if (h == 0) return PortNotOpen;
+        return GMPSmartDLL.FP3_Close(h, handle, TimeoutDefault);
+    }
 
     public GmpResult Echo()
     {
+        uint h = AcquireInterface();
+        if (h == 0) return PortNotOpen;
         var echo = new ST_ECHO();
-        return Json_GMPSmartDLL.FP3_Echo(Interface, ref echo, TimeoutEcho);
+        return Json_GMPSmartDLL.FP3_Echo(h, ref echo, TimeoutEcho);
     }
 
     /// <summary>
-    /// <see cref="ST_TICKET"/> → <see cref="GmpTicket"/>. <b>Yalnız alan taşıma, yorum yok.</b>
+    /// <see cref="ST_TICKET"/> → <see cref="GmpTicket"/>. <b>Yalnız alan taşıma.</b>
     /// <list type="bullet">
-    ///   <item>Toplam = <c>TotalReceiptAmount + KatkiPayiAmount</c> (sertifikalı kodun "TicketAmount"ı).</item>
-    ///   <item>Ödenen = <c>TotalReceiptPayment</c>.</item>
-    ///   <item><b>PaymentCount = totalNumberOfPayments</b> — belirsizlik çözümü tutara değil bu sayaca dayanır
-    ///   (20 ₺ + 20 ₺ ayırt edilemez), o yüzden ayrı alan olarak taşınır.</item>
+    ///   <item>Toplam = <c>TotalReceiptAmount + KatkiPayiAmount</c> — sertifikalı DLLController'ın
+    ///   "TicketAmount" hesabıyla BİREBİR (GetPaymentInternal: <c>TicketAmount = TotalReceiptAmount +
+    ///   KatkiPayiAmount</c>, sonra <c>TotalReceiptPayment >= TicketAmount</c> ile tam ödeme kontrolü).
+    ///   Tahmin değil, üretimde çalışan formülün aynısı.</item>
+    ///   <item><b>PaymentCount = totalNumberOfPayments</b> — belirsizlik çözümü tutara değil bu sayaca dayanır.</item>
     ///   <item>LastPaymentType = son ödemenin <c>typeOfPayment</c>'ı (1=nakit, 4=kart, 16=mobil/QR).</item>
-    ///   <item>Rrn / CardLast4 = son ödemenin banka bacağından; PAN terminalce maskeli gelir.</item>
     /// </list>
+    ///
+    /// <para><b>Bozuk okuma koruması:</b> <c>totalNumberOfPayments</c> sabit <c>stPayment</c> dizisinin
+    /// (24) sınırını aşarsa bu BOZUK bir okumadır (bellek çöpü). Sessizce geçirmek, gerçekleşmemiş bir
+    /// ödemeyi "sayaç arttı → Landed → APPROVED" yaptırır. Bu durumda <c>PaymentCount = -1</c> döner;
+    /// çağıran bunu "okunamadı" diye ele almalı, "ödeme yok" diye DEĞİL.</para>
     /// </summary>
     private static GmpTicket Map(ST_TICKET t)
     {
@@ -196,13 +238,18 @@ public sealed class GmpWrapper : IGmpWrapper
         long paid  = t.TotalReceiptPayment;
         int  count = t.totalNumberOfPayments;
 
+        var payments = t.stPayment;
+        // Bozuk sayaç: dizi yok ya da sayaç dizi kapasitesini aşıyor → PaymentCount = -1 (okunamadı).
+        if (count > 0 && (payments is null || count > payments.Length))
+            return new GmpTicket(total, paid, -1, 0, null, null);
+
         int lastType = 0;
         string? rrn = null;
         string? last4 = null;
 
-        if (count > 0 && t.stPayment is { Length: > 0 } payments && count <= payments.Length)
+        if (count > 0)
         {
-            var p = payments[count - 1];
+            var p = payments![count - 1];
             if (p is not null)
             {
                 lastType = (int)p.typeOfPayment;
