@@ -25,11 +25,9 @@ await WindowsEnrollment.EnsureEnrolledAsync(host.Services);
 
 // EŞLEŞTİRME YALNIZ --pair ile: eşleşme tek-slot + sürece bağlı olduğundan bu binary kendi
 // StartPairingInit'ini çağırmalı; başarılıysa AYNI süreçte dinleyici başlar (eşleşme o süreçte tutulur).
-// Normal (üretim) akış bu adımı ATLAR ve eşleşmiş cihaz VARSAYAR. Eşleşme başarısızsa dinleyici açılmaz.
-if (eslesModu && !WindowsPairing.Run(host.Services))
-{
-    Environment.ExitCode = 1;
-    return;
-}
+// Normal (üretim) akış bu adımı ATLAR ve eşleşmiş cihaz VARSAYAR. Eşleşme başarısız olsa BİLE dinleyici
+// AÇILIR (GET zinciri çalışsın, kasa bloke olmasın; eşleşmesiz satış zaten güvenli-UNKNOWN'a düşer) —
+// operatör logda "EŞLEŞME BAŞARISIZ" görür ve terminali menüye alıp --pair'i tekrarlar.
+if (eslesModu) WindowsPairing.Run(host.Services);
 
 await host.RunAsync();
