@@ -7,9 +7,11 @@ using Restomenum.Agent.Host.Windows;
 // (HostComposition), üstüne donanıma bağlı gerçek kayıtlar (WindowsDeviceKey + GmpTerminalTransport)
 // eklenir. Bu proje net8.0-windows'tur ve yalnız Windows'ta derlenir/çalışır.
 
-// --pair: ELLE eşleştirme provizyonu (aşağıda). Yapılandırma sağlayıcısını bozmasın diye argümanlardan ayıklanır.
+// --pair: ELLE eşleştirme provizyonu; --void: ELLE açık-fiş temizliği (bakım). Yapılandırma
+// sağlayıcısını bozmasın diye argümanlardan ayıklanır.
 bool eslesModu = args.Contains("--pair");
-var configArgs = args.Where(a => a != "--pair").ToArray();
+bool voidModu = args.Contains("--void");
+var configArgs = args.Where(a => a != "--pair" && a != "--void").ToArray();
 
 var builder = Host.CreateApplicationBuilder(configArgs);
 
@@ -22,6 +24,14 @@ var host = builder.Build();
 // dayanıklı yaz. AgentWorker (oturum/gateway) buradan SONRA, RunAsync ile başlar; yani session
 // _key.ConnectorId'yi zaten dolu görür. Kayıt başarısızsa host HİÇ çalışmaz (fail-closed).
 await WindowsEnrollment.EnsureEnrolledAsync(host.Services);
+
+// BAKIM (--void): terminaldeki açık/yarım fişi VoidAll ile iptal et ve ÇIK — dinleyici AÇILMAZ.
+// Başarısız bir satış ödenmemiş açık fiş bırakabilir; sonraki satış üstüne açamaz (2080).
+if (voidModu)
+{
+    Environment.ExitCode = WindowsVoidTicket.Run(host.Services) ? 0 : 1;
+    return;
+}
 
 // EŞLEŞTİRME YALNIZ --pair ile: eşleşme tek-slot + sürece bağlı olduğundan bu binary kendi
 // StartPairingInit'ini çağırmalı; başarılıysa AYNI süreçte dinleyici başlar (eşleşme o süreçte tutulur).
