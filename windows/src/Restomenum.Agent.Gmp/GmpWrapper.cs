@@ -23,13 +23,9 @@ public sealed class GmpWrapper : IGmpWrapper
     private const int TimeoutPrintMf = 100000;
     private const ushort CurrencyTl = 949;
 
-    /// <summary>
-    /// Arayüz alınamadı (GMP.XML eksik/bozuk ya da DLL arayüzü yükleyemedi). Değeri DLL'in
-    /// <c>DLL_RETCODE_PORT_NOT_OPEN</c>'ıyla (0xF000) aynı. Çağırana <b>ayırt edilebilir</b> bir
-    /// "cihaz hazır değil" sinyali: belirsizlik DEĞİL, kesin yapılandırma hatası.
-    /// (Peer isterse <c>GmpCodes.PortNotOpen</c> olarak sözleşmeye ekleyebilir; değer aynı kalmalı.)
-    /// </summary>
-    private const uint PortNotOpen = 0xF000;
+    // Arayüz alınamazsa (GMP.XML eksik/bozuk ya da DLL arayüzü yükleyemedi) çağırana ayırt
+    // edilebilir "cihaz hazır değil" sinyali dönülür: GmpCodes.PortNotOpen (0xF000). Belirsizlik
+    // DEĞİL, kesin yapılandırma hatası — çağıran onu geri çekilme/insan kuyruğuna sokmaz.
 
     // volatile: çift kontrollü kilit deseninde görünürlük garantisi (bedava).
     private volatile uint _hInt;
@@ -57,7 +53,7 @@ public sealed class GmpWrapper : IGmpWrapper
     {
         handle = 0;
         uint h = AcquireInterface();
-        if (h == 0) return PortNotOpen;
+        if (h == 0) return GmpCodes.PortNotOpen;
 
         ulong hTrx = 0;
         var uniqueId = new byte[24];                                   // sertifikalı kod da sıfır gönderiyor
@@ -73,14 +69,14 @@ public sealed class GmpWrapper : IGmpWrapper
     public GmpResult TicketHeader(ulong handle, int ticketType)
     {
         uint h = AcquireInterface();
-        if (h == 0) return PortNotOpen;
+        if (h == 0) return GmpCodes.PortNotOpen;
         return GMPSmartDLL.FP3_TicketHeader(h, handle, (TTicketType)ticketType, TimeoutDefault);
     }
 
     public GmpResult OptionFlags(ulong handle, GmpEchoFlags flags)
     {
         uint h = AcquireInterface();
-        if (h == 0) return PortNotOpen;
+        if (h == 0) return GmpCodes.PortNotOpen;
         ulong active = 0;
         return GMPSmartDLL.FP3_OptionFlags(h, handle, ref active, (ulong)flags, 0, TimeoutDefault);
     }
@@ -89,7 +85,7 @@ public sealed class GmpWrapper : IGmpWrapper
     {
         ticket = default;
         uint h = AcquireInterface();
-        if (h == 0) return PortNotOpen;
+        if (h == 0) return GmpCodes.PortNotOpen;
 
         var st = new ST_ITEM
         {
@@ -119,7 +115,7 @@ public sealed class GmpWrapper : IGmpWrapper
     {
         ticket = default;
         uint h = AcquireInterface();
-        if (h == 0) return PortNotOpen;
+        if (h == 0) return GmpCodes.PortNotOpen;
 
         var req = new ST_PAYMENT_REQUEST
         {
@@ -141,7 +137,7 @@ public sealed class GmpWrapper : IGmpWrapper
     {
         ticket = default;
         uint h = AcquireInterface();
-        if (h == 0) return PortNotOpen;
+        if (h == 0) return GmpCodes.PortNotOpen;
 
         var stTicket = new ST_TICKET();
         uint rc = Json_GMPSmartDLL.FP3_GetTicket(h, handle, ref stTicket, TimeoutDefault);
@@ -152,21 +148,21 @@ public sealed class GmpWrapper : IGmpWrapper
     public GmpResult PrintTotalsAndPayments(ulong handle)
     {
         uint h = AcquireInterface();
-        if (h == 0) return PortNotOpen;
+        if (h == 0) return GmpCodes.PortNotOpen;
         return GMPSmartDLL.FP3_PrintTotalsAndPayments(h, handle, TimeoutDefault);
     }
 
     public GmpResult PrintBeforeMF(ulong handle)
     {
         uint h = AcquireInterface();
-        if (h == 0) return PortNotOpen;
+        if (h == 0) return GmpCodes.PortNotOpen;
         return GMPSmartDLL.FP3_PrintBeforeMF(h, handle, TimeoutDefault);
     }
 
     public GmpResult PrintUserMessage(ulong handle)
     {
         uint h = AcquireInterface();
-        if (h == 0) return PortNotOpen;
+        if (h == 0) return GmpCodes.PortNotOpen;
         var msgs = new ST_USER_MESSAGE[1];
         msgs[0] = new ST_USER_MESSAGE();
         var stTicket = new ST_TICKET();
@@ -176,7 +172,7 @@ public sealed class GmpWrapper : IGmpWrapper
     public GmpResult PrintMF(ulong handle)
     {
         uint h = AcquireInterface();
-        if (h == 0) return PortNotOpen;
+        if (h == 0) return GmpCodes.PortNotOpen;
         return GMPSmartDLL.FP3_PrintMF(h, handle, TimeoutPrintMf);
     }
 
@@ -184,7 +180,7 @@ public sealed class GmpWrapper : IGmpWrapper
     {
         ticket = default;
         uint h = AcquireInterface();
-        if (h == 0) return PortNotOpen;
+        if (h == 0) return GmpCodes.PortNotOpen;
 
         var stTicket = new ST_TICKET();
         uint rc = Json_GMPSmartDLL.FP3_VoidAll(h, handle, ref stTicket, TimeoutDefault);
@@ -195,7 +191,7 @@ public sealed class GmpWrapper : IGmpWrapper
     public GmpResult VoidPayment(ulong handle, int paymentIndex)
     {
         uint h = AcquireInterface();
-        if (h == 0) return PortNotOpen;
+        if (h == 0) return GmpCodes.PortNotOpen;
         // ⚠️ İMZA TAHMİNİ: sahada hiç ölçülmedi. ushort Index eşlemesi DLL'in tipli sarmalayıcısıyla uyumlu.
         var stTicket = new ST_TICKET();
         return Json_GMPSmartDLL.FP3_VoidPayment(h, handle, checked((ushort)paymentIndex), ref stTicket, TimeoutDefault);
@@ -204,14 +200,14 @@ public sealed class GmpWrapper : IGmpWrapper
     public GmpResult Close(ulong handle)
     {
         uint h = AcquireInterface();
-        if (h == 0) return PortNotOpen;
+        if (h == 0) return GmpCodes.PortNotOpen;
         return GMPSmartDLL.FP3_Close(h, handle, TimeoutDefault);
     }
 
     public GmpResult Echo()
     {
         uint h = AcquireInterface();
-        if (h == 0) return PortNotOpen;
+        if (h == 0) return GmpCodes.PortNotOpen;
         var echo = new ST_ECHO();
         return Json_GMPSmartDLL.FP3_Echo(h, ref echo, TimeoutEcho);
     }
