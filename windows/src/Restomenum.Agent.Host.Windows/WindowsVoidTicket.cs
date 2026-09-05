@@ -26,11 +26,13 @@ public static class WindowsVoidTicket
         var log = services.GetRequiredService<ILoggerFactory>().CreateLogger("VoidTicket");
         var gmp = services.GetRequiredService<IGmpWrapper>();
 
-        log.LogInformation("açık-fiş temizliği: Echo (bağlantı testi)");
-        var echo = gmp.Echo();
-        if (!echo.Ok)
+        // EŞLEŞME SÜRECE BAĞLI (canlı ölçüldü: süreç bitince eşleşme DÜŞER, Start → 0xF020 = 61472
+        // PAIRING_REQUIRED). Start/VoidAll'dan ÖNCE bu süreç kendi eşleşmesini kurmalı. Eşleştirme
+        // Echo'yu da yapıyor; ayrıca Echo çağırmaya gerek yok.
+        log.LogInformation("açık-fiş temizliği: eşleşme kuruluyor (süreç-bağlı, önce şart)...");
+        if (!WindowsPairing.Run(services))
         {
-            log.LogError("Echo BAŞARISIZ (rc={Rc}) — terminale ulaşılamıyor (IP/port/eşleşme?).", echo.Code);
+            log.LogError("eşleşme kurulamadı — açık fiş temizlenemedi. (Terminal ulaşılabilir mi?)");
             return false;
         }
 
