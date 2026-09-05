@@ -212,6 +212,45 @@ public sealed class GmpWrapper : IGmpWrapper
         return Json_GMPSmartDLL.FP3_Echo(h, ref echo, TimeoutEcho);
     }
 
+    // ── Provisioning ─────────────────────────────────────────────────────────
+    // Eşleşme SÜRECE bağlı ve TEK-SLOT (canlı ölçüldü): işlem yapacak süreç kendi eşleşmesini
+    // kurmalı. Bu yüzden pairing sertifikalı yüzeyde. Dışarıdan tetiklenir (agent "eşleş" der),
+    // ama FP3_StartPairingInit çağrısı bu süreçte olur.
+
+    public GmpResult Pair()
+    {
+        uint h = AcquireInterface();
+        if (h == 0) return GmpCodes.PortNotOpen;
+        // Sertifikalı StartPairing sırası: önce Echo (bağlantı), sonra StartPairingInit.
+        var echo = new ST_ECHO();
+        uint erc = Json_GMPSmartDLL.FP3_Echo(h, ref echo, TimeoutEcho);
+        if (erc != GmpCodes.Ok) return erc;
+        var pair = new ST_GMP_PAIR
+        {
+            szExternalDeviceBrand        = "INGENICO",
+            szExternalDeviceModel        = "RESTOMENUM",
+            szExternalDeviceSerialNumber = "",
+            szEcrSerialNumber            = "",
+            szProcOrderNumber            = "000001",
+            szProcDate                   = DateTime.Now.ToString("yyyyMMdd"),
+            szProcTime                   = DateTime.Now.ToString("HHmmss"),
+        };
+        var resp = new ST_GMP_PAIR_RESP();
+        return Json_GMPSmartDLL.FP3_StartPairingInit(h, ref pair, ref resp, TimeoutDefault);
+    }
+
+    public GmpResult CheckPairing(out bool paired)
+    {
+        paired = false;
+        uint h = AcquireInterface();
+        if (h == 0) return GmpCodes.PortNotOpen;
+        // FP3_IsGmpPairingDone dönüşü STANDART retcode DEĞİL: 0 = eşleşme YOK, !=0 = eşleşme VAR
+        // (sertifikalı DLLController.CheckPairing semantiği). Çağrının kendisi başarılı sayılır.
+        uint rc = GMPSmartDLL.FP3_IsGmpPairingDone(h);
+        paired = rc != 0;
+        return GmpCodes.Ok;
+    }
+
     /// <summary>
     /// <see cref="ST_TICKET"/> → <see cref="GmpTicket"/>. <b>Yalnız alan taşıma.</b>
     /// <list type="bullet">
