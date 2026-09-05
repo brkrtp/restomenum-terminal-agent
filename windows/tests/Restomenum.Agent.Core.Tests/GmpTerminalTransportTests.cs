@@ -51,16 +51,10 @@ public class GmpTerminalTransportTests
         public GmpResult GetDepartments(out string json) { json = "[]"; return Kod("GetDepartments"); }
     }
 
-    private sealed class Departments : IDepartmentMap
-    {
-        public HashSet<string> Bilinmeyen { get; } = new();
-        public int? Resolve(string productId) => Bilinmeyen.Contains(productId) ? null : 1;
-    }
-
     private static SaleRequest Req(long amount = 3000, int paymentType = GmpPaymentTypes.Card,
         IReadOnlyList<FiscalLine>? lines = null) =>
         new("c1", "p1", "t1", amount, "TRY", 2, "prov",
-            lines ?? new[] { new FiscalLine("prod1", "Kahve", 1, amount, 20m) }, paymentType);
+            lines ?? new[] { new FiscalLine("prod1", "Kahve", 1, amount, 20m, DepartmentNo: 1) }, paymentType);
 
     /// <summary>Bellek-içi görüntü deposu. Gerçekte <see cref="CommandStore"/> (disk) kullanılır —
     /// süreç kart penceresinde ölürse görüntünün hayatta kalması şart.</summary>
@@ -73,11 +67,10 @@ public class GmpTerminalTransportTests
             => _d.TryGetValue(commandId, out var v) ? v : null;
     }
 
-    private static (GmpTerminalTransport, FakeGmp, Departments) Kur()
+    private static (GmpTerminalTransport, FakeGmp, object?) Kur()
     {
         var g = new FakeGmp();
-        var d = new Departments();
-        return (new GmpTerminalTransport(g, d, new FakeSnapshots()), g, d);
+        return (new GmpTerminalTransport(g, new FakeSnapshots()), g, null);
     }
 
     // ── FAIL-CLOSED: terminale HİÇ dokunulmaz ────────────────────────────────
@@ -97,9 +90,10 @@ public class GmpTerminalTransportTests
     [Fact]
     public async Task EslenmemisUrun_kart_cekilmeden_reddedilir()
     {
-        var (t, g, d) = Kur();
-        d.Bilinmeyen.Add("prod1");
-        var r = await t.SaleAsync(Req());
+        var (t, g, _) = Kur();
+        // Departmanı EKLENTİ çözer; negatif değer "eşlenmemiş" demek ve terminale GİTMEDEN
+        // reddedilmeli — tahmin edilmiş bir departman yanlış mali kayıt yazar.
+        var r = await t.SaleAsync(Req(lines: new[] { new FiscalLine("prod1", "Kahve", 1, 3000, 20m, DepartmentNo: -1) }));
 
         Assert.Equal(TransportOutcome.Declined, r.Outcome);
         Assert.StartsWith("PRODUCT_UNMAPPED", r.ProviderResultCode);

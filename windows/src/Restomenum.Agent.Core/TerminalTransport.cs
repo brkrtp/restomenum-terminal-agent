@@ -43,8 +43,21 @@ public sealed record FiscalLine(
     string Name,
     int Quantity,
     long UnitPriceMinor,
-    /// <summary>KDV oranı (yüzde). Bizim ürün verimizden gelir, cihaz kurulumundan değil.</summary>
+    /// <summary>KDV oranı (yüzde). Bilgi amaçlı taşınır; cihaz oranı departmandan türetir.</summary>
     decimal VatRate,
+    /// <summary>
+    /// Cihazdaki departman numarası. <b>Eklenti ÇÖZER, agent çözmez</b> (§7.2b).
+    ///
+    /// <para>Önce agent'ta bir <c>IDepartmentMap</c> vardı ve ürün kimliğini departmana çeviriyordu.
+    /// O tasarım yanlıştı: departman eşlemesi <b>cihaz kurulumuna</b> ait ve cihaz kurulumu
+    /// sağlayıcının işi (§20.2). Agent'ta tutmak, her sağlayıcının eşlemesini bizim taşımamız
+    /// demekti — üstelik <c>IDepartmentMap</c>'in hiçbir uygulaması yoktu ve satış kritik yolda
+    /// çözümsüz kalıyordu.</para>
+    ///
+    /// <para><b>Negatif değer = eşlenmemiş.</b> Terminale gitmeden reddedilir; tahmin edilmiş bir
+    /// departman yanlış mali kayıt yazar ve geri alınamaz.</para>
+    /// </summary>
+    int DepartmentNo,
     long LineDiscountMinor = 0);
 
 /// <summary>

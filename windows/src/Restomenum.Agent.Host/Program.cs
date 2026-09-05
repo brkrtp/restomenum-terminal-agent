@@ -29,6 +29,17 @@ builder.Services.Configure<HostOptions>(o =>
     o.BackgroundServiceExceptionBehavior = BackgroundServiceExceptionBehavior.StopHost;
 });
 
+// Dayanıklı depolar TEK ÖRNEK ve DI'da. Worker kendi içinde açsaydı taşıma katmanı aynı
+// dosyaya erişemez ve ödeme öncesi fiş görüntüsü **diske yazılamazdı** — o zaman süreç kart
+// penceresinde öldüğünde çözülebilir bir vaka gereksiz yere insana çıkardı (§12.3).
+// İkisi aynı SQLite dosyasını kullanıyor; WAL bunu destekliyor ve her biri kendi kilidini tutuyor.
+builder.Services.AddSingleton<CommandStore>(sp =>
+    CommandStore.Open(sp.GetRequiredService<IOptions<AgentOptions>>().Value.ResolveStorePath()));
+builder.Services.AddSingleton<Outbox>(sp =>
+    Outbox.Open(sp.GetRequiredService<IOptions<AgentOptions>>().Value.ResolveStorePath()));
+// Taşıma katmanının gördüğü anlık görüntü deposu, komut deposunun ta kendisi.
+builder.Services.AddSingleton<ITicketSnapshotStore>(sp => sp.GetRequiredService<CommandStore>());
+
 builder.Services.AddSingleton<IDeviceKey>(sp =>
 {
     var opt = sp.GetRequiredService<IOptions<AgentOptions>>().Value;

@@ -1,12 +1,5 @@
 namespace Restomenum.Agent.Core;
 
-/// <summary>Ürün → cihaz departmanı eşlemesi (§20.2: eşlemeyi cihaz tarafı tutar).</summary>
-public interface IDepartmentMap
-{
-    /// <summary>Kararlı ürün kimliğinden departman numarası. Eşleme yoksa <c>null</c>.</summary>
-    int? Resolve(string productId);
-}
-
 /// <summary>
 /// **Türkiye / Ingenico GMP-3 taşıması** — <see cref="IGmpWrapper"/> üzerinden mali akışı sürer.
 ///
@@ -33,7 +26,6 @@ public interface IDepartmentMap
 public sealed class GmpTerminalTransport : ITerminalTransport
 {
     private readonly IGmpWrapper _gmp;
-    private readonly IDepartmentMap _departments;
     private readonly Action<string, object?> _log;
 
     /// <summary>
@@ -47,11 +39,9 @@ public sealed class GmpTerminalTransport : ITerminalTransport
     private ulong _handle;
 
     public GmpTerminalTransport(
-        IGmpWrapper gmp, IDepartmentMap departments,
-        ITicketSnapshotStore? snapshots = null, Action<string, object?>? log = null)
+        IGmpWrapper gmp, ITicketSnapshotStore? snapshots = null, Action<string, object?>? log = null)
     {
         _gmp = gmp;
-        _departments = departments;
         _snapshots = snapshots;
         _log = log ?? ((_, _) => { });
     }
@@ -72,7 +62,9 @@ public sealed class GmpTerminalTransport : ITerminalTransport
         if (request.FiscalLines is null || request.FiscalLines.Count == 0)
             return Hata(TransportOutcome.Declined, "FISCAL_LINES_REQUIRED");
 
-        var eksik = request.FiscalLines.FirstOrDefault(l => _departments.Resolve(l.ProductId) is null);
+        // Departmanı eklenti çözer (§7.2b). Negatif = eşlenmemiş → terminale GİTMEDEN reddedilir;
+        // tahmin edilmiş bir departman yanlış mali kayıt yazar ve geri alınamaz.
+        var eksik = request.FiscalLines.FirstOrDefault(l => l.DepartmentNo < 0);
         if (eksik is not null)
             return Hata(TransportOutcome.Declined, $"PRODUCT_UNMAPPED:{eksik.ProductId}");
 
@@ -92,8 +84,7 @@ public sealed class GmpTerminalTransport : ITerminalTransport
 
         foreach (var l in request.FiscalLines)
         {
-            var dept = _departments.Resolve(l.ProductId)!.Value;
-            r = _gmp.ItemSale(handle, new GmpItem(l.Name, l.UnitPriceMinor, l.Quantity, dept), out _);
+            r = _gmp.ItemSale(handle, new GmpItem(l.Name, l.UnitPriceMinor, l.Quantity, l.DepartmentNo), out _);
             if (!r.Ok) return TemizleVeCevir(handle, r, "ItemSale");
         }
 

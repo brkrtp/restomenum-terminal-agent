@@ -21,15 +21,24 @@ public sealed class AgentWorker : BackgroundService
     private readonly ITerminalTransport _transport;
     private readonly IHostApplicationLifetime _lifetime;
 
+    private readonly CommandStore _store;
+    private readonly Outbox _outbox;
+
     public AgentWorker(
         IOptions<AgentOptions> opt, ILogger<AgentWorker> log, IDeviceKey key,
-        ITerminalTransport transport, IHostApplicationLifetime lifetime)
+        ITerminalTransport transport, IHostApplicationLifetime lifetime,
+        CommandStore store, Outbox outbox)
     {
         _opt = opt.Value;
         _log = log;
         _key = key;
         _transport = transport;
         _lifetime = lifetime;
+        // DI'dan geliyorlar ve BURADA AÇILMIYOR: taşıma katmanı da aynı komut deposunu
+        // `ITicketSnapshotStore` olarak görüyor. Worker kendi kopyasını açsaydı iki ayrı örnek
+        // olur ve ödeme öncesi fiş görüntüsü taşımanın yazdığı yerde kalmazdı.
+        _store = store;
+        _outbox = outbox;
     }
 
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
@@ -38,8 +47,8 @@ public sealed class AgentWorker : BackgroundService
         _log.LogInformation("agent başlıyor: connector={ConnectorId} store={Store}",
             _opt.ConnectorId, dbPath);
 
-        using var store = CommandStore.Open(dbPath);
-        using var outbox = Outbox.Open(dbPath);
+        var store = _store;
+        var outbox = _outbox;
 
         // Kapanmamış işler açılışta görünür olmalı: outbox'ta bekleyen bir sonuç, defterine
         // yazılmamış bir tahsilattır. Sessizce devam etmek onu gözden kaçırmak olurdu.
