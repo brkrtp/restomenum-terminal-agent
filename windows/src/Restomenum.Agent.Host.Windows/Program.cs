@@ -11,4 +11,11 @@ var builder = Host.CreateApplicationBuilder(args);
 HostComposition.AddAgentBaseServices(builder);   // önce temel (fail-closed varsayılanlar)
 builder.Services.AddWindowsTerminal();           // sonra gerçek kayıtlar (varsayılanları geçersiz kılar)
 
-await builder.Build().RunAsync();
+var host = builder.Build();
+
+// KAYIT, OTURUMDAN ÖNCE: cihaz kayıtlı değilse tek kullanımlık kodla kaydol ve connectorId'yi
+// dayanıklı yaz. AgentWorker (oturum/gateway) buradan SONRA, RunAsync ile başlar; yani session
+// _key.ConnectorId'yi zaten dolu görür. Kayıt başarısızsa host HİÇ çalışmaz (fail-closed).
+await WindowsEnrollment.EnsureEnrolledAsync(host.Services);
+
+await host.RunAsync();

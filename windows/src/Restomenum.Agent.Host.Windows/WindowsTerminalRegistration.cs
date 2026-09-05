@@ -42,14 +42,18 @@ public static class WindowsTerminalRegistration
                         "Agent:UseInsecureDevKey yalnız geliştirme ortamında kullanılabilir. " +
                         "Üretimde donanım destekli anahtar (TPM/CNG) zorunludur.");
                 log.LogWarning("⚠️ GÜVENSİZ GELİŞTİRME ANAHTARI — donanıma bağlı DEĞİL, her açılışta değişir");
-                return new DevDeviceKey(opt.ConnectorId);
+                return new DevDeviceKey(opt.ConnectorId ?? "");
             }
 
             // WindowsDeviceKey: önce TPM Platform Crypto Provider, yoksa SMBIOS/Software'e düşer
-            // ve log uyarısı basar. connectorId'yi kendisi kalıcılaştırır.
+            // ve log uyarısı basar. connectorId'yi kalıcılaştırır — cihaz KİMLİĞİ veridir, yapılandırma
+            // değil: anahtarın yanında (ResolveStorePath dizini) dursun ki birlikte yedeklensin/silinsin
+            // ve güncellemede kaybolmasın (appsettings'e YAZILMAZ).
             // NOT: CngKey.Create MachineKey izni ister — host'u Windows SERVİSİ (LocalSystem) olarak
             // çalıştır; düz kullanıcı oturumunda anahtar üretimi izinsiz kalıp başarısız olabilir.
-            return new WindowsDeviceKey(log: m => log.LogInformation("{Msg}", m));
+            var storeDir = Path.GetDirectoryName(opt.ResolveStorePath());
+            var connectorIdPath = string.IsNullOrEmpty(storeDir) ? null : Path.Combine(storeDir, "connector.id");
+            return new WindowsDeviceKey(log: m => log.LogInformation("{Msg}", m), connectorIdPath: connectorIdPath);
         });
 
         // ── Terminal taşıması (sıra/kurtarma/hata yorumu — sertifika DIŞI) ────────────────

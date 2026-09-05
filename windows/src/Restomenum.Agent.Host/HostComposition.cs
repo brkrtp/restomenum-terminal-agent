@@ -70,7 +70,7 @@ public static class HostComposition
                         "Agent:UseInsecureDevKey yalnız geliştirme ortamında kullanılabilir. " +
                         "Üretimde donanım destekli anahtar (CNG/TPM) zorunludur.");
                 log.LogWarning("⚠️ GÜVENSİZ GELİŞTİRME ANAHTARI kullanılıyor — donanıma bağlı DEĞİL, her açılışta değişir");
-                return new DevDeviceKey(opt.ConnectorId);
+                return new DevDeviceKey(opt.ConnectorId ?? "");
             }
 
             // Donanım destekli anahtar ayrı bir Windows projesindedir (Restomenum.Agent.Windows).

@@ -23,8 +23,25 @@ public sealed class AgentOptions
     /// <summary>Restoran kimliği.</summary>
     [Required] public string ServerId { get; set; } = "";
 
-    /// <summary>Bu cihazın kayıt sırasında aldığı kimlik.</summary>
-    [Required] public string ConnectorId { get; set; } = "";
+    /// <summary>
+    /// Bu cihazın kayıt sırasında aldığı kimlik. <b><see cref="Required"/> DEĞİL:</b> ilk çalıştırmada
+    /// YOKTUR — kayıt (enrollment) yanıtından doğar ve dayanıklı duruma (anahtarın yanı) yazılır,
+    /// appsettings'e değil. Zorunlu tutmak, kaydolmak için gereken önyükleme kodunun daha çalışmadan
+    /// host'u öldürürdü (A-için-B / B-için-A önyükleme kilidi).
+    /// </summary>
+    public string? ConnectorId { get; set; }
+
+    /// <summary>
+    /// Kayıt ucu, örn. <c>https://…/v1/connectors/enroll</c>. Yalnız İLK kurulumda gerekli.
+    /// </summary>
+    public string? EnrollUrl { get; set; }
+
+    /// <summary>
+    /// ⚠️ Tek kullanımlık kayıt kodu (TTL ~10 dk). Yalnız İLK çalıştırmada doldurulur; cihaz kayıtlı
+    /// değilse <see cref="EnrollUrl"/> ile kaydolmak için kullanılır. Kayıttan sonra yok sayılır.
+    /// <b>ASLA loglanmaz</b> — 10 dk boyunca cihaz bağlama yetkisi taşır, log satırı ondan uzun yaşar.
+    /// </summary>
+    public string? EnrollmentCode { get; set; }
 
     /// <summary>
     /// Dayanıklı store dosyası. Varsayılan <c>%ProgramData%</c> altındadır — kullanıcı profilinde
