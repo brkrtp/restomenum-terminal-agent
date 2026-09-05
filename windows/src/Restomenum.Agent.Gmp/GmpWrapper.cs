@@ -1,3 +1,5 @@
+using System.Text;
+using System.Text.RegularExpressions;
 using Restomenum.Agent.Core;
 using Restomenum.Agent.Gmp.Interop;
 
@@ -217,8 +219,14 @@ public sealed class GmpWrapper : IGmpWrapper
     // kurmalı. Bu yüzden pairing sertifikalı yüzeyde. Dışarıdan tetiklenir (agent "eşleş" der),
     // ama FP3_StartPairingInit çağrısı bu süreçte olur.
 
-    public GmpResult Pair()
+    // Harici cihaz (bizim) kimliği: eşleşmede terminale sunulan marka/model. Sabit — frozen
+    // GmpPairingConfig yalnız ProcOrderNumber + EcrSerialNumber taşır (banka/TSM'e giden alanlar).
+    private const string ExternalDeviceBrand = "INGENICO";
+    private const string ExternalDeviceModel = "RESTOMENUM";
+
+    public GmpResult Pair(GmpPairingConfig config, out GmpDeviceInfo info)
     {
+        info = new GmpDeviceInfo("", "", "", "");
         uint h = AcquireInterface();
         if (h == 0) return GmpCodes.PortNotOpen;
         // Sertifikalı StartPairing sırası: önce Echo (bağlantı), sonra StartPairingInit.
@@ -227,16 +235,22 @@ public sealed class GmpWrapper : IGmpWrapper
         if (erc != GmpCodes.Ok) return erc;
         var pair = new ST_GMP_PAIR
         {
-            szExternalDeviceBrand        = "INGENICO",
-            szExternalDeviceModel        = "RESTOMENUM",
+            szExternalDeviceBrand        = ExternalDeviceBrand,
+            szExternalDeviceModel        = ExternalDeviceModel,
             szExternalDeviceSerialNumber = "",
-            szEcrSerialNumber            = "",
-            szProcOrderNumber            = "000001",
+            szEcrSerialNumber            = config.EcrSerialNumber ?? "",
+            // ProcOrderNumber boşsa sertifikalı varsayılan "000001".
+            szProcOrderNumber            = string.IsNullOrEmpty(config.ProcOrderNumber) ? "000001" : config.ProcOrderNumber,
             szProcDate                   = DateTime.Now.ToString("yyyyMMdd"),
             szProcTime                   = DateTime.Now.ToString("HHmmss"),
         };
         var resp = new ST_GMP_PAIR_RESP();
-        return Json_GMPSmartDLL.FP3_StartPairingInit(h, ref pair, ref resp, TimeoutDefault);
+        uint rc = Json_GMPSmartDLL.FP3_StartPairingInit(h, ref pair, ref resp, TimeoutDefault);
+        // Cihaz kimliği YALNIZ başarılı eşleşmede dolu döner (sertifikalı DLLController._deviceInfo ile birebir).
+        if (rc == GmpCodes.Ok)
+            info = new GmpDeviceInfo(resp.szEcrBrand ?? "", resp.szEcrModel ?? "",
+                                    resp.szEcrSerialNumber ?? "", resp.szVersionNumber ?? "");
+        return rc;
     }
 
     public GmpResult CheckPairing(out bool paired)
@@ -249,6 +263,107 @@ public sealed class GmpWrapper : IGmpWrapper
         uint rc = GMPSmartDLL.FP3_IsGmpPairingDone(h);
         paired = rc != 0;
         return GmpCodes.Ok;
+    }
+
+    // ── Raporlar / ağ / provisioning / fatura ────────────────────────────────
+
+    public GmpResult Report(GmpReportType type)
+    {
+        uint h = AcquireInterface();
+        if (h == 0) return GmpCodes.PortNotOpen;
+        // DİKKAT: GmpReportType (X=1,Z=2) ≠ TTicketType (TXReport=3,TZReport=2). Açık eşle.
+        int functionFlags = type == GmpReportType.Z ? (int)TTicketType.TZReport : (int)TTicketType.TXReport;
+        var pars = new ST_FUNCTION_PARAMETERS();
+        return Json_GMPSmartDLL.FP3_FunctionReports(h, functionFlags, ref pars, TimeoutDefault);
+    }
+
+    public GmpResult SetIpAddress(string ipAddress, int port)
+    {
+        // Sertifikalı SetIpAddress GMP.XML dosyasını düzenler (DLL bir sonraki bağlantıda okur);
+        // FP3 çağrısı YAPMAZ. Latin1 + regex ile <IP>/<Port> değiştirilir.
+        try
+        {
+            string xmlPath = Path.Combine(Environment.CurrentDirectory, "GMP.XML");
+            if (!File.Exists(xmlPath)) return GmpCodes.PortNotOpen;
+            var enc = Encoding.Latin1;
+            string content = File.ReadAllText(xmlPath, enc);
+            content = Regex.Replace(content, @"<IP>[^<]*</IP>", $"<IP>{ipAddress}</IP>");
+            content = Regex.Replace(content, @"<Port>[^<]*</Port>", $"<Port>{port}</Port>");
+            File.WriteAllText(xmlPath, content, enc);
+            return GmpCodes.Ok;
+        }
+        catch { return GmpCodes.PortNotOpen; }
+    }
+
+    public GmpResult GetDepartments(out string departmentsJson)
+    {
+        departmentsJson = "";
+        uint h = AcquireInterface();
+        if (h == 0) return GmpCodes.PortNotOpen;
+        var depts = new ST_DEPARTMENT[12];
+        int total = 0, received = 0;
+        uint rc = Json_GMPSmartDLL.FP3_GetDepartments(h, ref total, ref received, ref depts, 12);
+        if (rc == GmpCodes.Ok)
+            departmentsJson = Newtonsoft.Json.JsonConvert.SerializeObject(depts.Take(received));
+        return rc;
+    }
+
+    public GmpResult SetDepartments(string departmentsJson, string supervisorPassword)
+    {
+        uint h = AcquireInterface();
+        if (h == 0) return GmpCodes.PortNotOpen;
+        // supervisorPassword artık imzada (f873986). GMP_Tools.GetBytesFromString null-sonlandırır
+        // ve TR karakterleri çevirir — sertifikalı FP3_SetDepartments ile BİREBİR aynı dönüşüm.
+        byte[] jsonIn = GMP_Tools.GetBytesFromString(departmentsJson);
+        byte[] outBuf = new byte[Defines.STANDART_BUFFER];
+        byte[] pass = GMP_Tools.GetBytesFromString(supervisorPassword ?? "");
+        byte count = 12;
+        try { count = (byte)Newtonsoft.Json.Linq.JArray.Parse(departmentsJson).Count; } catch { }
+        return Json_GMPSmartDLL.Json_FP3_SetDepartments(h, jsonIn, outBuf, outBuf.Length, count, pass);
+    }
+
+    public GmpResult SetInvoice(ulong handle, GmpInvoice invoice)
+    {
+        uint h = AcquireInterface();
+        if (h == 0) return GmpCodes.PortNotOpen;
+        // Alan yerleşimi ÖLÇÜLDÜ (sertifikalı DLLController.StartInvoice + ST_INVIOCE_INFO):
+        // FP3_SetInvoice native struct MARSHAL ETMEZ — struct JSON'a serialize edilir (byte[] alanlar
+        // sayı dizisi olarak gider). Numara alanlarının kodlaması bu yüzden "packed BCD" DEĞİL.
+        var inv = new ST_INVIOCE_INFO
+        {
+            source   = (byte)invoice.Source,          // gerçek logda 1 (e-Arşiv/e-Fatura sayısal karşılığı üreticiden alınacak)
+            amount   = (ulong)invoice.AmountMinor,
+            currency = invoice.Currency,              // ISO 4217; TR için 949
+        };
+        // no[25]: fatura no — sertifikalı ConvertAscToBcdArray adına rağmen DÜZ ASCII kopya (ölçüldü).
+        AsciiCopyInto(invoice.InvoiceNo, inv.no);
+        // TCKN vs VKN: frozen GmpTaxIdType ayrımı — yanlış alana yazmak mali faturayı bozar, geri alınamaz.
+        if (invoice.TaxIdType == GmpTaxIdType.Tckn) AsciiCopyInto(invoice.TaxId, inv.tck_no);
+        else                                         AsciiCopyInto(invoice.TaxId, inv.vk_no);
+        // date[3]: TEK gerçek hex/packed alan — "ddMMyy" hex-pack, sonra ters çevir → YYMMDD (sertifikalı ile birebir).
+        HexPackInto(invoice.Date.ToString("ddMMyy"), inv.date);
+        Array.Reverse(inv.date);
+
+        var stTicket = new ST_TICKET();
+        return Json_GMPSmartDLL.FP3_SetInvoice(h, handle, ref inv, ref stTicket, TimeoutDefault);
+    }
+
+    // Sertifikalı SalesHelper.ConvertAscToBcdArray birebir: ismi "BCD" ama gerçekte DÜZ ASCII byte
+    // kopyası (Encoding.Default). Rakamlar için ASCII==UTF-8; her iki sürüm de net8.0, davranış aynı.
+    private static void AsciiCopyInto(string? s, byte[] dst)
+    {
+        if (string.IsNullOrEmpty(s)) return;
+        byte[] src = Encoding.Default.GetBytes(s);
+        Array.Copy(src, 0, dst, 0, Math.Min(src.Length, dst.Length));
+    }
+
+    // Sertifikalı SalesHelper.ConvertStringToHexArray birebir: "1234" → {0x12,0x34}. Tarih için 3 byte.
+    private static void HexPackInto(string s, byte[] dst)
+    {
+        if (string.IsNullOrEmpty(s)) return;
+        int n = Math.Min(s.Length / 2, dst.Length);
+        for (int i = 0; i < n; i++)
+            dst[i] = Convert.ToByte(s.Substring(i * 2, 2), 16);
     }
 
     /// <summary>
