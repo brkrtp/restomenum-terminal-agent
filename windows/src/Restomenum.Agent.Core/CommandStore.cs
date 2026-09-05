@@ -43,7 +43,7 @@ public abstract record SaveResult
 ///
 /// <para>Android karşılığı: <c>android/core/.../CommandStore.kt</c> — aynı şema, aynı davranış.</para>
 /// </summary>
-public sealed class CommandStore : IDisposable
+public sealed class CommandStore : ITicketSnapshotStore, IDisposable
 {
     private readonly SqliteConnection _conn;
 
@@ -94,6 +94,22 @@ public sealed class CommandStore : IDisposable
                 )
                 """;
             cmd.ExecuteNonQuery();
+            // Ödeme öncesi fiş anlık görüntüsü. **Bellekte tutmak yetmez:** süreç kart penceresinde
+            // ölürse görüntü de ölür ve yeniden başlatmada "benim ödemem işlendi mi" sorusu
+            // cevaplanamaz — belirsizlik insana çıkar. Diskte tutulunca fark hâlâ alınabilir.
+            cmd.CommandText = """
+                CREATE TABLE IF NOT EXISTS ticket_snapshots (
+                    command_id     TEXT PRIMARY KEY,
+                    total_minor    INTEGER NOT NULL,
+                    paid_minor     INTEGER NOT NULL,
+                    payment_count  INTEGER NOT NULL,
+                    taken_at       INTEGER NOT NULL
+                )
+                """;
+            cmd.ExecuteNonQuery();
+            // Yeniden başlatmada tamamlanmamış komutları bulmak için: durum sorgusu indekslenir.
+            cmd.CommandText = "CREATE INDEX IF NOT EXISTS ix_commands_state ON commands(state)";
+            cmd.ExecuteNonQuery();
         }
         return new CommandStore(conn);
     }
@@ -136,17 +152,20 @@ public sealed class CommandStore : IDisposable
             cmd.Parameters.AddWithValue("$cid", commandId);
             using var r = cmd.ExecuteReader();
             if (!r.Read()) return null;
-            return new StoredCommand(
-                r.GetString(r.GetOrdinal("command_id")),
-                r.GetString(r.GetOrdinal("payment_id")),
-                r.GetString(r.GetOrdinal("terminal_id")),
-                r.GetInt64(r.GetOrdinal("received_at")),
-                r.GetInt64(r.GetOrdinal("expires_at")),
-                Enum.Parse<CommandState>(r.GetString(r.GetOrdinal("state"))),
-                r.IsDBNull(r.GetOrdinal("terminal_reference")) ? null : r.GetString(r.GetOrdinal("terminal_reference")),
-                r.IsDBNull(r.GetOrdinal("result_json")) ? null : r.GetString(r.GetOrdinal("result_json")));
+            return Oku(r);
         }
     }
+
+    /// <summary>Satır → model. Tek yerde: iki kopya ayrıştığında alanlar sessizce kayar.</summary>
+    private static StoredCommand Oku(SqliteDataReader r) => new(
+        r.GetString(r.GetOrdinal("command_id")),
+        r.GetString(r.GetOrdinal("payment_id")),
+        r.GetString(r.GetOrdinal("terminal_id")),
+        r.GetInt64(r.GetOrdinal("received_at")),
+        r.GetInt64(r.GetOrdinal("expires_at")),
+        Enum.Parse<CommandState>(r.GetString(r.GetOrdinal("state"))),
+        r.IsDBNull(r.GetOrdinal("terminal_reference")) ? null : r.GetString(r.GetOrdinal("terminal_reference")),
+        r.IsDBNull(r.GetOrdinal("result_json")) ? null : r.GetString(r.GetOrdinal("result_json")));
 
     /// <summary>
     /// Durumu ilerletir — <b>yalnız izinli geçişler</b> ve <b>yalnız beklenen mevcut durumdan</b>.
@@ -177,6 +196,67 @@ public sealed class CommandStore : IDisposable
             cmd.Parameters.AddWithValue("$cid", commandId);
             cmd.Parameters.AddWithValue("$expected", expected.ToString());
             return cmd.ExecuteNonQuery() == 1;
+        }
+    }
+
+    /// <summary>
+    /// **Kesin sonuca ulaşmamış** komutlar — yeniden başlatmada kurtarılacak olanlar.
+    ///
+    /// <para><b>Neden kritik:</b> agent kart penceresinde ölürse (elektrik, OS kapanışı, SCM kill)
+    /// komut <c>SENT_TO_TERMINAL</c>'da kalır. Gateway <c>command.ack</c>'i çoktan almıştır, bu
+    /// yüzden komutu <b>yeniden teslim etmez</b>. Açılışta bu satırlar taranmazsa para hareket
+    /// etmiş olabilir ve <b>kimse bildirmez</b> — ne agent, ne platform. Sessiz kayıp.</para>
+    /// </summary>
+    public IReadOnlyList<StoredCommand> Pending(int limit = 100)
+    {
+        lock (_gate)
+        {
+            using var cmd = _conn.CreateCommand();
+            cmd.CommandText = """
+                SELECT * FROM commands
+                 WHERE state IN ('RECEIVED','SENT_TO_TERMINAL','UNKNOWN')
+                 ORDER BY received_at ASC LIMIT $n
+                """;
+            cmd.Parameters.AddWithValue("$n", limit);
+            using var r = cmd.ExecuteReader();
+            var liste = new List<StoredCommand>();
+            while (r.Read()) liste.Add(Oku(r));
+            return liste;
+        }
+    }
+
+    /// <summary>Ödeme öncesi fiş görüntüsünü <b>diske</b> yazar (yeniden başlatmaya dayanıklı).</summary>
+    public void SaveSnapshot(string commandId, long totalMinor, long paidMinor, int paymentCount, long? now = null)
+    {
+        lock (_gate)
+        {
+            using var cmd = _conn.CreateCommand();
+            cmd.CommandText = """
+                INSERT INTO ticket_snapshots (command_id, total_minor, paid_minor, payment_count, taken_at)
+                VALUES ($cid, $t, $p, $c, $now)
+                ON CONFLICT(command_id) DO UPDATE SET
+                    total_minor = $t, paid_minor = $p, payment_count = $c, taken_at = $now
+                """;
+            cmd.Parameters.AddWithValue("$cid", commandId);
+            cmd.Parameters.AddWithValue("$t", totalMinor);
+            cmd.Parameters.AddWithValue("$p", paidMinor);
+            cmd.Parameters.AddWithValue("$c", paymentCount);
+            cmd.Parameters.AddWithValue("$now", now ?? DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+            cmd.ExecuteNonQuery();
+        }
+    }
+
+    /// <summary>Saklanan görüntü; yoksa <c>null</c>.</summary>
+    public (long TotalMinor, long PaidMinor, int PaymentCount)? ReadSnapshot(string commandId)
+    {
+        lock (_gate)
+        {
+            using var cmd = _conn.CreateCommand();
+            cmd.CommandText = "SELECT total_minor, paid_minor, payment_count FROM ticket_snapshots WHERE command_id = $cid";
+            cmd.Parameters.AddWithValue("$cid", commandId);
+            using var r = cmd.ExecuteReader();
+            if (!r.Read()) return null;
+            return (r.GetInt64(0), r.GetInt64(1), r.GetInt32(2));
         }
     }
 

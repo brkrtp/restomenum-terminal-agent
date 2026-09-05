@@ -13,7 +13,21 @@ namespace Restomenum.Agent.Core;
 /// </summary>
 public interface IDeviceKey
 {
-    /// <summary>Kanonik dizeyi imzalar (Ed25519 / EC P-256 / RSA-PSS).</summary>
+    /// <summary>
+    /// Kanonik dizeyi imzalar (Ed25519 / EC P-256 / RSA-PSS).
+    ///
+    /// <para><b>EC imzası DER kodlu olmak ZORUNDA</b> (ASN.1 <c>SEQUENCE{r,s}</c>), ham
+    /// <c>r‖s</c> (IEEE P1363) <b>DEĞİL</b>. Sunucu <c>crypto.verify(null, …)</c> çağırıyor ve
+    /// Node'un varsayılan <c>dsaEncoding</c>'i <c>der</c>. Ölçüldü: DER doğrulanıyor (71 bayt),
+    /// P1363 reddediliyor (64 bayt).</para>
+    ///
+    /// <para><b>.NET tuzağı:</b> <c>ECDsaCng.SignData</c> P1363 üretir ve DER'e çevrilmesi gerekir.
+    /// Java/Android'in <c>Signature</c>'ı zaten DER üretir. Yanlış kodlama sessiz kalmaz —
+    /// <b>her</b> isteği reddeder — ama sebebi <c>unauthorized</c> göründüğü için sahada anahtar
+    /// ya da parmak izi sorunu sanılır ve teşhisi zordur.</para>
+    ///
+    /// <para>Sözleşme: <c>conformance/signing.json</c> → <c>imzaKodlamasi</c>.</para>
+    /// </summary>
     byte[] Sign(byte[] data);
 
     /// <summary>

@@ -52,11 +52,22 @@ public class GmpTerminalTransportTests
         new("c1", "p1", "t1", amount, "TRY", 2, "prov",
             lines ?? new[] { new FiscalLine("prod1", "Kahve", 1, amount, 20m) }, paymentType);
 
+    /// <summary>Bellek-içi görüntü deposu. Gerçekte <see cref="CommandStore"/> (disk) kullanılır —
+    /// süreç kart penceresinde ölürse görüntünün hayatta kalması şart.</summary>
+    private sealed class FakeSnapshots : ITicketSnapshotStore
+    {
+        private readonly Dictionary<string, (long, long, int)> _d = new();
+        public void SaveSnapshot(string commandId, long total, long paid, int count, long? now = null)
+            => _d[commandId] = (total, paid, count);
+        public (long TotalMinor, long PaidMinor, int PaymentCount)? ReadSnapshot(string commandId)
+            => _d.TryGetValue(commandId, out var v) ? v : null;
+    }
+
     private static (GmpTerminalTransport, FakeGmp, Departments) Kur()
     {
         var g = new FakeGmp();
         var d = new Departments();
-        return (new GmpTerminalTransport(g, d), g, d);
+        return (new GmpTerminalTransport(g, d, new FakeSnapshots()), g, d);
     }
 
     // ── FAIL-CLOSED: terminale HİÇ dokunulmaz ────────────────────────────────
@@ -221,6 +232,23 @@ public class GmpTerminalTransportTests
     }
 
     [Fact]
+    public async Task Probe_BOZUK_sayac_Indeterminate()
+    {
+        // Sarmalayıcı fiş dizisinin sınırını aşan bir sayaç gördüğünde -1 bildirir. Bunu normal
+        // bir sayı sansaydık karşılaştırma "sayaç arttı" der ve GERÇEKLEŞMEMİŞ bir ödeme Landed
+        // sayılırdı — para hareket etmemişken tahsilat yazmak.
+        var (t, g, _) = Kur();
+        g.Ticket = new GmpTicket(3000, 0, 0, 0);
+        g.Codes["Payment"] = GmpCodes.Timeout;
+        await t.SaleAsync(Req());
+
+        g.Ticket = new GmpTicket(3000, 1000, -1, GmpPaymentTypes.Card);
+        var p = await t.ProbeAsync(Req());
+
+        Assert.Equal(ProbeVerdict.Indeterminate, p.Verdict);
+    }
+
+    [Fact]
     public async Task Probe_anlik_goruntu_YOKSA_Indeterminate()
     {
         // Agent yeniden başlamış: ödeme var ama BİZİM olduğunu söyleyemeyiz. Tahmin yerine
@@ -289,6 +317,61 @@ public class GmpTerminalTransportTests
         // Para hareket etti, geri alınamadı → referans KORUNUR, elle iade için tek dayanak.
         Assert.Equal("RRN7", r.Rrn);
         Assert.Equal(1, g.Calls.Count(c => c == "VoidPayment"));   // ← ÇİVİ: tekrar denenmedi
+    }
+
+    [Fact]
+    public async Task Mobil_QR_odemesi_NAKIT_gibi_iptal_olur()
+    {
+        // Canlı terminalde ölçüldü: `paymentType=16` ile kısmi ödemeli fişte `VoidAll` DOĞRUDAN
+        // OK döndü (1959 ms, 2069 YOK). Ayrımı "kart mı" diye kursaydık mobil ödeme, sahada hiç
+        // çalışmamış ve REVERSAL_FAILED riski taşıyan ters işlem yoluna girerdi.
+        var (t, g, _) = Kur();
+        g.AfterPayment = new GmpTicket(3000, 1000, 1, GmpPaymentTypes.Mobile);
+        await t.SaleAsync(Req(amount: 1000, paymentType: GmpPaymentTypes.Mobile));
+        g.Calls.Clear();
+
+        var r = await t.VoidAsync();
+
+        Assert.Equal(TransportOutcome.Approved, r.Outcome);
+        Assert.DoesNotContain("VoidPayment", g.Calls);
+    }
+
+    [Fact]
+    public void Banka_bacagi_YALNIZ_kartta_vardir()
+    {
+        Assert.True(GmpPaymentTypes.HasBankLeg(GmpPaymentTypes.Card));
+        Assert.False(GmpPaymentTypes.HasBankLeg(GmpPaymentTypes.Cash));
+        Assert.False(GmpPaymentTypes.HasBankLeg(GmpPaymentTypes.Mobile));
+    }
+
+    [Fact]
+    public async Task Tanitici_yokken_ALREADY_DONE_acik_fis_demektir()
+    {
+        // Bu kodun değeri önce 2331 diye TAHMİN EDİLMİŞTİ ve yanlıştı; doğrusu 2080. Yanlış
+        // kalsaydı bu dal sessizce çalışmaz, agent yeniden başladıktan sonra belirsizlik çözümü
+        // tam da en gerekli anda çökerdi. Test o değeri çiviliyor.
+        var (t, g, _) = Kur();
+        g.Codes["Start"] = GmpCodes.AlreadyDone;
+
+        var tk = await t.ReadTicketAsync();
+
+        Assert.True(tk.HasOpenTicket);
+        Assert.Equal(2080u, GmpCodes.AlreadyDone);
+        // Yoklama fişi açmadığı için kapatma da yapılmaz.
+        Assert.DoesNotContain("Close", g.Calls);
+    }
+
+    [Fact]
+    public async Task Tanitici_yokken_acik_fis_YOKSA_yoklama_fisi_BIRAKILMAZ()
+    {
+        // `Start` başarılıysa yoklama için bir fiş AÇMIŞ oluruz. Bırakmak, bir sonraki satışın
+        // `StartTicket`'ının onu sessizce iptal etmesi demek.
+        var (t, g, _) = Kur();
+
+        var tk = await t.ReadTicketAsync();
+
+        Assert.False(tk.HasOpenTicket);
+        Assert.Contains("Close", g.Calls);
     }
 
     [Fact]

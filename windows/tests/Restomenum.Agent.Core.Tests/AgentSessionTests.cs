@@ -85,6 +85,7 @@ public class AgentSessionTests : IDisposable
         requestId = "req-" + commandId,
         command = new
         {
+            type = "PAYMENT_SALE",
             commandId,
             paymentId = "pay-" + commandId,
             expiresAt,
@@ -234,6 +235,7 @@ public class AgentSessionTests : IDisposable
             requestId = "r9",
             command = new
             {
+                type = "PAYMENT_SALE",
                 commandId = "c6", paymentId = "p6",
                 expiresAt = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() + 600_000,
                 payload = new { terminalId = "t1", amountMinor = 24000, currency = "TRY" },
@@ -248,11 +250,15 @@ public class AgentSessionTests : IDisposable
     }
 
     [Fact]
-    public async Task AyniTerminale_iki_satis_SERILESTIRILIR()
+    public async Task AyniTerminale_ikinci_satis_KABUL_EDILMEZ()
     {
         // Değişmez #4. Cihazın `StartTicket`'i açık fiş bulursa onu SESSİZCE iptal eder —
         // yani eşzamanlılık burada nezaket değil, VERİ KAYBI meselesi.
-        var sim = new SimulatorTransport { Delay = TimeSpan.FromMilliseconds(120) };
+        //
+        // İkinci komut KUYRUĞA ALINMAZ (§8.4). Kabul edip sıraya koymak, kasiyere hiçbir geri
+        // bildirim vermeden komutu süresi dolana kadar bekletmek olurdu; `accepted:false` ise
+        // komut kuyrukta kalır ve terminal boşalınca yeniden teslim edilir.
+        var sim = new SimulatorTransport { Delay = TimeSpan.FromMilliseconds(200) };
         sim.Expect(new TransportResult(TransportOutcome.Approved, ApprovedAmountMinor: 1))
            .Expect(new TransportResult(TransportOutcome.Approved, ApprovedAmountMinor: 2));
         var (sess, ch, _) = Kur(sim);
@@ -261,17 +267,24 @@ public class AgentSessionTests : IDisposable
         ch.Push(Command("c8", exp));
         await Calistir(sess, ch, 700);
 
-        Assert.Equal(2, sim.SaleCalls.Count);
+        Assert.Single(sim.SaleCalls);              // ikincisi terminale HİÇ gitmedi
         Assert.Equal(1, sim.MaxConcurrentSales);   // ← kilit yoksa 2 olur
+        var red = ch.Sent.Single(n => n?["type"]?.GetValue<string>() == "command.ack"
+            && n["accepted"]!.GetValue<bool>() == false);
+        Assert.Equal("TERMINAL_BUSY", red["reason"]!.GetValue<string>());
     }
 
     [Fact]
-    public async Task FARKLI_terminaller_PARALEL_calisir()
+    public async Task FARKLI_terminal_kimlikleri_de_SERILESTIRILIR()
     {
-        // Bir önceki testin karşı kontrolü. O test tek başına boşuna yeşil yanabilirdi: ölçüm
-        // bozuk olsa ya da iki satış hiç çakışmasa da `MaxConcurrentSales` 1 çıkardı. Burada
-        // çakışmanın GERÇEKTEN ölçülebildiği gösteriliyor — kilit terminal başına, global değil.
-        var sim = new SimulatorTransport { Delay = TimeSpan.FromMilliseconds(120) };
+        // Bu test önce TERSİNİ iddia ediyordu ("farklı terminaller paralel çalışır") ve bu bir
+        // HATAYDI: oturumun tek bir taşıması var, o da tek bir fiziksel cihaza tek oturumla
+        // bağlanıyor. Farklı `terminalId` dizeleri aynı cihaz oturumunu paylaştığı için paralel
+        // çalıştırmak, ikinci `StartTicket`'ın birincinin fişini sessizce iptal etmesi demekti.
+        //
+        // İkinci komut kilidi alamadığı için KABUL EDİLMEZ (§8.4: kuyruğa alma yok) — komut
+        // kuyrukta kalır ve sonra yeniden teslim edilir.
+        var sim = new SimulatorTransport { Delay = TimeSpan.FromMilliseconds(200) };
         sim.Expect(new TransportResult(TransportOutcome.Approved, ApprovedAmountMinor: 1))
            .Expect(new TransportResult(TransportOutcome.Approved, ApprovedAmountMinor: 2));
         var (sess, ch, _) = Kur(sim);
@@ -280,8 +293,169 @@ public class AgentSessionTests : IDisposable
         ch.Push(Command("d2", exp, terminalId: "t2"));
         await Calistir(sess, ch, 700);
 
-        Assert.Equal(2, sim.SaleCalls.Count);
-        Assert.Equal(2, sim.MaxConcurrentSales);   // iki farklı terminal birbirini beklemez
+        Assert.Equal(1, sim.MaxConcurrentSales);   // ← ÇİVİ: tek cihaz oturumu, tek işlem
+        var redler = ch.Sent.Where(n => n?["type"]?.GetValue<string>() == "command.ack"
+            && n["accepted"]!.GetValue<bool>() == false).ToList();
+        Assert.Single(redler);
+        Assert.Equal("TERMINAL_BUSY", redler[0]!["reason"]!.GetValue<string>());
+    }
+
+    [Fact]
+    public async Task DESTEKLENMEYEN_komut_tipi_CALISTIRILMAZ()
+    {
+        // ← EN TEHLİKELİ ÇİVİ: tip okunmasaydı, platformun belirsizlik çözüm döngüsünün
+        // gönderdiği bir sorgu komutu SATIŞ olarak çalışırdı — yani tam da ilk ödemenin
+        // başarılı olduğundan şüphelenildiği anda ikinci kez kart çekilirdi.
+        var (sess, ch, sim) = Kur();
+        var exp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() + 600_000;
+        ch.Push(new
+        {
+            type = "command",
+            requestId = "rq",
+            command = new
+            {
+                type = "PAYMENT_STATUS_LOOKUP",
+                commandId = "lk1", paymentId = "p1", expiresAt = exp,
+                payload = new { terminalId = "t1", amountMinor = 24000, currency = "TRY", exponent = 2 },
+            },
+        });
+        await Calistir(sess, ch);
+
+        var ack = Ilk(ch, "command.ack");
+        Assert.False(ack!["accepted"]!.GetValue<bool>());
+        Assert.Equal("CAPABILITY_NOT_SUPPORTED", ack["reason"]!.GetValue<string>());
+        Assert.Empty(sim.SaleCalls);
+    }
+
+    [Fact]
+    public async Task TIPSIZ_komut_da_REDDEDILIR()
+    {
+        // Eksik tipi "eski sürüm, satış demektir" diye yorumlamak, yukarıdaki korumayı
+        // gönderen tarafın bir ihmaliyle delerdi.
+        var (sess, ch, sim) = Kur();
+        ch.Push(new
+        {
+            type = "command",
+            requestId = "rq2",
+            command = new
+            {
+                commandId = "nt1", paymentId = "p1",
+                expiresAt = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() + 600_000,
+                payload = new { terminalId = "t1", amountMinor = 24000, currency = "TRY", exponent = 2 },
+            },
+        });
+        await Calistir(sess, ch);
+
+        Assert.False(Ilk(ch, "command.ack")!["accepted"]!.GetValue<bool>());
+        Assert.Empty(sim.SaleCalls);
+    }
+
+    [Fact]
+    public async Task BOZUK_FRAME_oturumu_DUSURMEZ()
+    {
+        // Zehirli mesaj: düşseydi gateway aynı frame'i yeniden teslim eder, o da yine düşürürdü —
+        // terminalin tamamını kilitleyen bir döngü.
+        var sim = new SimulatorTransport().Expect(new TransportResult(
+            TransportOutcome.Approved, ApprovedAmountMinor: 24000));
+        var (sess, ch, _) = Kur(sim);
+        ch.Push(new { type = "command", requestId = 42, command = new { type = "PAYMENT_SALE" } });
+        ch.Push(Command("ok1", DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() + 600_000));
+        await Calistir(sess, ch, 600);
+
+        // Bozuk frame'den SONRAKİ komut işlenmiş olmalı.
+        Assert.Single(sim.SaleCalls);
+    }
+
+    // ────────────────────────────────────────────────────────────────────────
+    // AÇILIŞ KURTARMASI — sessiz para kaybının kapatıldığı yer
+    // ────────────────────────────────────────────────────────────────────────
+
+    [Fact]
+    public async Task Acilista_YARIM_kalmis_komut_terminale_SORULUR()
+    {
+        // SENARYO: agent kart penceresinde öldü (elektrik, OS kapanışı, servis kill). Komut
+        // `SENT_TO_TERMINAL`'da kaldı. Gateway `command.ack`'i çoktan almıştı, bu yüzden komutu
+        // YENİDEN TESLİM ETMEZ. Açılışta sorulmazsa para hareket etmiş olabilir ve KİMSE bilmez.
+        _store.Save("kurt1", "pay-kurt1", "t1", DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() + 600_000);
+        _store.Advance("kurt1", CommandState.RECEIVED, CommandState.SENT_TO_TERMINAL);
+        _clock.Sync(DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+
+        var sim = new SimulatorTransport()
+            .WithTicket(new TicketState(HasOpenTicket: true, TotalAmountMinor: 24000,
+                PaidAmountMinor: 24000, Rrn: "RRN-KURT", PaymentCount: 1));
+        var orch = new AgentOrchestrator(_store, sim, _clock, RecoveryPolicy.Immediate);
+        var ch = new FakeChannel();
+        await using var sess = new AgentSession(orch, _store, _outbox, _clock, new FakeSessions(),
+            () => ch, new Uri("wss://x/v1/agent"));
+
+        await sess.KurtarAsync();
+
+        // ← ÇİVİ: satış TEKRARLANMADI, terminale SORULDU ve sonuç bildirilmek üzere kuyruğa girdi.
+        Assert.Empty(sim.SaleCalls);
+        Assert.Equal(1, sim.ProbeCalls);
+        Assert.Equal(1, _outbox.Depth());
+        Assert.Equal("approved", _outbox.Pending()[0].Status);
+        Assert.Equal(CommandState.COMPLETED, _store.Read("kurt1")!.State);
+    }
+
+    [Fact]
+    public async Task Acilis_kurtarmasi_odeme_ISLENMEMISSE_de_bildirir()
+    {
+        // Ödeme işlenmediği KANITLANDIYSA da bildirilir: kasiyer komutun süresi dolana kadar
+        // ekran başında beklememeli.
+        _store.Save("kurt2", "pay-kurt2", "t1", DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() + 600_000);
+        _store.Advance("kurt2", CommandState.RECEIVED, CommandState.SENT_TO_TERMINAL);
+        _clock.Sync(DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+
+        var sim = new SimulatorTransport()
+            .WithTicket(new TicketState(HasOpenTicket: false, TotalAmountMinor: 0, PaidAmountMinor: 0));
+        var orch = new AgentOrchestrator(_store, sim, _clock, RecoveryPolicy.Immediate);
+        var ch = new FakeChannel();
+        await using var sess = new AgentSession(orch, _store, _outbox, _clock, new FakeSessions(),
+            () => ch, new Uri("wss://x/v1/agent"));
+
+        await sess.KurtarAsync();
+
+        Assert.Empty(sim.SaleCalls);
+        Assert.Equal(1, _outbox.Depth());
+        Assert.Equal("cancelled", _outbox.Pending()[0].Status);
+    }
+
+    [Fact]
+    public async Task Kesin_sonuclu_komut_kurtarmaya_GIRMEZ()
+    {
+        _store.Save("bitti", "pay-bitti", "t1", DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() + 600_000);
+        _store.Advance("bitti", CommandState.RECEIVED, CommandState.SENT_TO_TERMINAL);
+        _store.Advance("bitti", CommandState.SENT_TO_TERMINAL, CommandState.COMPLETED);
+
+        var sim = new SimulatorTransport();
+        var orch = new AgentOrchestrator(_store, sim, _clock, RecoveryPolicy.Immediate);
+        var ch = new FakeChannel();
+        await using var sess = new AgentSession(orch, _store, _outbox, _clock, new FakeSessions(),
+            () => ch, new Uri("wss://x/v1/agent"));
+
+        await sess.KurtarAsync();
+
+        Assert.Equal(0, sim.ProbeCalls);
+        Assert.Equal(0, _outbox.Depth());
+    }
+
+    [Fact]
+    public async Task Saklanan_sonuc_outboxa_yazilamamissa_TEKRAR_kuyruga_konur()
+    {
+        // Disk dolu / dosya kilidi yüzünden `Enqueue` başarısız olsaydı, store `COMPLETED` derken
+        // outbox boş kalır ve tahsilat HİÇBİR ZAMAN bildirilmezdi. Aynı komut tekrar gelince
+        // saklanan sonuç yeniden kuyruğa konur; `INSERT OR IGNORE` sayesinde zararsızdır.
+        var sim = new SimulatorTransport().Expect(new TransportResult(
+            TransportOutcome.Approved, ApprovedAmountMinor: 24000, Rrn: "RRN-R"));
+        var (sess, ch, _) = Kur(sim);
+        var exp = DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() + 600_000;
+        ch.Push(Command("rp1", exp));
+        ch.Push(Command("rp1", exp));   // aynı komut ikinci kez
+        await Calistir(sess, ch, 600);
+
+        Assert.Single(sim.SaleCalls);          // terminale bir kez gitti
+        Assert.Equal(1, _outbox.Depth());      // sonuç bildirilmek üzere duruyor
     }
 
     [Fact]

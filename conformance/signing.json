@@ -38,5 +38,16 @@
       "timestamp": 1788544448470,
       "expected": "33:uzun-connector-kimligi-0123456789|9:nonce-xyz|13:1788544448470"
     }
-  ]
+  ],
+  "imzaKodlamasi": {
+    "aciklama": "EC imzasi DER kodlu olmali (ASN.1 SEQUENCE{r,s}), ham r||s (IEEE P1363) DEGIL. Sunucu crypto.verify(null, ...) cagiriyor ve Node'un varsayilan dsaEncoding'i 'der'. OLCULDU: DER dogrulaniyor (71 bayt), P1363 REDDEDILIYOR (64 bayt). Yanlis kodlama sessiz degil, HER istegi reddeder — ama sebebi 'unauthorized' oldugu icin sahada anahtar/parmak izi sorunu gibi gorunur ve teshisi zordur.",
+    "kodlama": "der",
+    "egri": "P-256",
+    "ozet": "SHA-256",
+    "notlar": {
+      "dotnet": "ECDsaCng.SignData P1363 uretir → DER'e cevrilmeli.",
+      "java_android": "java.security.Signature ECDSA zaten DER uretir → cevrim gerekmez.",
+      "node": "crypto.sign(null, veri, key) varsayilan olarak DER uretir."
+    }
+  }
 }

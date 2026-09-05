@@ -1,6 +1,19 @@
 namespace Restomenum.Agent.Core;
 
 /// <summary>
+/// Ödeme öncesi fiş görüntüsünün <b>kalıcı</b> deposu.
+///
+/// <para>Bellekte tutmak yetmez: süreç kart penceresinde ölürse görüntü de ölür ve yeniden
+/// başlatmada "benim ödemem işlendi mi" sorusu cevaplanamaz — çözülebilir bir vaka gereksiz yere
+/// insana çıkar. <see cref="CommandStore"/> bunu uygular.</para>
+/// </summary>
+public interface ITicketSnapshotStore
+{
+    void SaveSnapshot(string commandId, long totalMinor, long paidMinor, int paymentCount, long? now = null);
+    (long TotalMinor, long PaidMinor, int PaymentCount)? ReadSnapshot(string commandId);
+}
+
+/// <summary>
 /// GMP-3 dönüş kodları. <b>Yalnız davranışı değiştirenler</b> burada — tam katalog sarmalayıcıda
 /// değil, hata kataloğunda yaşar.
 /// </summary>
@@ -23,8 +36,18 @@ public static class GmpCodes
     public const uint IncorrectDevice = 2334;
     public const uint ChecksumMismatch = 2338;
 
-    /// <summary>Terminalde <b>açık fiş var</b>. Cihazın tek koruması budur.</summary>
-    public const uint AlreadyDone = 2331;
+    /// <summary>
+    /// Terminalde <b>açık fiş var</b>. Cihazın tek koruması budur.
+    ///
+    /// <para>⚠️ Bu değer önce <c>2331</c> diye <b>tahmin edilmişti ve YANLIŞTI.</b> Kaynakta
+    /// (<c>GMPSmartDLL.cs</c> Defines) ve saha loglarında doğrulanan değer <b>2080 (0x820)</b>.
+    /// Yanlış kalsaydı <c>ReadTicket</c>'in tanıtıcısız yolu sessizce çalışmaz, yani agent yeniden
+    /// başladıktan sonra belirsizlik çözümü <b>tam da en gerekli anda</b> çökerdi.</para>
+    /// </summary>
+    public const uint AlreadyDone = 2080;
+
+    /// <summary>Seri/TCP portu açılamadı.</summary>
+    public const uint PortNotOpen = 0xF000;
 
     /// <summary>
     /// <b>"Fişte BANKA ödemesi var"</b> — "ödeme var" değil. Nakit ödemeli fiş `VoidAll` ile
@@ -36,8 +59,23 @@ public static class GmpCodes
     /// <summary>`PrintBeforeMF` sonrası fiş mali hafızada — artık iptal edilemez.</summary>
     public const uint CannotVoid = 2357;
 
-    /// <summary>Kart okutulmadı / işlem erken sonlandı. Canlı ölçüm: ~37 sn, fiş otomatik iptal.</summary>
-    public const uint NoCard = 2085;
+    /// <summary>
+    /// <b>Ödeme başarısız, ek hata kodu YOK</b> (<c>APP_ERR_PAYMENT_NOT_SUCCESSFUL_AND_NO_MORE_ERROR_CODE</c>).
+    ///
+    /// <para>İsmi "kart yok" sanmak yanıltıcıdır — anlamı "işlem başarısız ve elimde ayrıntı yok".
+    /// Canlı terminalde kart hiç okutulmadığında bu kod geldi (~37 sn sonra, fiş otomatik iptal).</para>
+    /// </summary>
+    public const uint PaymentFailed = 2085;
+
+    /// <summary>
+    /// <b>Ödeme başarısız ve BANKA hata kodu var</b>
+    /// (<c>APP_ERR_PAYMENT_NOT_SUCCESSFUL_AND_MORE_ERROR_CODE</c>). Canlı terminalde banka hattı
+    /// yokken alındı: "BAĞLANTI HATASI", "NO RESPONSE", "İŞLEM ONAYLANMADI".
+    ///
+    /// <para>2085'ten ayrı tutulur çünkü <b>sebep farklıdır</b> ve kasiyere gösterilecek mesaj da
+    /// farklı olmalı. İkisinde de para <b>hareket etmemiştir</b>.</para>
+    /// </summary>
+    public const uint PaymentFailedWithBankCode = 2086;
 
     public static bool IsTimeout(uint c) => c == Timeout || c == Timeout2;
 }
@@ -64,10 +102,14 @@ public readonly record struct GmpTicket(
     public long RemainingMinor => Math.Max(0, TotalAmountMinor - PaidAmountMinor);
 
     /// <summary>
-    /// Fişte banka bacağı var mı? <b>İptal yolunu bu seçer:</b> nakit doğrudan `VoidAll`, kart
-    /// önce `VoidPayment` ister. Yanlış seçim, kart ödemeli fişi asla temizleyememektir.
+    /// Fişte <b>banka bacağı</b> var mı? İptal yolunu bu seçer — soru "kart mı" DEĞİL.
+    ///
+    /// <para>Canlı terminal ölçtü: nakit (1) <b>ve mobil/karekod (16)</b> <c>VoidAll</c> ile
+    /// doğrudan temizleniyor (~2 sn, 2069 yok); yalnız kart (4) banka ters işlemi istiyor. Ayrımı
+    /// "kart mı" diye kurmak, mobil ödemeyi <c>REVERSAL_FAILED</c> riski taşıyan ve sahada hiç
+    /// çalışmamış bir yola sokardı.</para>
     /// </summary>
-    public bool HasCardLeg => LastPaymentType == GmpPaymentTypes.Card;
+    public bool HasBankLeg => GmpPaymentTypes.HasBankLeg(LastPaymentType);
 }
 
 /// <summary>Ödeme tipleri — <b>DLL seviyesi</b>.</summary>
@@ -76,11 +118,28 @@ public static class GmpPaymentTypes
     public const int Cash = 1;
 
     /// <summary>
+    /// Mobil / karekod ödeme (<c>PAYMENT_MOBILE</c>, 0x10). <b>Canlı terminalde doğrulandı:</b>
+    /// tam satış 7940 ms; kısmi ödemeli fişte <c>VoidAll</c> <b>doğrudan OK</b> (1959 ms, 2069 YOK).
+    /// Yani iptal davranışı nakde benzer, karta değil.
+    /// </summary>
+    public const int Mobile = 16;
+
+    /// <summary>
     /// <b>4, 2 DEĞİL.</b> Proje API'si "1=nakit, 2=banka kartı" der ama DLL'in `ST_PAYMENT`'ı 4
     /// kullanır. İki kodlama karıştırılırsa kart işlemi nakit sanılır ve iptal yolu yanlış seçilir.
     /// Canlı terminalde ve saha loglarında (`typeOfPayment:4`) doğrulandı.
     /// </summary>
     public const int Card = 4;
+
+    /// <summary>
+    /// Ödemenin <b>banka bacağı</b> var mı? İptal yolunu belirleyen soru budur — "kart mı" değil.
+    ///
+    /// <para>Canlı terminal bunu ölçtü: nakit (1) <b>ve mobil/karekod (16)</b> <c>VoidAll</c> ile
+    /// doğrudan temizleniyor (~2 sn, 2069 yok); yalnız kart (4) banka ters işlemi istiyor. Ayrımı
+    /// "kart mı" diye kurmak, mobil ödemeyi gereksiz yere ters işlem yoluna sokardı — ki o yol
+    /// sahada hiç çalışmamış ve <c>REVERSAL_FAILED</c> riski taşıyor.</para>
+    /// </summary>
+    public static bool HasBankLeg(int paymentType) => paymentType == Card;
 }
 
 /// <summary>Fişe eklenecek kalem.</summary>

@@ -36,17 +36,23 @@ public sealed class GmpTerminalTransport : ITerminalTransport
     private readonly IDepartmentMap _departments;
     private readonly Action<string, object?> _log;
 
-    /// <summary>Ödeme öncesi anlık görüntü — belirsizliği çözen tek dayanak.</summary>
-    private readonly Dictionary<string, TicketState> _oncesi = new();
-    private readonly object _gate = new();
+    /// <summary>
+    /// Ödeme öncesi anlık görüntü — belirsizliği çözen tek dayanak. <b>Kalıcı</b> olmalı: bellekte
+    /// tutulsaydı süreç kart penceresinde öldüğünde görüntü de ölür ve çözülebilir bir vaka
+    /// gereksiz yere insana çıkardı.
+    /// </summary>
+    private readonly ITicketSnapshotStore? _snapshots;
 
+    private readonly object _gate = new();
     private ulong _handle;
 
     public GmpTerminalTransport(
-        IGmpWrapper gmp, IDepartmentMap departments, Action<string, object?>? log = null)
+        IGmpWrapper gmp, IDepartmentMap departments,
+        ITicketSnapshotStore? snapshots = null, Action<string, object?>? log = null)
     {
         _gmp = gmp;
         _departments = departments;
+        _snapshots = snapshots;
         _log = log ?? ((_, _) => { });
     }
 
@@ -92,7 +98,8 @@ public sealed class GmpTerminalTransport : ITerminalTransport
         // ── ANLIK GÖRÜNTÜ: belirsizlik çözümünün tek dayanağı ────────────────────
         if (_gmp.GetTicket(handle, out var once).Ok)
         {
-            lock (_gate) _oncesi[request.CommandId] = Cevir(once, acik: true);
+            _snapshots?.SaveSnapshot(request.CommandId,
+                once.TotalAmountMinor, once.PaidAmountMinor, once.PaymentCount);
         }
 
         // ── ÖDEME: kartta 20–32 sn bloke eder ────────────────────────────────────
@@ -191,29 +198,38 @@ public sealed class GmpTerminalTransport : ITerminalTransport
 
     private PaymentProbe Probe(SaleRequest request)
     {
-        TicketState? once;
-        lock (_gate) _oncesi.TryGetValue(request.CommandId, out once);
-
+        var once = _snapshots?.ReadSnapshot(request.CommandId);
         var simdi = ReadTicket();
+
+        // BOZUK OKUMA SAVUNMASI. Sarmalayıcı, fiş dizisinin sınırını aşan bir ödeme sayacı
+        // gördüğünde `PaymentCount = -1` bildirir. Bu değeri normal bir sayı gibi ele almak
+        // ölümcül olurdu: karşılaştırma "sayaç arttı" der ve **gerçekleşmemiş bir ödeme
+        // `Landed` sayılır** — yani para hareket etmemişken tahsilat yazılır. Bozuk veriyle
+        // karar vermek yerine belirsiz denir ve insana çıkar.
+        if (simdi.PaymentCount < 0)
+        {
+            return new PaymentProbe(ProbeVerdict.Indeterminate,
+                Note: "fiş okuması bozuk (ödeme sayacı geçersiz)");
+        }
 
         if (!simdi.HasOpenTicket)
         {
             // Fiş yok. İki ihtimal var ve **ayırt edemeyiz**: ya ödeme hiç işlenmedi, ya işlendi ve
             // fiş kapandı. Kapanmış olsaydı tutar tamamlanmış demektir — ama bunu kanıtlayamıyoruz.
             // Tahmin yerine belirsiz denir; "işlenmedi" demek çift tahsilat riskidir.
-            if (once is null || once.PaymentCount == 0)
+            if (once is null || once.Value.PaymentCount == 0)
                 return new PaymentProbe(ProbeVerdict.NotLanded, Note: "açık fiş yok, önceki ödeme de yok");
             return new PaymentProbe(ProbeVerdict.Indeterminate, Note: "fiş kapanmış — akıbet okunamıyor");
         }
 
-        if (once is not null && simdi.PaymentCount > once.PaymentCount)
+        if (once is not null && simdi.PaymentCount > once.Value.PaymentCount)
         {
             return new PaymentProbe(ProbeVerdict.Landed,
-                ApprovedAmountMinor: simdi.PaidAmountMinor - once.PaidAmountMinor,
+                ApprovedAmountMinor: simdi.PaidAmountMinor - once.Value.PaidMinor,
                 RemainingMinor: simdi.RemainingMinor, Rrn: simdi.Rrn, CardLast4: simdi.CardLast4);
         }
 
-        if (once is not null && simdi.PaymentCount == once.PaymentCount)
+        if (once is not null && simdi.PaymentCount == once.Value.PaymentCount)
             return new PaymentProbe(ProbeVerdict.NotLanded, RemainingMinor: simdi.RemainingMinor);
 
         // Anlık görüntü yok (agent yeniden başlamış). Sayaç varsa ödeme İŞLENMİŞ olabilir ama
