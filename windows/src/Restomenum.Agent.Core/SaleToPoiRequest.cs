@@ -36,6 +36,22 @@ public enum SaleToPoiRejectReason
     InvalidServiceId,
 }
 
+/// <summary>
+/// İlerleme olayı — platforma bildirilen ara durum (kasaya değil). Platformun tanımladığı sapma
+/// (nexo resmî <c>EventToNotify</c> enum'u DEĞİL); bu yüzden yalnız bu değerler geçerli.
+/// </summary>
+public enum ProgressEvent
+{
+    /// <summary>Komut terminale gönderildi.</summary>
+    SentToTerminal,
+    /// <summary>Kart bekleniyor.</summary>
+    WaitingForCard,
+    /// <summary>Müşteri etkileşimi bekleniyor (PIN vb.).</summary>
+    WaitingCustomer,
+    /// <summary>İşleniyor.</summary>
+    Processing,
+}
+
 /// <summary>Ayrıştırma sonucu: geçerli istek ya da red sebebi.</summary>
 public abstract record SaleToPoiParseResult
 {
