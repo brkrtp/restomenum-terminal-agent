@@ -41,12 +41,13 @@ public class GmpTerminalTransportTests
         public GmpResult VoidPayment(ulong h, int i) => Kod("VoidPayment");
         public GmpResult Close(ulong h) => Kod("Close");
         public GmpResult Echo() => Kod("Echo");
-        public GmpResult Pair() => Kod("Pair");
+        public GmpResult Pair(GmpPairingConfig c, out GmpDeviceInfo i)
+        { i = new GmpDeviceInfo("INGENICO", "TEST", "SN1", "1.0"); return Kod("Pair"); }
         public GmpResult CheckPairing(out bool paired) { paired = true; return Kod("CheckPairing"); }
         public GmpResult Report(GmpReportType t) => Kod("Report:" + t);
         public GmpResult SetIpAddress(string ip, int port) => Kod("SetIpAddress");
-        public GmpResult SetInvoice(string taxNumber, string invoiceNo) => Kod("SetInvoice");
-        public GmpResult SetDepartments(string json) => Kod("SetDepartments");
+        public GmpResult SetInvoice(ulong h, GmpInvoice inv) => Kod("SetInvoice");
+        public GmpResult SetDepartments(string json, string pwd) => Kod("SetDepartments");
         public GmpResult GetDepartments(out string json) { json = "[]"; return Kod("GetDepartments"); }
     }
 

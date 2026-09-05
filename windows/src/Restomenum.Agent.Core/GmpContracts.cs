@@ -254,8 +254,18 @@ public interface IGmpWrapper
     // **Sertifikasyondan ÖNCE eklenmesi şart:** sertifikalanan şey binary hash'idir; bu iki metodu
     // sonradan eklemek yeni bir sertifikasyon turu demektir.
 
-    /// <summary>Eşleştirmeyi başlatır (<c>FP3_StartPairingInit</c>). Sahada ~8–9 sn sürüyor.</summary>
-    GmpResult Pair();
+    /// <summary>
+    /// Eşleştirmeyi başlatır (<c>FP3_StartPairingInit</c>). Sahada ~8–9 sn sürüyor.
+    ///
+    /// <para><b>Parametreler sabit DEĞİL:</b> mevcut sertifikalı kod <c>ProcOrderNumber</c> ve
+    /// <c>EcrSerialNumber</c>'ı istekten alıyor. Sarmalayıcıya sabitleseydik ve banka/TSM
+    /// kurulum başına benzersiz değer isteseydi, düzeltme bir sertifikasyon turu olurdu.
+    /// Marka/model sabit kalabilir — sarmalayıcı zaten Ingenico'ya özgü.</para>
+    ///
+    /// <para><paramref name="info"/> eşleşme yanıtından cihaz kimliğini döndürür;
+    /// <c>REVERSAL_FAILED</c> vakasında elle iade referansı buradan toplanır.</para>
+    /// </summary>
+    GmpResult Pair(GmpPairingConfig config, out GmpDeviceInfo info);
 
     /// <summary>
     /// Eşleşme tamam mı (<c>FP3_IsGmpPairingDone</c>).
@@ -291,12 +301,16 @@ public interface IGmpWrapper
     GmpResult Report(GmpReportType type);
 
     /// <summary>
-    /// Terminalin ağ adresini ayarlar (<c>FP3_UpdateInterfaceXmlDataByID</c>).
+    /// Terminalin ağ adresini ayarlar.
     ///
     /// <para><b>Neden yüzeyde:</b> adres <b>dinamik ve cihaz başına farklı</b>. Yalnız dağıtım
-    /// zamanı <c>GMP.XML</c>'den okunsaydı, DHCP yenilemesi cihazı çalışmaz hâle getirir ve çözüm
-    /// dosya düzenleyip yeniden başlatmak olurdu. Çalışma zamanında düzeltebilmek, sahadaki en
-    /// sık ağ sorununu sertifikasyon turu olmadan çözer.</para>
+    /// zamanı config'den okunsaydı, bir DHCP yenilemesi cihazı çalışmaz hâle getirir ve çözüm
+    /// dosya düzenleyip yeniden başlatmak olurdu.</para>
+    ///
+    /// <para>⚠️ <b>ANINDA ETKİLİ DEĞİL.</b> Mevcut sertifikalı uygulama da yalnız <c>GMP.XML</c>'i
+    /// düzenliyor, <c>FP3_UpdateInterfaceXmlDataByID</c>'yi <b>çağırmıyor</b> — yani yeni adres
+    /// <b>bir sonraki bağlantıda</b> geçerli oluyor. Çağıran bunu bilmeli; "ayarladım, hemen
+    /// bağlanır" varsayımı yanlış teşhise yol açar.</para>
     /// </summary>
     GmpResult SetIpAddress(string ipAddress, int port);
 
@@ -307,7 +321,7 @@ public interface IGmpWrapper
     /// basılabiliyor; yurt dışında böyle bir alan yok (§7.2a). Değerler <b>müşteri kaydından</b>
     /// türetilir, kasiyer elle girmez.</para>
     /// </summary>
-    GmpResult SetInvoice(string taxNumber, string invoiceNo);
+    GmpResult SetInvoice(ulong handle, GmpInvoice invoice);
 
     /// <summary>
     /// Departman/KDV kurulumu (<c>Json_FP3_SetDepartments</c>) — cihaz provisioning'i.
@@ -317,7 +331,7 @@ public interface IGmpWrapper
     /// bu iş ona kalır. Kurulum sahada başarısız olursa her satış <c>PRODUCT_UNMAPPED</c> ile
     /// düşer — yüzeyde olmaması pahalı.</para>
     /// </summary>
-    GmpResult SetDepartments(string departmentsJson);
+    GmpResult SetDepartments(string departmentsJson, string supervisorPassword);
 
     /// <summary>Kurulu departmanları okur — kurulum doğrulaması ve teşhis için.</summary>
     GmpResult GetDepartments(out string departmentsJson);
@@ -329,6 +343,48 @@ public interface IGmpWrapper
     // düzeltilmiş fiş gider. Modelimiz değişirse (kısmi kalem iptali gereken bir akış çıkarsa)
     // bu bir sertifikasyon turu gerektirir — **bilinçli kabul edilen risk**.
 }
+
+/// <summary>
+/// Eşleştirme parametreleri. Marka/model sarmalayıcıda sabit (Ingenico'ya özgü); bu ikisi
+/// <b>kurulum başına</b> değişebildiği için dışarıdan gelir.
+/// </summary>
+public sealed record GmpPairingConfig(string ProcOrderNumber, string EcrSerialNumber);
+
+/// <summary>Eşleşme yanıtından cihaz kimliği — elle iade referansı ve teşhis.</summary>
+public sealed record GmpDeviceInfo(string Brand, string Model, string Serial, string Version);
+
+/// <summary>Vergi kimliği tipi. <b>Ayrı alanlara yazılır</b> (<c>tck_no</c> / <c>vk_no</c>).</summary>
+public enum GmpTaxIdType
+{
+    /// <summary>Gerçek kişi — TC kimlik numarası.</summary>
+    Tckn,
+
+    /// <summary>Tüzel kişi — vergi kimlik numarası.</summary>
+    Vkn,
+}
+
+/// <summary>
+/// Mali fatura bilgisi (<c>FP3_SetInvoice</c>). <b>Yalnız TR.</b>
+///
+/// <para><b>Neden bu kadar alan:</b> ilk imza <c>(taxNumber, invoiceNo)</c>'ydu ve
+/// <b>uygulanamazdı</b> — <c>FP3_SetInvoice</c> açık fişin işlem tanıtıcısını, kaynağı
+/// (e-Arşiv/e-Fatura), tutarı, para birimini ve tarihi istiyor. Eksik imzayla sertifikalasaydık
+/// metot sahada çalışmaz ve düzeltmesi yeni bir tur olurdu.</para>
+///
+/// <para><b>TCKN ve VKN ayrı alanlardır</b> — tek bir "taxNumber" hangisi olduğunu söylemiyordu.
+/// Yanlış alana yazmak mali faturayı bozar ve geri alınamaz.</para>
+///
+/// <para>BCD kodlaması (numara alanları) <b>sarmalayıcının işidir</b>: marshalling'dir, karar
+/// değil. Çağıran düz metin verir.</para>
+/// </summary>
+public sealed record GmpInvoice(
+    int Source,
+    string TaxId,
+    GmpTaxIdType TaxIdType,
+    string InvoiceNo,
+    long AmountMinor,
+    ushort Currency,
+    DateTime Date);
 
 /// <summary>Mali rapor tipi (<c>FP3_FunctionReports</c>).</summary>
 public enum GmpReportType
