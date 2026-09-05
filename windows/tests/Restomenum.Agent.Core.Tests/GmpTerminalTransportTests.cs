@@ -15,6 +15,8 @@ public class GmpTerminalTransportTests
     private sealed class FakeGmp : IGmpWrapper
     {
         public List<string> Calls { get; } = new();
+        /// <summary>Son gönderilen fiş tipi — canlı terminalde yanlış değer fişi hiç açtırmıyordu.</summary>
+        public int LastTicketType { get; private set; } = -1;
         public Dictionary<string, uint> Codes { get; } = new();
         public GmpTicket Ticket;
         public GmpTicket AfterPayment;
@@ -24,7 +26,7 @@ public class GmpTerminalTransportTests
         { Calls.Add(ad); return new GmpResult(Codes.TryGetValue(ad, out var c) ? c : GmpCodes.Ok); }
 
         public GmpResult Start(out ulong handle) { handle = 42; return Kod("Start"); }
-        public GmpResult TicketHeader(ulong h, int t) => Kod("TicketHeader");
+        public GmpResult TicketHeader(ulong h, int t) { LastTicketType = t; return Kod("TicketHeader"); }
         public GmpResult OptionFlags(ulong h, GmpEchoFlags f) => Kod("OptionFlags");
         public GmpResult ItemSale(ulong h, GmpItem i, out GmpTicket tk) { tk = Ticket; return Kod("ItemSale"); }
         public GmpResult Payment(ulong h, GmpPaymentRequest r, out GmpTicket tk)
@@ -39,6 +41,8 @@ public class GmpTerminalTransportTests
         public GmpResult VoidPayment(ulong h, int i) => Kod("VoidPayment");
         public GmpResult Close(ulong h) => Kod("Close");
         public GmpResult Echo() => Kod("Echo");
+        public GmpResult Pair() => Kod("Pair");
+        public GmpResult CheckPairing(out bool paired) { paired = true; return Kod("CheckPairing"); }
     }
 
     private sealed class Departments : IDepartmentMap
@@ -111,6 +115,20 @@ public class GmpTerminalTransportTests
             new[] { "Start", "TicketHeader", "OptionFlags", "ItemSale", "GetTicket", "Payment",
                     "PrintTotalsAndPayments", "PrintBeforeMF", "PrintUserMessage", "PrintMF", "Close" },
             g.Calls);
+    }
+
+    [Fact]
+    public async Task Fis_tipi_SALE_olmali_TasnifDisi_DEGIL()
+    {
+        // ← ÇİVİ: burada 0 (`TasnifDisi`) gönderiliyordu ve canlı terminalde fiş HİÇ AÇILAMIYORDU
+        // (0x0008 EKÜ_PROBLEM). Sahte sarmalayıcı EKÜ'yü modellemediği için test yeşil yanıyordu;
+        // hata yalnız gerçek donanımda görünebilirdi. Değer artık teste bağlı.
+        var (t, g, _) = Kur();
+        g.AfterPayment = new GmpTicket(3000, 3000, 1, GmpPaymentTypes.Card);
+        await t.SaleAsync(Req());
+
+        Assert.Equal(GmpTicketTypes.Sale, g.LastTicketType);
+        Assert.Equal(1, GmpTicketTypes.Sale);
     }
 
     [Fact]

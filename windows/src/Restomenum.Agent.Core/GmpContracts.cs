@@ -142,6 +142,28 @@ public static class GmpPaymentTypes
     public static bool HasBankLeg(int paymentType) => paymentType == Card;
 }
 
+/// <summary>
+/// Fiş tipleri (<c>TTicketType</c>). <b>Satış için tek doğru değer <see cref="Sale"/>'dir.</b>
+/// </summary>
+public static class GmpTicketTypes
+{
+    /// <summary>
+    /// ⚠️ <c>TTasnifDisi</c>. <b>SATIŞTA KULLANILAMAZ.</b> İlk uygulamam bunu gönderiyordu ve fiş
+    /// <b>hiç açılamıyordu</b>: canlı terminalde aynı oturumda ölçüldü —
+    /// <c>TicketHeader(0)</c> → <b>0x0008 EKÜ_PROBLEM</b>, <c>TicketHeader(1)</c> → <b>0x0000 OK</b>.
+    ///
+    /// <para>Sahte sarmalayıcıyla görünmedi çünkü sahte katman EKÜ'yü modellemiyor — bu hata
+    /// yalnız gerçek donanımda ortaya çıkabilirdi.</para>
+    /// </summary>
+    public const int TasnifDisi = 0;
+
+    /// <summary>
+    /// <c>TProcessSale</c> — satış fişi. Mevcut sertifikalı <c>DLLController</c> da satış için
+    /// bunu kullanıyor; canlı terminalde uçtan uca satış bununla sürüldü.
+    /// </summary>
+    public const int Sale = 1;
+}
+
 /// <summary>Fişe eklenecek kalem.</summary>
 public readonly record struct GmpItem(string Name, long UnitPriceMinor, int Quantity, int DepartmentNo);
 
@@ -214,4 +236,27 @@ public interface IGmpWrapper
 
     GmpResult Close(ulong handle);
     GmpResult Echo();
+
+    // ── EŞLEŞTİRME (provisioning) ────────────────────────────────────────────
+    //
+    // ⚠️ Bu iki çağrı **önce sözleşme dışında bırakılmıştı** ("provisioning ayrı bir yaşam
+    // döngüsü") ve o karar YANLIŞTI. Canlı ölçüm tersini gösterdi:
+    //
+    //  · Eşleşme **sürece bağlı**: sertifikasız yeni bir süreçten `Echo` OK dönerken `Start`
+    //    `0xF020 PAIRING_REQUIRED` verdi — bağlantı var, yetki yok.
+    //  · Eşleşme **tek slotlu**: harness eşleşince EXE 1'in `StartTicket`'i `2346` (durum
+    //    çakışması) verdi. Kullanıcı da doğruladı: cihaz aynı anda tek programa eşli kalır.
+    //  · Yeni süreç **kendi** `StartPairingInit`'ini çağırıp eşleşebildi (0x0).
+    //
+    // Sonuç: eşleştirmeyi YAPAN, işlem yapacak sürecin kendisi olmak zorunda. Dışarıdan
+    // TETİKLENEBİLİR (agent "şimdi eşleş" der) ama çağrı sertifikalı sürecin içinde olmalı.
+    //
+    // **Sertifikasyondan ÖNCE eklenmesi şart:** sertifikalanan şey binary hash'idir; bu iki metodu
+    // sonradan eklemek yeni bir sertifikasyon turu demektir.
+
+    /// <summary>Eşleştirmeyi başlatır (<c>FP3_StartPairingInit</c>). Sahada ~8–9 sn sürüyor.</summary>
+    GmpResult Pair();
+
+    /// <summary>Eşleşme tamam mı (<c>FP3_IsGmpPairingDone</c>).</summary>
+    GmpResult CheckPairing(out bool paired);
 }

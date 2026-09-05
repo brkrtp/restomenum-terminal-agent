@@ -80,7 +80,9 @@ public sealed class GmpTerminalTransport : ITerminalTransport
         if (!r.Ok) return Cevir(r, "Start");
         _handle = handle;
 
-        r = _gmp.TicketHeader(handle, ticketType: 0);
+        // GmpTicketTypes.Sale (1). Burada 0 (`TasnifDisi`) yazıyordu ve **fiş hiç açılamıyordu**:
+        // canlı terminalde `TicketHeader(0)` → 0x0008 EKÜ_PROBLEM, `TicketHeader(1)` → 0x0000 OK.
+        r = _gmp.TicketHeader(handle, GmpTicketTypes.Sale);
         if (!r.Ok) return TemizleVeCevir(handle, r, "TicketHeader");
 
         // Fişi GÜVENİLİR okuyabilmek için bayraklar burada set edilir; tek başına `GetTicket`
