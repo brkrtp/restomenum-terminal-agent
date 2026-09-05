@@ -26,28 +26,27 @@ public sealed class HttpResultNotifier : IResultNotifier
 
     public async Task<NotifyResult> NotifyAsync(string paymentId, string bodyJson, CancellationToken ct = default)
     {
-        var token = (await _sessions.AcquireAsync(ct)).Token;
-        var uri = new Uri(_baseUri, $"plugin-api/payments/{Uri.EscapeDataString(paymentId)}/result");
-        using var req = new HttpRequestMessage(HttpMethod.Post, uri)
-        {
-            Content = new StringContent(bodyJson, Encoding.UTF8, "application/json"),
-        };
-        req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
-
-        HttpResponseMessage resp;
+        int status;
+        string body;
         try
         {
-            resp = await _http.SendAsync(req, ct);
+            // Oturum + POST tek try'da: oturum ucu erişilemezse NetworkError → outbox'ta kalır, replay.
+            var token = (await _sessions.AcquireAsync(ct)).Token;
+            var uri = new Uri(_baseUri, $"plugin-api/payments/{Uri.EscapeDataString(paymentId)}/result");
+            using var req = new HttpRequestMessage(HttpMethod.Post, uri)
+            {
+                Content = new StringContent(bodyJson, Encoding.UTF8, "application/json"),
+            };
+            req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+            using var resp = await _http.SendAsync(req, ct);
+            status = (int)resp.StatusCode;
+            body = await resp.Content.ReadAsStringAsync(ct);
         }
         catch (Exception e) when (e is not OperationCanceledException)
         {
-            return new NotifyResult(NotifyOutcome.NetworkError, null, null, 0, $"ağ hatası: {e.Message}");
+            return new NotifyResult(NotifyOutcome.NetworkError, null, null, 0, $"ağ/oturum hatası: {e.Message}");
         }
 
-        using (resp)
-        {
-            var body = await resp.Content.ReadAsStringAsync(ct);
-            return ResultNotifyParser.Parse((int)resp.StatusCode, body);
-        }
+        return ResultNotifyParser.Parse(status, body);
     }
 }

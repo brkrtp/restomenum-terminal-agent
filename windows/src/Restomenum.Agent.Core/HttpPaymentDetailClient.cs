@@ -30,25 +30,24 @@ public sealed class HttpPaymentDetailClient : IPaymentDetailClient
         if (string.IsNullOrWhiteSpace(paymentId))
             return new PaymentDetailResult.Rejected(PaymentRejectReason.Unknown, "paymentId boş", 0);
 
-        var token = (await _sessions.AcquireAsync(ct)).Token;
-        var uri = new Uri(_baseUri, $"plugin-api/payments/{Uri.EscapeDataString(paymentId)}");
-        using var req = new HttpRequestMessage(HttpMethod.Get, uri);
-        req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
-
-        HttpResponseMessage resp;
+        int status;
+        string body;
         try
         {
-            resp = await _http.SendAsync(req, ct);
+            // Oturum token'ı + GET tek try'da: oturum ucu erişilemezse de "platform erişilemez"→sürme.
+            var token = (await _sessions.AcquireAsync(ct)).Token;
+            var uri = new Uri(_baseUri, $"plugin-api/payments/{Uri.EscapeDataString(paymentId)}");
+            using var req = new HttpRequestMessage(HttpMethod.Get, uri);
+            req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+            using var resp = await _http.SendAsync(req, ct);
+            status = (int)resp.StatusCode;
+            body = await resp.Content.ReadAsStringAsync(ct);
         }
         catch (Exception e) when (e is not OperationCanceledException)
         {
-            return new PaymentDetailResult.Rejected(PaymentRejectReason.Unknown, $"ağ hatası: {e.Message}", 0);
+            return new PaymentDetailResult.Rejected(PaymentRejectReason.Unknown, $"ağ/oturum hatası: {e.Message}", 0);
         }
 
-        using (resp)
-        {
-            var body = await resp.Content.ReadAsStringAsync(ct);
-            return PaymentDetailParser.Parse((int)resp.StatusCode, body);
-        }
+        return PaymentDetailParser.Parse(status, body);
     }
 }
