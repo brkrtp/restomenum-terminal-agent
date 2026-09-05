@@ -81,6 +81,38 @@ public static class SaleToPoiResponseBuilder
     }
 
     /// <summary>
+    /// Terminale HİÇ gitmeden üretilen başarısızlık gövdesi (GET reddi / PRODUCT_UNMAPPED gibi).
+    /// Para hareket etmedi; <paramref name="errorCondition"/> platformun sınıflandırmasını belirler
+    /// (kesin-ret listesi → declined, gerisi → unknown). <paramref name="additionalResponse"/> ASCII
+    /// makine kodu (Türkçe/serbest metin YASAK — tüm sonucu reddettirir).
+    /// </summary>
+    public static string BuildFailure(SaleToPoiRequest req, string errorCondition, string? additionalResponse, DateTimeOffset now)
+    {
+        var response = new JsonObject { ["Result"] = "Failure", ["ErrorCondition"] = errorCondition };
+        if (additionalResponse is not null) response["AdditionalResponse"] = additionalResponse;
+        return new JsonObject
+        {
+            ["SaleToPOIResponse"] = new JsonObject
+            {
+                ["MessageHeader"] = Header(req, "Response"),
+                ["PaymentResponse"] = new JsonObject
+                {
+                    ["SaleData"] = new JsonObject
+                    {
+                        ["SaleTransactionID"] = new JsonObject
+                        {
+                            ["TransactionID"] = req.PaymentId,
+                            ["TimeStamp"] = Iso(now),
+                        },
+                    },
+                    ["PaymentResult"] = new JsonObject(),
+                    ["Response"] = response,
+                },
+            },
+        }.ToJsonString();
+    }
+
+    /// <summary>
     /// İlerleme bildirimi — <b>top-level <c>EventNotification</c></b> (yerel sözleşme, K-21).
     /// <b>YALNIZ platforma gider</b>; kasaya senkron dönen şey DAİMA <c>PaymentResponse</c>'tur.
     ///
