@@ -101,9 +101,21 @@ public static class WindowsEnrollment
         {
             using var doc = JsonDocument.Parse(body);
             var root = doc.RootElement;
-            var ok = root.TryGetProperty("success", out var okEl) && okEl.ValueKind == JsonValueKind.True;
-            if (!ok || !root.TryGetProperty("data", out var data)
-                    || !data.TryGetProperty("connectorId", out var idEl))
+            var success = root.TryGetProperty("success", out var okEl) && okEl.ValueKind == JsonValueKind.True;
+            if (!success)
+            {
+                // success:false → sunucu isteği İŞLEDİ ama reddetti (biçim hatası DEĞİL). Sunucu
+                // `enrollmentRejected` için bilerek tek mesaj veriyor: kod yanlış / süresi dolmuş /
+                // zaten kullanılmış — hangisi olduğunu söylemiyor (tahmin kolaylaştırmasın diye).
+                var msg = root.TryGetProperty("message", out var mEl) ? mEl.GetString() : null;
+                if (msg == "plugin.connector.enrollmentRejected")
+                    throw new InvalidOperationException(
+                        "Kayıt reddedildi: kayıt kodu yanlış, süresi dolmuş veya zaten kullanılmış. " +
+                        "YENİ kayıt kodu alıp tekrar deneyin.");
+                throw new InvalidOperationException(
+                    $"Kayıt reddedildi (sunucu mesajı: {msg ?? "yok"}). Gerekirse yeni kod alın. Ham yanıt: {body}");
+            }
+            if (!root.TryGetProperty("data", out var data) || !data.TryGetProperty("connectorId", out var idEl))
                 throw new InvalidOperationException($"Kayıt yanıtı beklenmedik biçimde: {body}");
             connectorId = idEl.GetString();
         }
