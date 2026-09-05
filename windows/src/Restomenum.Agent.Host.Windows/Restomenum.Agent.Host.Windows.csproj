@@ -13,6 +13,9 @@
     <!-- GmpSmartDLL.dll native 64-bit; süreç x64 olmalı (Gmp projesiyle aynı gerekçe). -->
     <PlatformTarget>x64</PlatformTarget>
     <UserSecretsId>restomenum-agent-host</UserSecretsId>
+    <!-- Base Host ve Host.Windows ikisi de appsettings.json taşır; publish'te aynı yola çakışır.
+         Host.Windows'unki geçerli; publish sonrası dosyayı zaten deterministik olarak üzerine yazıyoruz. -->
+    <ErrorOnDuplicatePublishOutputFiles>false</ErrorOnDuplicatePublishOutputFiles>
   </PropertyGroup>
 
   <ItemGroup>

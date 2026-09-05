@@ -8,3 +8,6 @@ bin/
 obj/
 # Makineye ozgu JDK yolu — depoda tutulmaz (README'ye bak)
 gradle.properties
+
+# yerel yayım çıktısı (canlı test)
+publish/
