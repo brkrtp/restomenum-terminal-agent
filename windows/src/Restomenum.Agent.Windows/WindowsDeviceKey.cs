@@ -38,7 +38,8 @@ public sealed class WindowsDeviceKey : IDeviceKey, IDisposable
     private readonly string _connectorIdPath;
     private readonly Action<string>? _log;
 
-    private string? _fingerprint; // tembel + tek sefer
+    private string? _fingerprint;   // tembel + tek sefer
+    private string? _publicKeyPem;  // tembel + tek sefer
 
     /// <param name="log">Yol seçimi ve zayıf-yol uyarıları buraya yazılır (isteğe bağlı ama önerilir).</param>
     /// <param name="connectorIdPath">
@@ -126,6 +127,20 @@ public sealed class WindowsDeviceKey : IDeviceKey, IDisposable
     }
 
     public string Fingerprint => _fingerprint ??= ComputeFingerprint();
+
+    /// <summary>
+    /// Açık anahtar, <b>SPKI PEM</b> (<c>-----BEGIN PUBLIC KEY-----</c>). Kayıt isteğinde gönderilir;
+    /// sunucu imzaları bununla doğrular ve <c>assertValidEnrollment</c>'ta PEM başlığını regex'le kontrol eder.
+    /// Yalnız AÇIK kısım dışa aktarılır — <see cref="CngExportPolicies.None"/> kısıtı ÖZEL anahtara aittir,
+    /// açık kısmı dışa aktarmak her zaman serbesttir.
+    /// </summary>
+    public string PublicKeyPem => _publicKeyPem ??= ExportPublicKeyPem();
+
+    private string ExportPublicKeyPem()
+    {
+        using var ecdsa = new ECDsaCng(_key);
+        return ecdsa.ExportSubjectPublicKeyInfoPem();
+    }
 
     /// <summary>
     /// Enrollment'ta alınan kimlik. Henüz enroll edilmemişse boş dizedir.
