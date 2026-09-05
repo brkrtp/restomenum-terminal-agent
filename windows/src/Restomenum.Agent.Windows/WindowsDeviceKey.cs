@@ -3,7 +3,7 @@ using System.Security.Cryptography;
 using System.Text;
 using Restomenum.Agent.Core;
 
-namespace Restomenum.Agent.Gmp;
+namespace Restomenum.Agent.Windows;
 
 /// <summary>
 /// <see cref="IDeviceKey"/>'in Windows uygulaması (değişmez #9).
@@ -112,13 +112,17 @@ public sealed class WindowsDeviceKey : IDeviceKey, IDisposable
     // ── IDeviceKey ─────────────────────────────────────────────────────────────
 
     /// <summary>
-    /// Kanonik dizeyi imzalar. <b>EC P-256 / ECDSA, SHA-256, IEEE-P1363 (ham r‖s) biçimi.</b>
-    /// Sunucu doğrulaması bu eğri+biçimi beklemeli (DER değil).
+    /// Kanonik dizeyi imzalar. <b>EC P-256 / ECDSA, SHA-256, DER (Rfc3279DerSequence) biçimi.</b>
+    ///
+    /// <para>DER ZORUNLU, P1363 DEĞİL — sunucu Node <c>crypto.verify</c> varsayılanı (<c>dsaEncoding: "der"</c>)
+    /// DER bekliyor; ölçüldü: P1363 (64 bayt) → doğrulama <c>false</c>, DER (~71 bayt) → <c>true</c>.
+    /// Android <c>Signature</c> zaten DER üretir, yani iki platform tek biçimde buluşur. .NET varsayılanı
+    /// P1363 olduğu için burada AÇIKÇA DER isteniyor — yoksa her istek sessizce <c>unauthorized</c> olurdu.</para>
     /// </summary>
     public byte[] Sign(byte[] data)
     {
         using var ecdsa = new ECDsaCng(_key);
-        return ecdsa.SignData(data, HashAlgorithmName.SHA256);
+        return ecdsa.SignData(data, HashAlgorithmName.SHA256, DSASignatureFormat.Rfc3279DerSequence);
     }
 
     public string Fingerprint => _fingerprint ??= ComputeFingerprint();

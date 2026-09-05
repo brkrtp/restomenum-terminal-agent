@@ -1,0 +1,19 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!--
+      net8.0-windows: CNG (dışa aktarılamaz anahtar) ve GetSystemFirmwareTable Windows'a özgüdür.
+      Bu proje Mac'te DERLENMEZ; Core + testler çapraz platform kalır.
+      GMP'den BAĞIMSIZ: GMP kullanmayan bir kurulum (yurt dışı banka terminali) de cihaz anahtarına ihtiyaç duyar.
+    -->
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+  </PropertyGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Restomenum.Agent.Core\Restomenum.Agent.Core.csproj" />
+  </ItemGroup>
+
+</Project>
