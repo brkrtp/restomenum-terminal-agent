@@ -28,10 +28,23 @@ public static class SaleToPoiResponseBuilder
     public static string BuildResult(SaleToPoiRequest req, TransportResult result, int exponent, DateTimeOffset now)
     {
         var (success, errorCondition) = MapOutcome(result.Outcome);
+        var additional = result.ProviderResultCode;
+
+        // SÖZLEŞME DEĞİŞMEZİ (§30.5): Result:"Success" = "para HAREKET ETTİ" → AuthorizedAmount ZORUNLU
+        // ve POZİTİF olmalı. Approved ama tutar yok/≤0 (çelişkili sonuç: örn. probe sayaç-artışını
+        // Landed sandı ama tutar 0) ise Success DEME. Güvenli belirsize düşür (unknown → operatör;
+        // kesin-ret DEĞİL, kasiyeri yeniden denemeye itmez, çift-çekim yok). Herhangi bir üst-katman
+        // hatası sızsa bile sahte-onayı SINIRDA durduran son savunma; kasa senkron yanıta güvense de tutar.
+        if (success && !(result.ApprovedAmountMinor is long amt0 && amt0 > 0))
+        {
+            success = false;
+            errorCondition = "InProgress";
+            additional = additional is null ? "AUTHORIZED_AMOUNT_INVALID" : $"{additional};AUTHORIZED_AMOUNT_INVALID";
+        }
 
         var response = new JsonObject { ["Result"] = success ? "Success" : "Failure" };
         response["ErrorCondition"] = errorCondition;   // Success'te null
-        if (result.ProviderResultCode is not null) response["AdditionalResponse"] = result.ProviderResultCode;
+        if (additional is not null) response["AdditionalResponse"] = additional;
 
         var paymentResult = new JsonObject();
         if (success && result.ApprovedAmountMinor is long amt)

@@ -217,8 +217,17 @@ public sealed class GmpTerminalTransport : ITerminalTransport
 
         if (once is not null && simdi.PaymentCount > once.Value.PaymentCount)
         {
+            // ÇELİŞKİ SAVUNMASI: sayaç arttı ama ödenen tutar artmadı (delta ≤ 0). "Landed" = para
+            // HAREKET ETTİ demek; 0/negatif tutarla Landed dönmek sahte-onay üretir (Success +
+            // AuthorizedAmount 0). Canlı ölçüldü: başarısız kart bacağında sayaç artıp tutar
+            // artmayabiliyor. Böyle bir okuma güvenilmez — belirsiz de, insana çıksın.
+            var delta = simdi.PaidAmountMinor - once.Value.PaidMinor;
+            if (delta <= 0)
+                return new PaymentProbe(ProbeVerdict.Indeterminate,
+                    RemainingMinor: simdi.RemainingMinor,
+                    Note: $"ödeme sayacı arttı ama tutar artmadı (delta {delta}) — çelişkili okuma");
             return new PaymentProbe(ProbeVerdict.Landed,
-                ApprovedAmountMinor: simdi.PaidAmountMinor - once.Value.PaidMinor,
+                ApprovedAmountMinor: delta,
                 RemainingMinor: simdi.RemainingMinor, Rrn: simdi.Rrn, CardLast4: simdi.CardLast4);
         }
 

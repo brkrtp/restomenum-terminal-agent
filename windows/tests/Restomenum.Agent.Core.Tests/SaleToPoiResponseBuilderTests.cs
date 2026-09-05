@@ -62,6 +62,20 @@ public class SaleToPoiResponseBuilderTests
     }
 
     [Theory]
+    [InlineData(0L)]     // sayaç arttı ama tutar 0 (canlı bulunan kusur): Success DEME
+    [InlineData(null)]   // Approved ama tutar hiç yok: yine Success DEME
+    public void Approved_ama_tutar_yoksa_veya_sifirsa_Success_DEGIL(long? amount)
+    {
+        // §30.5 değişmezi: Result:"Success" = para hareket etti → AuthorizedAmount zorunlu+pozitif.
+        var pr = Build(new TransportResult(TransportOutcome.Approved, ApprovedAmountMinor: amount,
+            ProviderResultCode: "someRc")).GetProperty("PaymentResponse");
+        Assert.Equal("Failure", pr.GetProperty("Response").GetProperty("Result").GetString());   // Success DEĞİL
+        Assert.NotEqual("Refusal", pr.GetProperty("Response").GetProperty("ErrorCondition").GetString());  // kesin-ret DEĞİL
+        Assert.Contains("AUTHORIZED_AMOUNT_INVALID", pr.GetProperty("Response").GetProperty("AdditionalResponse").GetString());
+        Assert.False(pr.GetProperty("PaymentResult").TryGetProperty("AmountsResp", out _));  // sahte tutar bildirilmez
+    }
+
+    [Theory]
     [InlineData(TransportOutcome.Busy, "Busy")]
     [InlineData(TransportOutcome.Unknown, "InProgress")]
     [InlineData(TransportOutcome.TicketAlreadyOpen, "InProgress")]
