@@ -1,0 +1,48 @@
+<Project Sdk="Microsoft.NET.Sdk">
+
+  <PropertyGroup>
+    <!--
+      net8.0-WINDOWS: P/Invoke GmpSmartDLL.dll'e bağlanır, Windows'a özgüdür.
+      Bu proje Mac'te DERLENMEZ; Core + testler çapraz platform kalır, bu proje yalnız Windows host'unda derlenir.
+    -->
+    <TargetFramework>net8.0-windows</TargetFramework>
+    <Nullable>enable</Nullable>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <LangVersion>latest</LangVersion>
+
+    <!--
+      x64 ZORUNLU: GmpSmartDLL.dll native 64-bit. Süreç x86/AnyCPU-32bit olursa
+      BadImageFormatException ile yüklenemez. (DLL kaynağı: DLL/x64/)
+    -->
+    <PlatformTarget>x64</PlatformTarget>
+
+    <!--
+      GmpInterop.cs sertifikalı binary'den birebir kopya (legacy); başlatılmamış non-nullable alan
+      (CS8618) ve küçük-harf tip adı (CS8981) uyarıları kaynağın kendisinden gelir, dokunmuyoruz.
+      Yalnız bu iki legacy uyarı bastırılır ki proje strict (TreatWarningsAsErrors) bir solution'a
+      girse de derlensin. GmpWrapper.cs kendi uyarılarını üretmez.
+    -->
+    <NoWarn>CS8632;CS8981</NoWarn>
+
+    <!--
+      Core TreatWarningsAsErrors=true; burada KAPALI (varsayılan). GmpInterop.cs sertifikalı
+      binary'den birebir kopyalanan ~4200 satırlık legacy interop; uyarıları hata sayılırsa derlenmez.
+      İnterop dosyasının başında #nullable disable var — nullable uyarıları GmpWrapper'ı etkilemez.
+    -->
+  </PropertyGroup>
+
+  <ItemGroup>
+    <!-- GmpInterop.cs'in tipli sarmalayıcıları struct'ları JSON'a çevirip DLL'e geçiriyor. -->
+    <PackageReference Include="Newtonsoft.Json" Version="13.0.3" />
+  </ItemGroup>
+
+  <ItemGroup>
+    <ProjectReference Include="..\Restomenum.Agent.Core\Restomenum.Agent.Core.csproj" />
+  </ItemGroup>
+
+  <!--
+    ÇALIŞMA ZAMANI: GmpSmartDLL.dll ve GMP.XML çıktı dizininde bulunmalı (repoda yok, host deploy eder).
+    DLL, GMP.XML'den arayüzü kendisi yükler; GmpWrapper FP3_GetInterfaceHandleList ile handle'ı alır.
+  -->
+
+</Project>
