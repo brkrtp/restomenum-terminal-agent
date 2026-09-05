@@ -43,6 +43,11 @@ public class GmpTerminalTransportTests
         public GmpResult Echo() => Kod("Echo");
         public GmpResult Pair() => Kod("Pair");
         public GmpResult CheckPairing(out bool paired) { paired = true; return Kod("CheckPairing"); }
+        public GmpResult Report(GmpReportType t) => Kod("Report:" + t);
+        public GmpResult SetIpAddress(string ip, int port) => Kod("SetIpAddress");
+        public GmpResult SetInvoice(string taxNumber, string invoiceNo) => Kod("SetInvoice");
+        public GmpResult SetDepartments(string json) => Kod("SetDepartments");
+        public GmpResult GetDepartments(out string json) { json = "[]"; return Kod("GetDepartments"); }
     }
 
     private sealed class Departments : IDepartmentMap

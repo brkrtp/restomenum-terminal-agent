@@ -257,6 +257,85 @@ public interface IGmpWrapper
     /// <summary>Eşleştirmeyi başlatır (<c>FP3_StartPairingInit</c>). Sahada ~8–9 sn sürüyor.</summary>
     GmpResult Pair();
 
-    /// <summary>Eşleşme tamam mı (<c>FP3_IsGmpPairingDone</c>).</summary>
+    /// <summary>
+    /// Eşleşme tamam mı (<c>FP3_IsGmpPairingDone</c>).
+    /// <b>Dönüşü standart retcode DEĞİL</b>: 0 = eşleşme yok, ≠0 = var.
+    /// </summary>
     GmpResult CheckPairing(out bool paired);
+
+    // ── YÜZEY DONDURMA KARARLARI (2026-09-05) ────────────────────────────────
+    //
+    // Sertifikalanan şey binary hash'idir: **eksik bir metodu sonradan eklemek yeni bir tur ve
+    // sahada yeniden eşleştirme demektir.** Karar ölçütü bu asimetri:
+    //
+    //   · Kullanmadığımız bir metodun maliyeti ≈ SIFIR (ince geçiş, mantık taşımıyor).
+    //   · Eksik bir metodun maliyeti = bir sertifikasyon turu + saha kesintisi.
+    //
+    // Bu yüzden "gerekebilir" olanlar dahil edildi, "modelimiz bunu hiç yapmıyor" olanlar
+    // gerekçesiyle dışarıda bırakıldı.
+
+    /// <summary>
+    /// Mali rapor (<c>FP3_FunctionReports</c>) — Z (gün kapatma) ve X (ara rapor).
+    ///
+    /// <para><b>Neden yüzeyde ZORUNLU:</b> <c>2417 Z_REQUIRED</c> mali gün devrinde
+    /// <b>kaçınılmazdır</b> ve her satış Z alınana kadar reddedilir. Yüzeyde olmasaydı, gün
+    /// devrinde restoran satış yapamaz ve çözüm ancak birinin terminale gidip elle Z almasıyla
+    /// gelirdi — gece yarısı, en kötü anda.</para>
+    ///
+    /// <para><b>Yetenek burada, KARAR değil.</b> Z'yi ne zaman almanın doğru olduğu bir mali
+    /// karardır ve karar katmanına aittir (§8.3b). Sarmalayıcı yalnız "al" der. Bu ayrım sayesinde
+    /// politika (otomatik mi, kasiyere sorulacak mı) sertifikasyon turu olmadan değişebilir.</para>
+    ///
+    /// <para>⚠️ Açık fişle çakışır (<c>2097</c>) — çağıran fişin kapalı olduğundan emin olmalı.</para>
+    /// </summary>
+    GmpResult Report(GmpReportType type);
+
+    /// <summary>
+    /// Terminalin ağ adresini ayarlar (<c>FP3_UpdateInterfaceXmlDataByID</c>).
+    ///
+    /// <para><b>Neden yüzeyde:</b> adres <b>dinamik ve cihaz başına farklı</b>. Yalnız dağıtım
+    /// zamanı <c>GMP.XML</c>'den okunsaydı, DHCP yenilemesi cihazı çalışmaz hâle getirir ve çözüm
+    /// dosya düzenleyip yeniden başlatmak olurdu. Çalışma zamanında düzeltebilmek, sahadaki en
+    /// sık ağ sorununu sertifikasyon turu olmadan çözer.</para>
+    /// </summary>
+    GmpResult SetIpAddress(string ipAddress, int port);
+
+    /// <summary>
+    /// Fatura bilgisi (<c>FP3_SetInvoice</c>) — VKN/TCKN ve fatura numarası.
+    ///
+    /// <para><b>Yalnız TR:</b> Türkiye'de fişe opsiyonel olarak vergi kimliği ve fatura numarası
+    /// basılabiliyor; yurt dışında böyle bir alan yok (§7.2a). Değerler <b>müşteri kaydından</b>
+    /// türetilir, kasiyer elle girmez.</para>
+    /// </summary>
+    GmpResult SetInvoice(string taxNumber, string invoiceNo);
+
+    /// <summary>
+    /// Departman/KDV kurulumu (<c>Json_FP3_SetDepartments</c>) — cihaz provisioning'i.
+    ///
+    /// <para>Ürün → departman eşlemesi <b>bizde değil</b> (§20.2, eklenti tutar); ama cihazın
+    /// departmanlarının bir kez <b>kurulması</b> gerekiyor ve agent EXE 2'nin yerine geçtiğinde
+    /// bu iş ona kalır. Kurulum sahada başarısız olursa her satış <c>PRODUCT_UNMAPPED</c> ile
+    /// düşer — yüzeyde olmaması pahalı.</para>
+    /// </summary>
+    GmpResult SetDepartments(string departmentsJson);
+
+    /// <summary>Kurulu departmanları okur — kurulum doğrulaması ve teşhis için.</summary>
+    GmpResult GetDepartments(out string departmentsJson);
+
+    // ── BİLİNÇLİ OLARAK DIŞARIDA ────────────────────────────────────────────
+    //
+    // `FP3_VoidItem` (tek kalem iptali): komut modelimiz **atomik** — platform "şu kalemi iptal
+    // et" diye bir komut göndermiyor; kalem düzeltmesi POS tarafında yapılır ve terminale
+    // düzeltilmiş fiş gider. Modelimiz değişirse (kısmi kalem iptali gereken bir akış çıkarsa)
+    // bu bir sertifikasyon turu gerektirir — **bilinçli kabul edilen risk**.
+}
+
+/// <summary>Mali rapor tipi (<c>FP3_FunctionReports</c>).</summary>
+public enum GmpReportType
+{
+    /// <summary>Ara rapor — mali günü KAPATMAZ.</summary>
+    X = 1,
+
+    /// <summary>Gün kapatma. <c>2417 Z_REQUIRED</c>'ın tek çözümü.</summary>
+    Z = 2,
 }
