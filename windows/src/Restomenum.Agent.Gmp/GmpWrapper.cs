@@ -315,9 +315,11 @@ public sealed class GmpWrapper : IGmpWrapper
         taxRatesJson = "";
         uint h = AcquireInterface();
         if (h == 0) return GmpCodes.PortNotOpen;
-        var rates = new ST_TAX_RATE[16];   // oran tablosu genelde <16
+        // Buffer 8: sertifikalı DLLController.GetTaxRates ile birebir. 16 istemek 2083 veriyor (canlı
+        // ölçüldü) — cihazın oran tablosu 8 ile sınırlı; fazlasını istemek geçersiz sayılıyor.
+        var rates = new ST_TAX_RATE[8];
         int total = 0, received = 0;
-        uint rc = Json_GMPSmartDLL.FP3_GetTaxRates(h, ref total, ref received, ref rates, 16);
+        uint rc = Json_GMPSmartDLL.FP3_GetTaxRates(h, ref total, ref received, ref rates, 8);
         if (rc == GmpCodes.Ok)
             taxRatesJson = Newtonsoft.Json.JsonConvert.SerializeObject(rates.Take(received));
         return rc;
