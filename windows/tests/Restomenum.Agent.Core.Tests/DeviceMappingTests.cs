@@ -97,6 +97,27 @@ public class DeviceMappingTests
     }
 
     [Fact]
+    public void SetupParser_gecerli_dize_url_ve_secret()
+    {
+        var json = """{ "url": "https://plugin.test", "secret": "s3cr3t" }""";
+        var b64 = Convert.ToBase64String(System.Text.Encoding.UTF8.GetBytes(json));
+        var setup = DeviceConfigSetupParser.TryParse(b64);
+        Assert.NotNull(setup);
+        Assert.Equal("https://plugin.test/", setup!.BaseUri.AbsoluteUri);   // sonu "/" normalize
+        Assert.Equal("s3cr3t", setup.Secret);
+    }
+
+    [Theory]
+    [InlineData(null)]
+    [InlineData("")]
+    [InlineData("düz-metin-base64-değil")]
+    [InlineData("eyJ1cmwiOiIifQ==")]   // {"url":""} — secret yok
+    public void SetupParser_gecersiz_null(string? s)
+    {
+        Assert.Null(DeviceConfigSetupParser.TryParse(s));
+    }
+
+    [Fact]
     public void Store_IsConfigured_versiyon_sifirsa_false()
     {
         var store = new DeviceMappingStore();

@@ -84,22 +84,51 @@ public static class HostComposition
         builder.Services.AddSingleton(sp => new AgentOrchestrator(
             sp.GetRequiredService<CommandStore>(), sp.GetRequiredService<ITerminalTransport>(),
             sp.GetRequiredService<ClockOffset>()));
-        builder.Services.AddSingleton<ILineDepartmentResolver>(sp =>
+        // Eşleme kaynağı: config kanalı (Agent:DeviceConfigSetup) verilmişse CANLI depo (eklentiden pull);
+        // yoksa YEREL DOSYA (bugünkü davranış — departments.json/payment-methods.json). §20.2: kaynak
+        // değişebilir, arayüz (ILineDepartmentResolver/IPaymentMethodResolver) sabit.
+        var deviceConfig = DeviceConfigSetupParser.TryParse(builder.Configuration["Agent:DeviceConfigSetup"]);
+        if (deviceConfig is not null)
         {
-            var o = sp.GetRequiredService<IOptions<AgentOptions>>().Value;
-            var log = sp.GetRequiredService<ILoggerFactory>().CreateLogger("Departments");
-            var dir = string.IsNullOrEmpty(Path.GetDirectoryName(o.ResolveStorePath())) ? "." : Path.GetDirectoryName(o.ResolveStorePath())!;
-            return new ConfigDepartmentResolver(
-                Path.Combine(dir, "departments.json"), log,
-                Path.Combine(dir, "department-rates.json"));   // cihaz departman→oran (§30.12 doğrulama)
-        });
-        builder.Services.AddSingleton<IPaymentMethodResolver>(sp =>
+            builder.Services.AddSingleton<DeviceMappingStore>(sp =>
+            {
+                var o = sp.GetRequiredService<IOptions<AgentOptions>>().Value;
+                var log = sp.GetRequiredService<ILoggerFactory>().CreateLogger("DeviceMapping");
+                var dir = string.IsNullOrEmpty(Path.GetDirectoryName(o.ResolveStorePath())) ? "." : Path.GetDirectoryName(o.ResolveStorePath())!;
+                return new DeviceMappingStore(Path.Combine(dir, "device-mapping.json"),
+                    log: (m, d) => log.LogInformation("{Mesaj} {Detay}", m, d));
+            });
+            // Aynı depo hem çözümleyici hem pull hedefi — tek yerden bütün satışlara yansır.
+            builder.Services.AddSingleton<ILineDepartmentResolver>(sp => sp.GetRequiredService<DeviceMappingStore>());
+            builder.Services.AddSingleton<IPaymentMethodResolver>(sp => sp.GetRequiredService<DeviceMappingStore>());
+            builder.Services.AddSingleton<IDeviceMappingStore>(sp => sp.GetRequiredService<DeviceMappingStore>());
+            builder.Services.AddSingleton(sp =>
+            {
+                var log = sp.GetRequiredService<ILoggerFactory>().CreateLogger("DeviceConfig");
+                return new DeviceConfigClient(sp.GetRequiredService<HttpClient>(), deviceConfig.BaseUri, deviceConfig.Secret,
+                    log: (m, d) => log.LogInformation("{Mesaj} {Detay}", m, d));
+            });
+            builder.Services.AddHostedService<DeviceConfigPoller>();   // açılış + ~30dk±jitter; satış anında ÇEKMEZ
+        }
+        else
         {
-            var o = sp.GetRequiredService<IOptions<AgentOptions>>().Value;
-            var log = sp.GetRequiredService<ILoggerFactory>().CreateLogger("PaymentMethods");
-            var dir = string.IsNullOrEmpty(Path.GetDirectoryName(o.ResolveStorePath())) ? "." : Path.GetDirectoryName(o.ResolveStorePath())!;
-            return new ConfigPaymentMethodResolver(Path.Combine(dir, "payment-methods.json"), log);   // §20-I: PaymentMethodId→cihaz tipi
-        });
+            builder.Services.AddSingleton<ILineDepartmentResolver>(sp =>
+            {
+                var o = sp.GetRequiredService<IOptions<AgentOptions>>().Value;
+                var log = sp.GetRequiredService<ILoggerFactory>().CreateLogger("Departments");
+                var dir = string.IsNullOrEmpty(Path.GetDirectoryName(o.ResolveStorePath())) ? "." : Path.GetDirectoryName(o.ResolveStorePath())!;
+                return new ConfigDepartmentResolver(
+                    Path.Combine(dir, "departments.json"), log,
+                    Path.Combine(dir, "department-rates.json"));   // cihaz departman→oran (§30.12 doğrulama)
+            });
+            builder.Services.AddSingleton<IPaymentMethodResolver>(sp =>
+            {
+                var o = sp.GetRequiredService<IOptions<AgentOptions>>().Value;
+                var log = sp.GetRequiredService<ILoggerFactory>().CreateLogger("PaymentMethods");
+                var dir = string.IsNullOrEmpty(Path.GetDirectoryName(o.ResolveStorePath())) ? "." : Path.GetDirectoryName(o.ResolveStorePath())!;
+                return new ConfigPaymentMethodResolver(Path.Combine(dir, "payment-methods.json"), log);   // §20-I: PaymentMethodId→cihaz tipi
+            });
+        }
         builder.Services.AddSingleton(sp =>
         {
             var log = sp.GetRequiredService<ILoggerFactory>().CreateLogger("LocalSale");
