@@ -41,6 +41,16 @@ public class DeviceMappingTests
     }
 
     [Fact]
+    public void Parse_platform_zarfi_data_icinden_okur()
+    {
+        // Canlı uç {success, data:{...}} sarmalı döner; parser data'yı kök almalı (düz de çalışır).
+        var wrapped = """{ "success": true, "data": { "version": 7, "paymentMethods": { "11-cash": 1 } } }""";
+        var m = ParseOk(wrapped);
+        Assert.Equal(7, m.Version);
+        Assert.Equal(1, m.PaymentMethods["11-cash"]);
+    }
+
+    [Fact]
     public void Parse_bozuk_JSON_Invalid()
     {
         Assert.IsType<DeviceMappingParseResult.Invalid>(DeviceMappingParser.Parse("{ bozuk"));

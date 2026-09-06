@@ -53,16 +53,20 @@ public static class DeviceMappingParser
             if (root.ValueKind != JsonValueKind.Object)
                 return new DeviceMappingParseResult.Invalid("kök nesne değil");
 
+            // Platform zarfı: {success, data:{...}}. Uç hem sarmalı (canlı) hem düz (test) olabilir —
+            // data nesnesi varsa onu kök al, yoksa root'u kullan.
+            var m = root.TryGetProperty("data", out var dataEl) && dataEl.ValueKind == JsonValueKind.Object ? dataEl : root;
+
             // version: yoksa 0 (kurulum eksik sinyali). Sayı değilse Invalid (şekil bozuk).
             int version = 0;
-            if (root.TryGetProperty("version", out var vEl))
+            if (m.TryGetProperty("version", out var vEl))
             {
                 if (vEl.ValueKind != JsonValueKind.Number || !vEl.TryGetInt32(out version))
                     return new DeviceMappingParseResult.Invalid("version sayı değil");
             }
 
             var departments = new List<DeviceDepartment>();
-            if (root.TryGetProperty("departments", out var deptArr) && deptArr.ValueKind == JsonValueKind.Array)
+            if (m.TryGetProperty("departments", out var deptArr) && deptArr.ValueKind == JsonValueKind.Array)
                 foreach (var d in deptArr.EnumerateArray())
                 {
                     if (d.ValueKind != JsonValueKind.Object) continue;
@@ -71,7 +75,7 @@ public static class DeviceMappingParser
                 }
 
             var entries = new List<MappingEntry>();
-            if (root.TryGetProperty("entries", out var entArr) && entArr.ValueKind == JsonValueKind.Array)
+            if (m.TryGetProperty("entries", out var entArr) && entArr.ValueKind == JsonValueKind.Array)
                 foreach (var e in entArr.EnumerateArray())
                 {
                     if (e.ValueKind != JsonValueKind.Object) continue;
@@ -87,7 +91,7 @@ public static class DeviceMappingParser
                 }
 
             var paymentMethods = new Dictionary<string, int>(StringComparer.Ordinal);
-            if (root.TryGetProperty("paymentMethods", out var pm) && pm.ValueKind == JsonValueKind.Object)
+            if (m.TryGetProperty("paymentMethods", out var pm) && pm.ValueKind == JsonValueKind.Object)
                 foreach (var kv in pm.EnumerateObject())
                 {
                     if (kv.Value.ValueKind == JsonValueKind.Number && kv.Value.TryGetInt32(out var t)

@@ -148,13 +148,15 @@ public sealed class DeviceConfigClient
         {
             using var doc = JsonDocument.Parse(body);
             var root = doc.RootElement;
-            var accessToken = root.TryGetProperty("accessToken", out var t) ? t.GetString() : null;
+            // Platform zarfı: {success, data:{accessToken,...}} — data varsa oradan oku, yoksa kökten (test/düz).
+            var d = root.TryGetProperty("data", out var dataEl) && dataEl.ValueKind == JsonValueKind.Object ? dataEl : root;
+            var accessToken = d.TryGetProperty("accessToken", out var t) ? t.GetString() : null;
             if (string.IsNullOrEmpty(accessToken)) { _log("[config] oturum yanıtında accessToken yok", null); return null; }
-            var expiresIn = root.TryGetProperty("expiresIn", out var e) && e.ValueKind == JsonValueKind.Number ? e.GetInt32() : 900;
+            var expiresIn = d.TryGetProperty("expiresIn", out var e) && e.ValueKind == JsonValueKind.Number ? e.GetInt32() : 900;
             _token = accessToken;
             // Ömrün %75'inde yenile (saat kaymasına dayanıklı).
             _tokenRenewAt = _now().AddSeconds(expiresIn * 0.75);
-            if (root.TryGetProperty("connectorId", out var c)) _log("[config] oturum açıldı", new { connectorId = c.GetString() });
+            if (d.TryGetProperty("connectorId", out var c)) _log("[config] oturum açıldı", new { connectorId = c.GetString() });
             return _token;
         }
         catch (JsonException) { _log("[config] oturum yanıtı ayrıştırılamadı", null); return null; }

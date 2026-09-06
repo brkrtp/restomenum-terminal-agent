@@ -11,9 +11,18 @@ using Restomenum.Agent.Host.Windows;
 // sağlayıcısını bozmasın diye argümanlardan ayıklanır.
 bool eslesModu = args.Contains("--pair");
 bool voidModu = args.Contains("--void");
-var configArgs = args.Where(a => a != "--pair" && a != "--void").ToArray();
+bool configSmoke = args.Contains("--config-smoke");
+var configArgs = args.Where(a => a != "--pair" && a != "--void" && a != "--config-smoke").ToArray();
 
 var builder = Host.CreateApplicationBuilder(configArgs);
+
+// --config-smoke: config kanalını (session+mapping) canlı uca dener ve ÇIKAR. Cihaz anahtarı/terminal/
+// dinleyici YOK — tam DI'dan ÖNCE kısa devre, yönetici gerekmez. Yalnız Agent:DeviceConfigSetup + ağ.
+if (configSmoke)
+{
+    Environment.ExitCode = await WindowsConfigSmoke.RunAsync(builder.Configuration) ? 0 : 1;
+    return;
+}
 
 HostComposition.AddAgentBaseServices(builder);   // önce temel (fail-closed varsayılanlar)
 builder.Services.AddWindowsTerminal();           // sonra gerçek kayıtlar (varsayılanları geçersiz kılar)
