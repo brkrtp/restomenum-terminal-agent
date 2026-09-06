@@ -24,7 +24,14 @@ public sealed record PaymentDetail(
     string State,
     long ExpiresAtMs,
     string ItemsScope,
-    IReadOnlyList<SaleLine> Items);
+    IReadOnlyList<SaleLine> Items,
+    /// <summary>
+    /// Kasiyerin seçtiği ödeme yöntemi kimliği (<c>RestomenumExt.PaymentMethodId</c>, ör. <c>"11-cash"</c>).
+    /// <b>Platform DİKTE eder</b> (defter bütünlüğü) ve GET yanıtında DAİMA dolu gelir (kasa göndermese de
+    /// varsayılan çözülmüş hâliyle). Ajan bunu <see cref="IPaymentMethodResolver"/> ile cihaz ödeme tipine
+    /// (<c>GmpPaymentTypes</c> 1/4/16) çevirir; eşleme yoksa fail-closed. TEK EKSEN — kaba PaymentType yok.
+    /// </summary>
+    string PaymentMethodId = "");
 
 /// <summary>
 /// Satış kalemi. <b><see cref="ItemAmountMinor"/> OTORİTEDİR.</b> Birim fiyat türetilmiştir

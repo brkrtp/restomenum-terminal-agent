@@ -81,7 +81,9 @@ public static class PaymentDetailParser
                     State: StrOr(ext, "State", ""),
                     ExpiresAtMs: ext.TryGetProperty("ExpiresAt", out var exp) ? exp.GetInt64() : 0,
                     ItemsScope: StrOr(ext, "ItemsScope", ""),
-                    Items: items);
+                    Items: items,
+                    // Platform DİKTE eder, daima dolu (kasa göndermese de varsayılan çözülmüş). Tek eksen.
+                    PaymentMethodId: StrOr(ext, "PaymentMethodId", ""));
 
                 return new PaymentDetailResult.Ok(detail);
             }

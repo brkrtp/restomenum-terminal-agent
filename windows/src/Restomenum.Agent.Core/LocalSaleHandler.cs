@@ -18,6 +18,7 @@ public sealed class LocalSaleHandler
     private readonly AgentOrchestrator _orch;
     private readonly CommandStore _store;
     private readonly ILineDepartmentResolver _departments;
+    private readonly IPaymentMethodResolver _paymentMethods;
     private readonly IResultNotifier _notifier;
     private readonly Outbox _outbox;
     private readonly Func<DateTimeOffset> _now;
@@ -32,13 +33,15 @@ public sealed class LocalSaleHandler
 
     public LocalSaleHandler(
         IPaymentDetailClient amounts, AgentOrchestrator orch, CommandStore store,
-        ILineDepartmentResolver departments, IResultNotifier notifier, Outbox outbox,
+        ILineDepartmentResolver departments, IPaymentMethodResolver paymentMethods,
+        IResultNotifier notifier, Outbox outbox,
         Func<DateTimeOffset>? now = null, Action<string, object?>? log = null)
     {
         _amounts = amounts;
         _orch = orch;
         _store = store;
         _departments = departments;
+        _paymentMethods = paymentMethods;
         _notifier = notifier;
         _outbox = outbox;
         _now = now ?? (() => DateTimeOffset.UtcNow);
@@ -133,11 +136,26 @@ public sealed class LocalSaleHandler
             lines.AddRange(FiscalLineBuilder.Build(item, m.Index));
         }
 
-        // 3. SaleRequest kur + orkestratör (dedupe/durum-makinesi/UNKNOWN korunur; CommandId = ServiceID).
+        // 3. Ödeme yöntemi → cihaz ödeme tipi (§20-I tek eksen). Platform PaymentMethodId'yi DİKTE eder
+        // ve daima dolu gelir; eklenti eşlemesi onu GmpPaymentType'a (1/4/16) çevirir. Eşleme yoksa ya da
+        // değeri bilinmeyen bir tipse: terminale GİTME, hangi yöntem olduğunu söyle (kart↔nakit güvenliği
+        // eklenti UI'ında kurulur; burada eşlenmemiş/geçersiz yöntemi fail-closed reddederiz).
+        var gmpPaymentType = _paymentMethods.Resolve(d.PaymentMethodId);
+        if (gmpPaymentType is null || !GmpPaymentTypes.IsKnown(gmpPaymentType.Value))
+        {
+            var reddi = SaleToPoiResponseBuilder.BuildFailure(req, "PaymentRestriction",
+                $"PAYMENT_METHOD_UNMAPPED:{d.PaymentMethodId}", _now());
+            await NotifyAsync(req.PaymentId, reddi, ct);
+            _log("[yerel] eşlenmemiş/geçersiz ödeme yöntemi — terminale gidilmedi",
+                new { req.PaymentId, d.PaymentMethodId, resolved = gmpPaymentType });
+            return reddi;
+        }
+
+        // 4. SaleRequest kur + orkestratör (dedupe/durum-makinesi/UNKNOWN korunur; CommandId = ServiceID).
         var sale = new SaleRequest(
             CommandId: req.ServiceId, PaymentId: req.PaymentId, TerminalId: req.PoiId,
             AmountMinor: d.RequestedAmountMinor, Currency: d.Currency, Exponent: d.Exponent,
-            ProviderPluginId: null, FiscalLines: lines);
+            ProviderPluginId: null, FiscalLines: lines, PaymentType: gmpPaymentType.Value);
 
         // Terminal başına TEK işlem (değişmez #4): eşzamanlı iki satış cihaz fişini bozar.
         AgentOutcome outcome;

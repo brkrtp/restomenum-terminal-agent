@@ -140,6 +140,10 @@ public static class GmpPaymentTypes
     /// sahada hiç çalışmamış ve <c>REVERSAL_FAILED</c> riski taşıyor.</para>
     /// </summary>
     public static bool HasBankLeg(int paymentType) => paymentType == Card;
+
+    /// <summary>Cihazın tanıdığı bir ödeme tipi mi (1/4/16). Eşleme dosyasındaki uydurma bir değer
+    /// (ör. 99) terminale gitmeden yakalanır — bilinmeyen tip yanlış işlem/iptal yolu üretir.</summary>
+    public static bool IsKnown(int paymentType) => paymentType is Cash or Card or Mobile;
 }
 
 /// <summary>

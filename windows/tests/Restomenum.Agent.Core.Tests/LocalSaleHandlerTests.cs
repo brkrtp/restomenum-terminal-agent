@@ -50,6 +50,13 @@ public class LocalSaleHandlerTests : IDisposable
         }
     }
 
+    private sealed class FakePaymentMethods : IPaymentMethodResolver
+    {
+        public int? Type = GmpPaymentTypes.Card;   // varsayılan geçerli — mevcut testler etkilenmez
+        public string? LastMethodId;
+        public int? Resolve(string paymentMethodId) { LastMethodId = paymentMethodId; return Type; }
+    }
+
     private sealed class FakeNotifier : IResultNotifier
     {
         public List<string> Bodies { get; } = new();
@@ -63,19 +70,22 @@ public class LocalSaleHandlerTests : IDisposable
     private static SaleToPoiRequest Req(string serviceId = "svc1") =>
         new(serviceId, "kasa-1", "term-01", Pay, "1042", DateTimeOffset.UtcNow);
 
-    private static PaymentDetail Detail(long amount = 24000) =>
+    private static PaymentDetail Detail(long amount = 24000, string pmId = "11-cash") =>
         new(Pay, "1042", "TRY", 2, amount, amount, "TR", "ACCEPTED",
             DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() + 600_000, "fullSale",
-            new List<SaleLine> { new(0, "p1", "Adana", 2, amount, "10", "c1", "l1") });
+            new List<SaleLine> { new(0, "p1", "Adana", 2, amount, "10", "c1", "l1") },
+            pmId);
 
     private (LocalSaleHandler, SimulatorTransport, FakeNotifier) Kur(
-        PaymentDetailResult amounts, int? dept = 3, TransportResult? terminal = null, int? rate = null)
+        PaymentDetailResult amounts, int? dept = 3, TransportResult? terminal = null, int? rate = null,
+        int? paymentType = GmpPaymentTypes.Card)
     {
         var sim = new SimulatorTransport();
         if (terminal is not null) sim.Expect(terminal);
         var orch = new AgentOrchestrator(_store, sim, _clock, RecoveryPolicy.Immediate);
         var notifier = new FakeNotifier();
-        var h = new LocalSaleHandler(new FakeAmounts { Result = amounts }, orch, _store, new FakeResolver { Dept = dept, Rate = rate }, notifier, _outbox);
+        var h = new LocalSaleHandler(new FakeAmounts { Result = amounts }, orch, _store,
+            new FakeResolver { Dept = dept, Rate = rate }, new FakePaymentMethods { Type = paymentType }, notifier, _outbox);
         return (h, sim, notifier);
     }
 
@@ -147,6 +157,21 @@ public class LocalSaleHandlerTests : IDisposable
         var resp = Resp(await h.HandleAsync(Req()));
         Assert.Equal("Success", resp.GetProperty("Result").GetString());
         Assert.Single(sim.SaleCalls);        // doğrulama uyumluysa akış aynen sürer
+    }
+
+    [Fact]
+    public async Task Eslenmemis_odeme_yontemi_terminale_GITMEZ_ama_bildirir_ve_yontemi_soyler()
+    {
+        // §20-I: PaymentMethodId payment-methods.json'da yoksa (resolver null) → terminale gitme.
+        var (h, sim, notifier) = Kur(new PaymentDetailResult.Ok(Detail(pmId: "11-uydurma")), paymentType: null);
+
+        var resp = Resp(await h.HandleAsync(Req()));
+        Assert.Equal("Failure", resp.GetProperty("Result").GetString());
+        Assert.Equal("PaymentRestriction", resp.GetProperty("ErrorCondition").GetString());
+        Assert.Contains("PAYMENT_METHOD_UNMAPPED", resp.GetProperty("AdditionalResponse").GetString());
+        Assert.Contains("11-uydurma", resp.GetProperty("AdditionalResponse").GetString());   // HANGİ yöntem
+        Assert.Empty(sim.SaleCalls);         // terminale GİTMEDİ
+        Assert.Single(notifier.Bodies);      // GET ACCEPTED'dı → takılı kalmasın diye bildir
     }
 
     [Fact]

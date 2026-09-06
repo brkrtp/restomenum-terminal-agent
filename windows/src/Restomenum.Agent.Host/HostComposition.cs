@@ -93,12 +93,20 @@ public static class HostComposition
                 Path.Combine(dir, "departments.json"), log,
                 Path.Combine(dir, "department-rates.json"));   // cihaz departman→oran (§30.12 doğrulama)
         });
+        builder.Services.AddSingleton<IPaymentMethodResolver>(sp =>
+        {
+            var o = sp.GetRequiredService<IOptions<AgentOptions>>().Value;
+            var log = sp.GetRequiredService<ILoggerFactory>().CreateLogger("PaymentMethods");
+            var dir = string.IsNullOrEmpty(Path.GetDirectoryName(o.ResolveStorePath())) ? "." : Path.GetDirectoryName(o.ResolveStorePath())!;
+            return new ConfigPaymentMethodResolver(Path.Combine(dir, "payment-methods.json"), log);   // §20-I: PaymentMethodId→cihaz tipi
+        });
         builder.Services.AddSingleton(sp =>
         {
             var log = sp.GetRequiredService<ILoggerFactory>().CreateLogger("LocalSale");
             return new LocalSaleHandler(
                 sp.GetRequiredService<IPaymentDetailClient>(), sp.GetRequiredService<AgentOrchestrator>(),
                 sp.GetRequiredService<CommandStore>(), sp.GetRequiredService<ILineDepartmentResolver>(),
+                sp.GetRequiredService<IPaymentMethodResolver>(),
                 sp.GetRequiredService<IResultNotifier>(), sp.GetRequiredService<Outbox>(),
                 log: (m, d) => log.LogInformation("{Mesaj} {Detay}", m, d));
         });
