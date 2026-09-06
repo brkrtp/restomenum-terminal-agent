@@ -85,7 +85,7 @@ public sealed class DeviceMappingStore : IDeviceMappingStore, ILineDepartmentRes
             else if (e.Kind == "category" && e.CategoryId is not null) category[e.CategoryId] = e.DepartmentIndex;
         }
         var rate = new Dictionary<int, int>();
-        foreach (var d in m.Departments) rate[d.Index] = d.TaxRateBasisPoints;
+        foreach (var d in m.Departments) if (d.TaxRateBasisPoints is int tr) rate[d.Index] = tr;   // null-oran = "bilinmiyor", indekslenmez
         return new Resolved(m, product, category, rate);
     }
 

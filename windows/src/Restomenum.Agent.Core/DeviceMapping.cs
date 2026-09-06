@@ -16,8 +16,11 @@ public sealed record DeviceMapping(
     IReadOnlyDictionary<string, int> PaymentMethods);
 
 /// <summary>Cihaz departmanı: indeks + ad + KDV oranı (baz puan). Oran §30.12 doğrulamasının kaynağı —
-/// artık elle dosya değil, cihazın <c>GetDepartments</c> çıktısından platforma bildirilip geri gelir.</summary>
-public sealed record DeviceDepartment(int Index, string Name, int TaxRateBasisPoints);
+/// artık elle dosya değil, cihazın <c>GetDepartments</c>+<c>GetTaxRates</c> birleşiminden platforma
+/// bildirilip geri gelir. <b><see cref="TaxRateBasisPoints"/> NULLABLE:</b> cihazın vergi indeksi tabloda
+/// karşılık bulamazsa <c>null</c> (ASLA uydurma 0) — doğrulanamayan oran, doğrulanmış sayılmamalı; plugin
+/// null'da eşlemeyi engeller, §30.12 de null-oranı atlar.</summary>
+public sealed record DeviceDepartment(int Index, string Name, int? TaxRateBasisPoints);
 
 /// <summary>Eşleme girdisi: ürün ya da kategori kimliği → departman indeksi. <see cref="Kind"/> "product"
 /// ise <see cref="ProductCode"/>, "category" ise <see cref="CategoryId"/> dolu. Ürün girdisi kategoriyi ezer.</summary>
@@ -70,7 +73,8 @@ public static class DeviceMappingParser
                 foreach (var d in deptArr.EnumerateArray())
                 {
                     if (d.ValueKind != JsonValueKind.Object) continue;
-                    if (!TryInt(d, "index", out var idx) || !TryInt(d, "taxRateBasisPoints", out var rate)) continue;
+                    if (!TryInt(d, "index", out var idx)) continue;   // indeks ZORUNLU; oran null olabilir
+                    int? rate = TryInt(d, "taxRateBasisPoints", out var r) ? r : null;
                     departments.Add(new DeviceDepartment(idx, StrOr(d, "name", ""), rate));
                 }
 

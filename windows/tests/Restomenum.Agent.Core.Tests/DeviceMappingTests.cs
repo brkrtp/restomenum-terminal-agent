@@ -107,6 +107,31 @@ public class DeviceMappingTests
     }
 
     [Fact]
+    public void Builder_departman_orani_vergi_tablosundan_birlestirir()
+    {
+        // taxRates: idx0=%20(2000) idx1=%0(0) idx2=%10(1000)
+        var taxJson = """[{"taxRate":2000},{"taxRate":0},{"taxRate":1000}]""";
+        // dept0→taxIdx0(%20), dept1→taxIdx1(%0), dept2→taxIdx5 (tabloda YOK)
+        var deptJson = """[{"szDeptName":"YEMEK","u8TaxIndex":0},{"szDeptName":"MUAF","u8TaxIndex":1},{"szDeptName":"BOZUK","u8TaxIndex":5}]""";
+        var d = DeviceDepartmentsBuilder.FromGmp(deptJson, taxJson);
+        Assert.Equal(3, d.Count);
+        Assert.Equal(0, d[0].Index);              // dizi konumu = departman indeksi
+        Assert.Equal("YEMEK", d[0].Name);
+        Assert.Equal(2000, d[0].TaxRateBasisPoints);   // %20
+        Assert.Equal(0, d[1].TaxRateBasisPoints);      // %0 GEÇERLİ (0 ≠ null)
+        Assert.Null(d[2].TaxRateBasisPoints);          // tabloda yok → null (ASLA uydurma)
+    }
+
+    [Fact]
+    public void Builder_vergi_tablosu_bossa_hepsi_null()
+    {
+        // Tablo hiç okunamazsa TÜM oranlar null → güvenli fail (plugin hepsini engeller).
+        var d = DeviceDepartmentsBuilder.FromGmp("""[{"szDeptName":"X","u8TaxIndex":0}]""", "[]");
+        Assert.Single(d);
+        Assert.Null(d[0].TaxRateBasisPoints);
+    }
+
+    [Fact]
     public void SetupParser_gecerli_dize_url_ve_secret()
     {
         var json = """{ "url": "https://plugin.test", "secret": "s3cr3t" }""";

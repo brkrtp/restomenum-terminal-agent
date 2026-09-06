@@ -46,6 +46,37 @@ public static class WindowsPairing
             info.Brand, info.Model, info.Serial, info.Version, sonra ? "EŞLİ" : "eşli DEĞİL");
         if (!sonra)
             log.LogWarning("StartPairingInit Ok döndü ama IsGmpPairingDone hâlâ 'eşli değil' — satış öncesi dikkat.");
+
+        // Config kanalı AÇIKSA (DeviceConfigClient DI'da) departman tablosunu bildir — cihaz ARTIK eşli,
+        // GetDepartments/GetTaxRates okunabilir (S3: rapor eşleşmeden SONRA). Bildirim başarısız olsa da
+        // eşleşme geçerli (satış yolu ayrı). Config kanalı kapalıysa (yerel dosya modu) atlanır.
+        var configClient = services.GetService<DeviceConfigClient>();
+        if (configClient is not null)
+            RaporDepartmanlar(gmp, info, log, configClient);
+
         return true;
+    }
+
+    /// <summary>GetDepartments + GetTaxRates → birleştir → config kanalına bildir. Oran tabloda yoksa null
+    /// (uydurma yok). Rapor başarısızlığı eşleşmeyi/satışı ETKİLEMEZ — yalnız eklenti ekranı tabloyu geç görür.</summary>
+    private static void RaporDepartmanlar(IGmpWrapper gmp, GmpDeviceInfo info, ILogger log, DeviceConfigClient client)
+    {
+        var drc = gmp.GetDepartments(out var deptJson);
+        if (!drc.Ok) { log.LogWarning("GetDepartments başarısız (rc={Rc}) — departman tablosu bildirilemedi.", drc.Code); return; }
+        var trc = gmp.GetTaxRates(out var taxJson);
+        if (!trc.Ok) { log.LogWarning("GetTaxRates başarısız (rc={Rc}) — oranlar null bildirilecek.", trc.Code); taxJson = "[]"; }
+
+        var departments = DeviceDepartmentsBuilder.FromGmp(deptJson, taxJson);
+        var nullOran = departments.Count(d => d.TaxRateBasisPoints is null);
+        try
+        {
+            var ok = client.ReportDepartmentsAsync(departments, info).GetAwaiter().GetResult();
+            log.LogInformation("departman tablosu config kanalına bildirildi: {Adet} departman ({Null} oranı null), sonuç={Ok}",
+                departments.Count, nullOran, ok);
+        }
+        catch (Exception e)
+        {
+            log.LogWarning(e, "departman bildirimi hata verdi — eşleşme yine de geçerli, sonraki --pair'de tekrar denenir.");
+        }
     }
 }

@@ -308,6 +308,21 @@ public sealed class GmpWrapper : IGmpWrapper
         return rc;
     }
 
+    /// <summary>Cihazın vergi oranı tablosunu okur (indeks → baz puan). Departmanın <c>u8TaxIndex</c>'i
+    /// bu tabloya işaret eder; oranı üretmek için ikisi birleştirilir (bkz. DeviceDepartmentsBuilder).</summary>
+    public GmpResult GetTaxRates(out string taxRatesJson)
+    {
+        taxRatesJson = "";
+        uint h = AcquireInterface();
+        if (h == 0) return GmpCodes.PortNotOpen;
+        var rates = new ST_TAX_RATE[16];   // oran tablosu genelde <16
+        int total = 0, received = 0;
+        uint rc = Json_GMPSmartDLL.FP3_GetTaxRates(h, ref total, ref received, ref rates, 16);
+        if (rc == GmpCodes.Ok)
+            taxRatesJson = Newtonsoft.Json.JsonConvert.SerializeObject(rates.Take(received));
+        return rc;
+    }
+
     public GmpResult SetDepartments(string departmentsJson, string supervisorPassword)
     {
         uint h = AcquireInterface();

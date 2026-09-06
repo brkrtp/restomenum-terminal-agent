@@ -340,6 +340,10 @@ public interface IGmpWrapper
     /// <summary>Kurulu departmanları okur — kurulum doğrulaması ve teşhis için.</summary>
     GmpResult GetDepartments(out string departmentsJson);
 
+    /// <summary>Cihaz vergi oranı tablosu (indeks → baz puan). Departman <c>u8TaxIndex</c>'iyle birleşip
+    /// oranı üretir; tabloda karşılık yoksa oran null (uydurma yok).</summary>
+    GmpResult GetTaxRates(out string taxRatesJson);
+
     // ── BİLİNÇLİ OLARAK DIŞARIDA ────────────────────────────────────────────
     //
     // `FP3_VoidItem` (tek kalem iptali): komut modelimiz **atomik** — platform "şu kalemi iptal

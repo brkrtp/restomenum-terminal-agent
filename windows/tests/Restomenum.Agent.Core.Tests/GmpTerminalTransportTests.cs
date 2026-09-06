@@ -49,6 +49,7 @@ public class GmpTerminalTransportTests
         public GmpResult SetInvoice(ulong h, GmpInvoice inv) => Kod("SetInvoice");
         public GmpResult SetDepartments(string json, string pwd) => Kod("SetDepartments");
         public GmpResult GetDepartments(out string json) { json = "[]"; return Kod("GetDepartments"); }
+        public GmpResult GetTaxRates(out string json) { json = "[]"; return Kod("GetTaxRates"); }
     }
 
     private static SaleRequest Req(long amount = 3000, int paymentType = GmpPaymentTypes.Card,
