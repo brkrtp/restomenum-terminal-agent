@@ -190,6 +190,40 @@ public class GmpTerminalTransportTests
     }
 
     [Fact]
+    public async Task Kart_2086_banka_kodlu_ret_UNKNOWN_declined_DEGIL()
+    {
+        // 2086 = banka kodlu başarısızlık. "İŞLEM ONAYLANMADI" (gerçek ret, para YOK) ile
+        // "NO RESPONSE" (yanıt kayıp, para çekilmiş OLABİLİR) aynı kod altında — AYIRT EDİLEMEZ.
+        // ← ÇİVİ: bu yüzden Declined DEĞİL Unknown. Declined deseydik kasiyer "başka kart" ister,
+        // ilk çekim geçmişse müşteri İKİ KEZ öderdi. Kart para-güvenliğinin ta kendisi.
+        var (t, g, _) = Kur();
+        g.Codes["Payment"] = GmpCodes.PaymentFailedWithBankCode;   // 2086
+        var r = await t.SaleAsync(Req());
+
+        Assert.Equal(TransportOutcome.Unknown, r.Outcome);
+        Assert.NotEqual(TransportOutcome.Declined, r.Outcome);
+        // ← ÇİVİ: belirsiz kart ret'inde fiş KÖRlemesine iptal/ters işlem EDİLMEZ — para
+        // çekilmiş olabilir; akıbet yalnız ProbeAsync ile terminale sorularak çözülür. Otomatik
+        // VoidAll, gerçekleşmiş bir ödemeyi geri almaya çalışmak olurdu.
+        Assert.DoesNotContain("VoidAll", g.Calls);
+    }
+
+    [Fact]
+    public async Task Kart_2085_okutulmadi_KESIN_RET()
+    {
+        // 2085 = kart hiç okutulmadı / ödeme başlamadı: para hareketi YOK, kesin. Burada Declined
+        // GÜVENLİ — kasiyer aynı fişte tekrar deneyebilir, çift çekim riski yok. 2086'nın (Unknown)
+        // aksi kutbu: fark "banka kodu geldi mi"; ikisini karıştırmak ya çift-çekim ya gereksiz
+        // insana-çıkarma üretir.
+        var (t, g, _) = Kur();
+        g.Codes["Payment"] = GmpCodes.PaymentFailed;   // 2085
+        var r = await t.SaleAsync(Req());
+
+        Assert.Equal(TransportOutcome.Declined, r.Outcome);
+        Assert.Contains("Payment", r.ProviderResultCode);
+    }
+
+    [Fact]
     public async Task KalemHatasinda_YARIM_FIS_BIRAKILMAZ()
     {
         // Yarım açılmış fiş bırakılırsa bir sonraki `StartTicket` onu SESSİZCE VoidAll eder;
