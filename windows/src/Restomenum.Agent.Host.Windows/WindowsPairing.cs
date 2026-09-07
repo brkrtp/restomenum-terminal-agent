@@ -67,6 +67,18 @@ public static class WindowsPairing
         if (!trc.Ok) { log.LogWarning("GetTaxRates başarısız (rc={Rc}) — oranlar null bildirilecek.", trc.Code); taxJson = "[]"; }
 
         var departments = DeviceDepartmentsBuilder.FromGmp(deptJson, taxJson);
+
+        // ⚠️ BİLDİRİM TABLOYU DEĞİŞTİRİR, BİRLEŞTİRMEZ (eklenti sözleşmesi). Boş/kısa bir liste
+        // göndermek platformdaki tabloyu KIRPAR ve eşleme ekranı çalışmaz hâle gelir. Okuma
+        // "başarılı ama boş" dönebiliyor; o durumda bildirmemek, yanlış bildirmekten iyidir —
+        // eski tablo olduğu yerde kalır.
+        if (departments.Count == 0)
+        {
+            log.LogWarning("departman tablosu BOŞ okundu — bildirim GÖNDERİLMİYOR. " +
+                "Bildirim tabloyu değiştirdiği için boş liste platformdaki tabloyu silerdi.");
+            return;
+        }
+
         var nullOran = departments.Count(d => d.TaxRateBasisPoints is null);
         try
         {
