@@ -98,6 +98,7 @@ public sealed class DeviceConfigClient
             {
                 departments = departments.Select(d => new { index = d.Index, name = d.Name, taxRateBasisPoints = d.TaxRateBasisPoints }),
                 deviceInfo = deviceInfo is null ? null : new { brand = deviceInfo.Brand, model = deviceInfo.Model, serial = deviceInfo.Serial, version = deviceInfo.Version },
+                capabilities = AgentCapabilities.Declared,
             };
             using var req = new HttpRequestMessage(HttpMethod.Post, new Uri(_baseUri, "api/device/departments"))
             {
@@ -163,4 +164,28 @@ public sealed class DeviceConfigClient
     }
 
     private static string Kisalt(string s) => s.Length <= 160 ? s : s[..160];
+}
+
+/// <summary>
+/// Ajanın platforma BEYAN ettiği yetenekler. Kasa/panel düğmelerini buna göre gösterir.
+///
+/// <para><b>Kural:</b> ölçülmemiş yetenek beyan edilmez. Beyan, kasiyere "bu düğme çalışır"
+/// sözü vermektir; çalışmayan bir düğme, olmayan düğmeden kötüdür.</para>
+///
+/// <para>Her maddenin dayanağı:</para>
+/// <list type="bullet">
+///   <item><c>sale.cash</c> — canlı ölçüldü (2026-09-07): 990 tam nakit satış 7 sn'de fiş bastı ve kapandı.</item>
+///   <item><c>sale.card</c> — kod yolu tam ve canlı koştu; kartın BANKA bacağı bu terminalde
+///     ölçülemedi (hat yok, her deneme 2086/"NO RESPONSE"). Yol var, beyan ediliyor.</item>
+///   <item><c>void</c> — canlı ölçüldü (2026-09-07, iki kez): ödemesiz açık fiş ve NAKİT ödemeli
+///     fiş <c>VoidAll</c>→<c>Close</c> ile iptal edildi (2069 çıkmadı). Kart bacaklı fişin iptali
+///     (2069 → <c>VoidPayment</c>) ÖLÇÜLMEDİ — banka hattı gerektiriyor.</item>
+/// </list>
+///
+/// <para><b>Beyan edilmeyen:</b> <c>status</c> — ajanda böyle bir uç YOK. İstenirse önce yazılır,
+/// sonra beyan edilir.</para>
+/// </summary>
+public static class AgentCapabilities
+{
+    public static readonly string[] Declared = { "sale.cash", "sale.card", "void" };
 }
