@@ -249,7 +249,11 @@ public sealed class LocalSaleHandler
         var sale = new SaleRequest(
             CommandId: req.ServiceId, PaymentId: req.PaymentId, TerminalId: req.PoiId,
             AmountMinor: d.RequestedAmountMinor, Currency: d.Currency, Exponent: d.Exponent,
-            ProviderPluginId: null, FiscalLines: lines, PaymentType: gmpPaymentType.Value);
+            ProviderPluginId: null, FiscalLines: lines, PaymentType: gmpPaymentType.Value,
+            // Kısmi tahsilat için: açık fişin sahibi (oturum) ve karşılaştırma toplamı.
+            // Oturum kimliği YOKSA (eski platform) devam yolu kapalı kalır — taşıma katmanı
+            // açık fişi "başka satış" sayar. Emin olmadan fişe ödeme eklemeyiz.
+            SaleSessionId: req.SaleSessionId, SaleTotalMinor: d.SaleTotalAmountMinor);
 
         // Terminal başına TEK işlem (değişmez #4): eşzamanlı iki satış cihaz fişini bozar.
         AgentOutcome outcome;

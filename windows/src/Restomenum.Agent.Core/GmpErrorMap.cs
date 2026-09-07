@@ -170,6 +170,18 @@ public static class RestomenumReasons
     public const string AmountFetchFailed = "AMOUNT_FETCH_FAILED";
 
     /// <summary>
+    /// Açık fişin toplamı, satışın toplamıyla UYUŞMUYOR — kısmi ödemeden sonra kalem eklenmiş ya da
+    /// silinmiş. Devam edilirse fişe yanlış tutarda ödeme yazılır; mali kayıt bozulur, geri alınamaz.
+    /// </summary>
+    public const string TicketSaleMismatch = "TICKET_SALE_MISMATCH";
+
+    /// <summary>
+    /// İstenen tutar fişin KALANINI aşıyor (kalan = toplam − tahsil). Cihaz da reddederdi; biz
+    /// terminale gitmeden reddediyoruz ki fiş yarım bir işlemle kilitlenmesin.
+    /// </summary>
+    public const string AmountExceedsRemaining = "AMOUNT_EXCEEDS_REMAINING";
+
+    /// <summary>
     /// Terminal defterinde bu komut için işlem YOK — <b>kanıtlandı</b> (fiş okundu, ödeme sayacı
     /// kıpırdamadı). Yalnız gerçek okumayla verilir; çıkarımla değil.
     /// <b><c>paymentInvoked</c> burada <c>true</c>'dur</b>: `FP3_Payment` çağrılmıştı, cihazda

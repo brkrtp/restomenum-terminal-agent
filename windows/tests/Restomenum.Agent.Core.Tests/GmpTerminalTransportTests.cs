@@ -71,9 +71,11 @@ public class GmpTerminalTransportTests
     }
 
     private static SaleRequest Req(long amount = 3000, int paymentType = GmpPaymentTypes.Card,
-        IReadOnlyList<FiscalLine>? lines = null) =>
-        new("c1", "p1", "t1", amount, "TRY", 2, "prov",
-            lines ?? new[] { new FiscalLine("prod1", "Kahve", 1, amount, 20m, DepartmentNo: 1) }, paymentType);
+        IReadOnlyList<FiscalLine>? lines = null, string? oturum = null, long? satisToplam = null,
+        string komut = "c1") =>
+        new(komut, "p1", "t1", amount, "TRY", 2, "prov",
+            lines ?? new[] { new FiscalLine("prod1", "Kahve", 1, amount, 20m, DepartmentNo: 1) },
+            paymentType, oturum, satisToplam);
 
     /// <summary>Bellek-içi görüntü deposu. Gerçekte <see cref="CommandStore"/> (disk) kullanılır —
     /// süreç kart penceresinde ölürse görüntünün hayatta kalması şart.</summary>
@@ -84,12 +86,21 @@ public class GmpTerminalTransportTests
             => _d[commandId] = (total, paid, count);
         public (long TotalMinor, long PaidMinor, int PaymentCount)? ReadSnapshot(string commandId)
             => _d.TryGetValue(commandId, out var v) ? v : null;
+
+        /// <summary>Açık fiş ↔ satış oturumu bağı (gerçekte diskte, testte bellekte).</summary>
+        private readonly Dictionary<string, string> _bag = new();
+        public void BindOpenTicket(string terminalId, string saleSessionId, long? now = null)
+            => _bag[terminalId] = saleSessionId;
+        public string? ReadOpenTicketBinding(string terminalId)
+            => _bag.TryGetValue(terminalId, out var v) ? v : null;
+        public void ClearOpenTicketBinding(string terminalId) => _bag.Remove(terminalId);
     }
 
-    private static (GmpTerminalTransport, FakeGmp, object?) Kur()
+    private static (GmpTerminalTransport, FakeGmp, FakeSnapshots) Kur()
     {
         var g = new FakeGmp();
-        return (new GmpTerminalTransport(g, new FakeSnapshots()), g, null);
+        var snap = new FakeSnapshots();
+        return (new GmpTerminalTransport(g, snap), g, snap);
     }
 
     // ── FAIL-CLOSED: terminale HİÇ dokunulmaz ────────────────────────────────
@@ -608,5 +619,133 @@ public class GmpTerminalTransportTests
 
         Assert.DoesNotContain("VoidAll", g.Calls);
         Assert.Equal(RestomenumReasons.TicketAlreadyOpen, r.Reason);
+    }
+
+    // ── W10: KISMI TAHSILAT — AYNI SATISIN ACIK FISINE DEVAM ────────────────────
+
+    [Fact]
+    public async Task Ayni_satisin_acik_fisine_KALEM_EKLENMEDEN_odeme_eklenir()
+    {
+        // Turkiye'de kismi odeme NORMAL: 990'lik adisyona once 500, sonra 490.
+        // ← CIVI: ikinci odemede `ItemSale` YENIDEN cagrilirsa fis toplami 990'dan 1980'e cikar
+        // ve bu geri alinamaz bir mali kayittir. Devam yolunda yalniz `Payment` cagrilir.
+        var (t, g, snap) = Kur();
+        snap.BindOpenTicket("t1", "oturum-A");                    // ilk kismi odemeden kalan bag
+        g.StartSequence.Enqueue(GmpCodes.AlreadyDone);            // cihazda acik fis var
+        g.Ticket = new GmpTicket(990, 500, 1, GmpPaymentTypes.Cash);
+        g.AfterPayment = new GmpTicket(990, 990, 2, GmpPaymentTypes.Cash);
+
+        var r = await t.SaleAsync(Req(amount: 490, paymentType: GmpPaymentTypes.Cash,
+            oturum: "oturum-A", satisToplam: 990));
+
+        Assert.Equal(TransportOutcome.Approved, r.Outcome);
+        Assert.DoesNotContain("ItemSale", g.Calls);               // ← CIVI
+        Assert.DoesNotContain("TicketHeader", g.Calls);
+        Assert.DoesNotContain("VoidAll", g.Calls);                // bayat-fis yolu HIC calismadi
+        Assert.Equal(1, g.Calls.Count(c => c == "Payment"));
+    }
+
+    [Fact]
+    public async Task Devam_yolunda_TAM_odemede_fis_kapanir_ve_bag_silinir()
+    {
+        // Bag birakilsaydi bir sonraki satis "ayni satisin fisi" sanip KAPANMIS bir fise odeme
+        // eklemeye calisirdi.
+        var (t, g, snap) = Kur();
+        snap.BindOpenTicket("t1", "oturum-A");
+        g.StartSequence.Enqueue(GmpCodes.AlreadyDone);
+        g.Ticket = new GmpTicket(990, 500, 1, GmpPaymentTypes.Cash);
+        g.AfterPayment = new GmpTicket(990, 990, 2, GmpPaymentTypes.Cash);   // tam odendi
+
+        await t.SaleAsync(Req(amount: 490, paymentType: GmpPaymentTypes.Cash,
+            oturum: "oturum-A", satisToplam: 990));
+
+        Assert.Contains("PrintMF", g.Calls);
+        Assert.Contains("Close", g.Calls);
+        Assert.Null(snap.ReadOpenTicketBinding("t1"));            // ← CIVI
+    }
+
+    [Fact]
+    public async Task Kismi_odemede_bag_YAZILIR()
+    {
+        // Fis acik kaldi: sahibini diske yaz ki ajan yeniden baslasa bile kalan tahsilat AYNI
+        // fise eklenebilsin.
+        var (t, g, snap) = Kur();
+        g.AfterPayment = new GmpTicket(990, 500, 1, GmpPaymentTypes.Cash);   // kismi
+
+        await t.SaleAsync(Req(amount: 500, paymentType: GmpPaymentTypes.Cash,
+            oturum: "oturum-A", satisToplam: 990));
+
+        Assert.Equal("oturum-A", snap.ReadOpenTicketBinding("t1"));
+        Assert.DoesNotContain("Close", g.Calls);                  // kismi odemede fis KAPANMAZ
+    }
+
+    [Fact]
+    public async Task Fis_toplami_satis_toplamiyla_uyusmuyorsa_DEVAM_EDILMEZ()
+    {
+        // Kasiyer kismi odemeden sonra kalem eklemis/silmis. Devam etmek fise yanlis tutarda
+        // odeme yazmaktir. ← CIVI: odeme HIC baslamaz.
+        var (t, g, snap) = Kur();
+        snap.BindOpenTicket("t1", "oturum-A");
+        g.StartSequence.Enqueue(GmpCodes.AlreadyDone);
+        g.Ticket = new GmpTicket(1490, 500, 1, GmpPaymentTypes.Cash);   // fis 1490, satis 990
+
+        var r = await t.SaleAsync(Req(amount: 490, paymentType: GmpPaymentTypes.Cash,
+            oturum: "oturum-A", satisToplam: 990));
+
+        Assert.Equal(TransportOutcome.Declined, r.Outcome);
+        Assert.Equal(RestomenumReasons.TicketSaleMismatch, r.Reason);
+        Assert.Equal("PaymentRestriction", r.ErrorCondition);
+        Assert.False(r.PaymentInvoked);
+        Assert.DoesNotContain("Payment", g.Calls);                // ← CIVI
+        Assert.DoesNotContain("VoidAll", g.Calls);                // yanlis fis SILINMEZ de
+    }
+
+    [Fact]
+    public async Task Istenen_tutar_kalani_asiyorsa_terminale_GIDILMEZ()
+    {
+        var (t, g, snap) = Kur();
+        snap.BindOpenTicket("t1", "oturum-A");
+        g.StartSequence.Enqueue(GmpCodes.AlreadyDone);
+        g.Ticket = new GmpTicket(990, 500, 1, GmpPaymentTypes.Cash);   // kalan 490
+
+        var r = await t.SaleAsync(Req(amount: 700, paymentType: GmpPaymentTypes.Cash,
+            oturum: "oturum-A", satisToplam: 990));
+
+        Assert.Equal(RestomenumReasons.AmountExceedsRemaining, r.Reason);
+        Assert.DoesNotContain("Payment", g.Calls);
+    }
+
+    [Fact]
+    public async Task FARKLI_satisin_odemeli_fisine_DOKUNULMAZ()
+    {
+        // Dunden kalmis, uzerinde para olan bir fis baska bir adisyon icin SILINMEZ.
+        var (t, g, snap) = Kur();
+        snap.BindOpenTicket("t1", "oturum-A");
+        g.StartSequence.Enqueue(GmpCodes.AlreadyDone);
+        g.Ticket = new GmpTicket(990, 500, 1, GmpPaymentTypes.Cash);
+
+        var r = await t.SaleAsync(Req(amount: 500, paymentType: GmpPaymentTypes.Cash,
+            oturum: "oturum-B", satisToplam: 990));       // BASKA oturum
+
+        Assert.Equal(RestomenumReasons.TicketAlreadyOpen, r.Reason);
+        Assert.DoesNotContain("VoidAll", g.Calls);        // ← CIVI: para ustundeki fis silinmez
+        Assert.DoesNotContain("Payment", g.Calls);
+    }
+
+    [Fact]
+    public async Task Oturum_kimligi_YOKSA_devam_yolu_KAPALI()
+    {
+        // Eski platform alani gondermiyor. Emin olmadan fise odeme eklemek yerine bayat-fis
+        // mantigina duseriz (fail-safe).
+        var (t, g, snap) = Kur();
+        snap.BindOpenTicket("t1", "oturum-A");
+        g.StartSequence.Enqueue(GmpCodes.AlreadyDone);
+        g.Ticket = new GmpTicket(990, 500, 1, GmpPaymentTypes.Cash);
+
+        var r = await t.SaleAsync(Req(amount: 490, paymentType: GmpPaymentTypes.Cash,
+            oturum: null, satisToplam: 990));
+
+        Assert.Equal(RestomenumReasons.TicketAlreadyOpen, r.Reason);
+        Assert.DoesNotContain("Payment", g.Calls);
     }
 }

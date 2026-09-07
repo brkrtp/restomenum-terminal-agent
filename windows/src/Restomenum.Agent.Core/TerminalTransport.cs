@@ -30,7 +30,22 @@ public sealed record SaleRequest(
     /// ayrılır — banka bacağı yoksa <c>VoidAll</c> doğrudan temizler, varsa ters işlem gerekir
     /// (§8.3d). Yani platformun ne istediği ile fişte ne bulunduğu farklı sorulardır.</para>
     /// </summary>
-    int PaymentType = GmpPaymentTypes.Card);
+    int PaymentType = GmpPaymentTypes.Card,
+
+    /// <summary>
+    /// Satış OTURUM kimliği — açık fişin BU satışa mı ait olduğunu belirler (kısmi tahsilat).
+    /// <c>null</c> ise devam yolu KAPALIDIR (eski platform): açık fiş farklı satış sayılır.
+    /// Bkz. <see cref="SaleToPoiRequest.SaleSessionId"/>.
+    /// </summary>
+    string? SaleSessionId = null,
+
+    /// <summary>
+    /// Satışın (adisyonun) TOPLAM tutarı — platformun <c>SaleTotalAmountMinor</c>'ı.
+    /// Kısmi tahsilatta açık fişe devam etmeden önce cihazdaki fiş toplamıyla KARŞILAŞTIRILIR:
+    /// eşit değilse kasiyer kısmi ödemeden sonra kalem eklemiş/silmiş demektir ve devam edilirse
+    /// fişe yanlış tutarda ödeme eklenir. <c>null</c> ise doğrulanamaz → devam yolu kapalı.
+    /// </summary>
+    long? SaleTotalMinor = null);
 
 /// <summary>
 /// Mali fişe yazılacak tek satır (§20.2). Departman numarası <b>burada yok</b>: o eşleme cihaz

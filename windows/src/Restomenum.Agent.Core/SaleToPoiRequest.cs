@@ -19,7 +19,21 @@ public sealed record SaleToPoiRequest(
     /// PaymentId/ServiceID üzerinden).</summary>
     string SaleReferenceId,
     /// <summary>İsteğin zaman damgası (ISO-8601 UTC).</summary>
-    DateTimeOffset TimeStamp);
+    DateTimeOffset TimeStamp,
+
+    /// <summary>
+    /// Satış OTURUM kimliği (<c>SaleToPOIRequest.Restomenum.saleSessionId</c>, platformda
+    /// <c>sale.uuid</c>). <b>Kısmi tahsilatta açık fişin kime ait olduğunu belirleyen tek anahtar.</b>
+    ///
+    /// <para><b>Neden <c>SaleReferenceID</c> DEĞİL:</b> platform onu <c>docNo ?? sale.id</c>'den
+    /// üretiyor ve <c>sale.id</c> masa slug'ı — "masa-1" bugün de yarın da aynı. O anahtarla dünden
+    /// kalmış bayat bir fiş "aynı satış" sanılır ve üzerine ödeme eklenirdi.</para>
+    ///
+    /// <para><c>null</c> ise (eski platform) <b>devam yolu KAPALIDIR</b>: açık fiş farklı satış
+    /// sayılır ve bayat-fiş mantığı işler. Emin olmadığımızda fişe dokunmamak, yanlış fişe ödeme
+    /// eklemekten güvenlidir.</para>
+    /// </summary>
+    string? SaleSessionId = null);
 
 /// <summary>SaleToPOIRequest reddi sebepleri — her biri farklı <c>SaleToPOIResponse</c> davranışına eşlenir.</summary>
 public enum SaleToPoiRejectReason

@@ -76,9 +76,16 @@ public static partial class SaleToPoiRequestParser
             if (saleRef is null)
                 return Red(SaleToPoiRejectReason.Malformed, "SaleReferenceID yok");
 
+            // nexo-dışı ad alanı (§22.8), yanıttakiyle simetrik. Alan YOKSA null kalır ve
+            // kısmi-tahsilat devam yolu kapanır — sessizce "aynı satış" varsaymayız.
+            string? saleSessionId = null;
+            if (env.TryGetProperty("Restomenum", out var ek) && ek.ValueKind == JsonValueKind.Object)
+                saleSessionId = Str(ek, "saleSessionId");
+
             return new SaleToPoiParseResult.Ok(new SaleToPoiRequest(
                 ServiceId: serviceId, SaleId: saleId, PoiId: poiId,
-                PaymentId: paymentId, SaleReferenceId: saleRef, TimeStamp: ts));
+                PaymentId: paymentId, SaleReferenceId: saleRef, TimeStamp: ts,
+                SaleSessionId: string.IsNullOrWhiteSpace(saleSessionId) ? null : saleSessionId));
         }
     }
 

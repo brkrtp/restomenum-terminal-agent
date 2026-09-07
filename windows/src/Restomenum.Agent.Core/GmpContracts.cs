@@ -11,6 +11,21 @@ public interface ITicketSnapshotStore
 {
     void SaveSnapshot(string commandId, long totalMinor, long paidMinor, int paymentCount, long? now = null);
     (long TotalMinor, long PaidMinor, int PaymentCount)? ReadSnapshot(string commandId);
+
+    /// <summary>
+    /// Cihazda AÇIK bırakılan fişin hangi satış oturumuna ait olduğunu yazar.
+    ///
+    /// <para><b>Neden diskte:</b> kısmi ödemeden sonra ajan yeniden başlarsa bağ bellekte kalsaydı
+    /// kaybolurdu ve kalan tahsilat yapılamazdı — fiş açık, kimse sahiplenemiyor. Bu bağ olmadan
+    /// "açık fiş benim satışıma mı ait" sorusu cevaplanamaz ve tek güvenli cevap "hayır"dır.</para>
+    /// </summary>
+    void BindOpenTicket(string terminalId, string saleSessionId, long? now = null);
+
+    /// <summary>Açık fişin sahibi satış oturumu; bağ yoksa <c>null</c>.</summary>
+    string? ReadOpenTicketBinding(string terminalId);
+
+    /// <summary>Bağı siler — fiş kapandığında (tam ödeme) ya da iptal edildiğinde.</summary>
+    void ClearOpenTicketBinding(string terminalId);
 }
 
 /// <summary>

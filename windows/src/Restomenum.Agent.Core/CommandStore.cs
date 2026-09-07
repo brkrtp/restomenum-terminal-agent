@@ -107,6 +107,17 @@ public sealed class CommandStore : ITicketSnapshotStore, IDisposable
                 )
                 """;
             cmd.ExecuteNonQuery();
+            // Açık fiş ↔ satış oturumu bağı. Terminal başına TEK satır: cihaz tek oturumlu,
+            // aynı anda birden çok açık fiş olamaz.
+            cmd.CommandText = """
+                CREATE TABLE IF NOT EXISTS open_ticket (
+                    terminal_id      TEXT PRIMARY KEY,
+                    sale_session_id  TEXT NOT NULL,
+                    updated_at       INTEGER NOT NULL
+                )
+                """;
+            cmd.ExecuteNonQuery();
+
             // ── ŞEMA GEÇİŞİ: `kind` sütunu (genişlet → geçir → daralt) ─────────────────
             // Sütun sonradan eklendi ve varsayılanı 'sale'. Böylece ESKİ kayıtlar bozulmadan
             // satış sayılmaya devam eder; yeni türler (void, status) kendi adlarıyla yazılır.
@@ -277,6 +288,45 @@ public sealed class CommandStore : ITicketSnapshotStore, IDisposable
             using var r = cmd.ExecuteReader();
             if (!r.Read()) return null;
             return (r.GetInt64(0), r.GetInt64(1), r.GetInt32(2));
+        }
+    }
+
+    public void BindOpenTicket(string terminalId, string saleSessionId, long? now = null)
+    {
+        lock (_gate)
+        {
+            using var cmd = _conn.CreateCommand();
+            cmd.CommandText = """
+                INSERT INTO open_ticket (terminal_id, sale_session_id, updated_at)
+                VALUES ($t, $s, $now)
+                ON CONFLICT(terminal_id) DO UPDATE SET sale_session_id = $s, updated_at = $now
+                """;
+            cmd.Parameters.AddWithValue("$t", terminalId);
+            cmd.Parameters.AddWithValue("$s", saleSessionId);
+            cmd.Parameters.AddWithValue("$now", now ?? DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+            cmd.ExecuteNonQuery();
+        }
+    }
+
+    public string? ReadOpenTicketBinding(string terminalId)
+    {
+        lock (_gate)
+        {
+            using var cmd = _conn.CreateCommand();
+            cmd.CommandText = "SELECT sale_session_id FROM open_ticket WHERE terminal_id = $t";
+            cmd.Parameters.AddWithValue("$t", terminalId);
+            return cmd.ExecuteScalar() as string;
+        }
+    }
+
+    public void ClearOpenTicketBinding(string terminalId)
+    {
+        lock (_gate)
+        {
+            using var cmd = _conn.CreateCommand();
+            cmd.CommandText = "DELETE FROM open_ticket WHERE terminal_id = $t";
+            cmd.Parameters.AddWithValue("$t", terminalId);
+            cmd.ExecuteNonQuery();
         }
     }
 

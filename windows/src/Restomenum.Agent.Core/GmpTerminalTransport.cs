@@ -49,6 +49,13 @@ public sealed class GmpTerminalTransport : ITerminalTransport
     public PaymentModel Model => PaymentModel.Incremental;
 
     /// <summary>
+    /// Son satistan ogrenilen terminal kimligi. Iptal istegi terminal kimligi TASIMIYOR (nexo
+    /// zarfindaki POIID kasanin adlandirmasi, bizim depo anahtarimiz degil); bagi silmek icin
+    /// satista gordugumuz degeri kullaniriz. Bos ise silinecek bag da yoktur.
+    /// </summary>
+    private string _terminalId = "";
+
+    /// <summary>
     /// Bir ödeme alır. Fiş yoksa açar, kalemleri yazar, ödemeyi gönderir; tutar tamamlandıysa
     /// basar ve kapatır.
     /// </summary>
@@ -70,36 +77,70 @@ public sealed class GmpTerminalTransport : ITerminalTransport
             return Hata(TransportOutcome.Declined, $"PRODUCT_UNMAPPED:{eksik.ProductId}", "PaymentRestriction",
                 RestomenumReasons.ProductUnmapped);
 
+        _terminalId = request.TerminalId;
+
         string? bilgi = null;
+        var devam = false;                            // AYNI satisin acik fisine odeme ekleme
         var r = _gmp.Start(out var handle);
 
         if (r.Code == GmpCodes.AlreadyDone)
         {
-            // ÖNCEKİ denemeden kalan açık fiş. Bu denemede ödeme HİÇ başlamadı; asıl soru
-            // "o fişte para var mı".
-            var engel = BayatFisiTemizle(handle, request.CommandId);
-            if (engel is not null) return engel;      // temizlenemedi → dokunulmadı, kesin ret
-            bilgi = RestomenumReasons.StaleTicketCleared;
-            r = _gmp.Start(out handle);               // temizlendi → fişi ŞİMDİ aç
+            // Cihazda acik fis var. TEK soru: bu fis BU satisa mi ait?
+            //
+            // Ayrimi `saleSessionId` yapar (platformda `sale.uuid`). `SaleReferenceID` KULLANILMAZ:
+            // platform onu `docNo ?? sale.id`'den uretiyor ve `sale.id` masa slug'i - "masa-1"
+            // bugun de yarin da ayni. O anahtarla DUNDEN kalmis bayat bir fis "ayni satis" sanilir
+            // ve uzerine odeme eklenirdi.
+            var bagli = _snapshots?.ReadOpenTicketBinding(request.TerminalId);
+            var ayniSatis = request.SaleSessionId is not null && bagli is not null
+                && string.Equals(bagli, request.SaleSessionId, StringComparison.Ordinal);
+
+            if (ayniSatis)
+            {
+                var engel = DevamDogrula(handle, request);
+                if (engel is not null) return engel;
+                devam = true;
+                _handle = handle;
+                _log("[gmp] ayni satisin acik fisine devam ediliyor", new
+                {
+                    request.CommandId, saleSessionId = request.SaleSessionId,
+                });
+            }
+            else
+            {
+                var engel = BayatFisiTemizle(handle, request.CommandId);
+                if (engel is not null) return engel;  // temizlenemedi -> dokunulmadi, kesin ret
+                bilgi = RestomenumReasons.StaleTicketCleared;
+                r = _gmp.Start(out handle);           // temizlendi -> fisi SIMDI ac
+            }
         }
 
-        if (!r.Ok) return Cevir(r, "Start", GmpStep.BeforePayment);
-        _handle = handle;
-
-        // GmpTicketTypes.Sale (1). Burada 0 (`TasnifDisi`) yazıyordu ve **fiş hiç açılamıyordu**:
-        // canlı terminalde `TicketHeader(0)` → 0x0008 EKÜ_PROBLEM, `TicketHeader(1)` → 0x0000 OK.
-        r = _gmp.TicketHeader(handle, GmpTicketTypes.Sale);
-        if (!r.Ok) return TemizleVeCevir(handle, r, "TicketHeader", GmpStep.BeforePayment);
-
-        // Fişi GÜVENİLİR okuyabilmek için bayraklar burada set edilir; tek başına `GetTicket`
-        // ödeme detayını eksik döndürebilir ve kurtarma o alana dayanır.
-        r = _gmp.OptionFlags(handle, GmpEchoFlags.Reload);
-        if (!r.Ok) return TemizleVeCevir(handle, r, "OptionFlags", GmpStep.BeforePayment);
-
-        foreach (var l in request.FiscalLines)
+        if (!devam)
         {
-            r = _gmp.ItemSale(handle, new GmpItem(l.Name, l.UnitPriceMinor, l.Quantity, l.DepartmentNo), out _);
-            if (!r.Ok) return TemizleVeCevir(handle, r, "ItemSale", GmpStep.BeforePayment);
+            if (!r.Ok) return Cevir(r, "Start", GmpStep.BeforePayment);
+            _handle = handle;
+        }
+
+        // ⚠️ BASLIK VE KALEMLER YALNIZ YENI FISTE. Devam yolunda kalemler fiste ZATEN var;
+        // yeniden `ItemSale` cagirmak fis toplamini iki katina cikarir (990 -> 1980) ve bu
+        // geri alinamaz bir mali kayit olurdu.
+        if (!devam)
+        {
+            // GmpTicketTypes.Sale (1). Burada 0 (`TasnifDisi`) yazıyordu ve **fiş hiç açılamıyordu**:
+            // canlı terminalde `TicketHeader(0)` → 0x0008 EKÜ_PROBLEM, `TicketHeader(1)` → 0x0000 OK.
+            r = _gmp.TicketHeader(handle, GmpTicketTypes.Sale);
+            if (!r.Ok) return TemizleVeCevir(handle, r, "TicketHeader", GmpStep.BeforePayment);
+
+            // Fişi GÜVENİLİR okuyabilmek için bayraklar burada set edilir; tek başına `GetTicket`
+            // ödeme detayını eksik döndürebilir ve kurtarma o alana dayanır.
+            r = _gmp.OptionFlags(handle, GmpEchoFlags.Reload);
+            if (!r.Ok) return TemizleVeCevir(handle, r, "OptionFlags", GmpStep.BeforePayment);
+
+            foreach (var l in request.FiscalLines)
+            {
+                r = _gmp.ItemSale(handle, new GmpItem(l.Name, l.UnitPriceMinor, l.Quantity, l.DepartmentNo), out _);
+                if (!r.Ok) return TemizleVeCevir(handle, r, "ItemSale", GmpStep.BeforePayment);
+            }
         }
 
         // ── ANLIK GÖRÜNTÜ: belirsizlik çözümünün tek dayanağı ────────────────────
@@ -134,6 +175,15 @@ public sealed class GmpTerminalTransport : ITerminalTransport
         {
             var kapanis = Kapat(handle);
             if (kapanis is not null) return kapanis;
+            // Fis kapandi: bag artik yok. Birakilsaydi bir sonraki satis "ayni satisin fisi" sanip
+            // KAPANMIS bir fise odeme eklemeye calisirdi.
+            _snapshots?.ClearOpenTicketBinding(request.TerminalId);
+        }
+        else if (request.SaleSessionId is string oturum)
+        {
+            // Fis ACIK kaldi (kismi odeme - Turkiye'de NORMAL aradurum). Sahibini diske yaz ki
+            // kalan tahsilat, ajan yeniden baslasa bile AYNI fise eklenebilsin.
+            _snapshots?.BindOpenTicket(request.TerminalId, oturum);
         }
 
         return new TransportResult(
@@ -143,6 +193,53 @@ public sealed class GmpTerminalTransport : ITerminalTransport
             CardLast4: tk.CardLast4,
             ProviderResultCode: pr.ToString(),
             Info: bilgi);
+    }
+
+    /// <summary>
+    /// Acik fise devam etmeden onceki guvenlik kontrolleri. <c>null</c> = devam edilebilir.
+    ///
+    /// <para><b>Neden sart:</b> bag "bu fis bu satisa ait" der ama fisin ICERIGININ hala o satisla
+    /// ayni oldugunu SOYLEMEZ. Kasiyer kismi odemeden sonra kalem eklemis/silmisse, devam etmek
+    /// fise yanlis tutarda odeme yazmaktir - mali kayit bozulur ve geri alinamaz.</para>
+    /// </summary>
+    private TransportResult? DevamDogrula(ulong handle, SaleRequest request)
+    {
+        var of = _gmp.OptionFlags(handle, GmpEchoFlags.Reload);
+        var gt = _gmp.GetTicket(handle, out var fis);
+        if (!of.Ok || !gt.Ok)
+            return Hata(TransportOutcome.Declined, $"TICKET_READ_FAILED:{of}/{gt}",
+                "PaymentRestriction", RestomenumReasons.TicketAlreadyOpen);
+
+        // Toplam dogrulamasi. Karsilastirma degeri platformun `SaleTotalAmountMinor`'i - kalem
+        // toplamini burada YENIDEN hesaplamiyoruz: iki ayri hesap iki ayri hata kaynagi olurdu.
+        if (request.SaleTotalMinor is not long satisToplam)
+            return Hata(TransportOutcome.Declined, "SALE_TOTAL_UNKNOWN",
+                "PaymentRestriction", RestomenumReasons.TicketSaleMismatch);
+
+        if (fis.TotalAmountMinor != satisToplam)
+        {
+            _log("[gmp] fis toplami satis toplamiyla UYUSMUYOR - devam edilmiyor", new
+            {
+                request.CommandId, fisToplam = fis.TotalAmountMinor, satisToplam,
+            });
+            return Hata(TransportOutcome.Declined,
+                $"TICKET_SALE_MISMATCH:fis={fis.TotalAmountMinor},satis={satisToplam}",
+                "PaymentRestriction", RestomenumReasons.TicketSaleMismatch);
+        }
+
+        var kalan = fis.RemainingMinor;
+        if (request.AmountMinor > kalan)
+        {
+            _log("[gmp] istenen tutar fisin kalanini asiyor - terminale gidilmiyor", new
+            {
+                request.CommandId, istenen = request.AmountMinor, kalan,
+            });
+            return Hata(TransportOutcome.Declined,
+                $"AMOUNT_EXCEEDS_REMAINING:istenen={request.AmountMinor},kalan={kalan}",
+                "PaymentRestriction", RestomenumReasons.AmountExceedsRemaining);
+        }
+
+        return null;
     }
 
     /// <summary>
@@ -448,6 +545,7 @@ public sealed class GmpTerminalTransport : ITerminalTransport
         {
             _gmp.Close(h);
             lock (_gate) _handle = 0;
+            _snapshots?.ClearOpenTicketBinding(_terminalId);   // fis gitti, bag da gitmeli
             return new TransportResult(TransportOutcome.Approved,
                 ApprovedAmountMinor: iptalTutar > 0 ? iptalTutar : null,
                 Info: RestomenumReasons.TicketCancelled);
@@ -491,6 +589,7 @@ public sealed class GmpTerminalTransport : ITerminalTransport
 
         _gmp.Close(h);
         lock (_gate) _handle = 0;
+        _snapshots?.ClearOpenTicketBinding(_terminalId);
         return new TransportResult(TransportOutcome.Approved,
             ApprovedAmountMinor: iptalTutar > 0 ? iptalTutar : null,
             Rrn: tk.Rrn, Info: RestomenumReasons.TicketCancelled);
