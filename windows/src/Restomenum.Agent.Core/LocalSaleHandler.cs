@@ -586,6 +586,8 @@ public sealed class LocalSaleHandler
                     {
                         e.PaymentId, tur = e.Status, outcome = res.Outcome.ToString(), res.StatusCode,
                         state = res.State ?? "(yok)",
+                        replayed = res.Replayed?.ToString() ?? "(yok)",
+                        zatenYazilan = res.AlreadyPosted?.ToString() ?? "(yok)",
                     });
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
@@ -616,6 +618,8 @@ public sealed class LocalSaleHandler
                 {
                     paymentId, outcome = res.Outcome.ToString(), res.StatusCode,
                     state = res.State ?? "(yok)", reason = res.Reason ?? "(yok)",
+                    // "yazıldı" ile "zaten yazılıydı" ayrımı: replay fırtınası ancak böyle görülür.
+                    replayed = res.Replayed?.ToString() ?? "(yok)",
                 });
         }
         catch (Exception e) when (e is not OperationCanceledException)

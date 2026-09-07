@@ -26,7 +26,16 @@ public enum NotifyOutcome
 }
 
 /// <summary>Bildirim sonucu — outbox'ın "onayla / tekrar dene / alarm" kararını verir.</summary>
-public sealed record NotifyResult(NotifyOutcome Outcome, string? State, string? Reason, int StatusCode, string Message)
+/// <param name="Replayed">
+/// Platform bu bildirimi <b>tekrar</b> saydı mı (aynı sonuç daha önce yazılmıştı)? <c>null</c> =
+/// alan gelmedi. Teşhiste "yazıldı" ile "zaten yazılıydı"yı ayırır — ikisi de başarı ama replay
+/// fırtınası ancak bu alanla görülür.
+/// </param>
+/// <param name="AlreadyPosted">
+/// Fiş kapanış bildiriminde: daha önce yazılmış satır sayısı. <c>null</c> = alan gelmedi.
+/// </param>
+public sealed record NotifyResult(NotifyOutcome Outcome, string? State, string? Reason, int StatusCode,
+    string Message, bool? Replayed = null, int? AlreadyPosted = null)
 {
     /// <summary>Outbox kaydı silinmeli mi? Kesin (yazıldı/bayat/çelişki/red/notfound) → EVET; ağ/hız → HAYIR.</summary>
     public bool IsFinal => Outcome is not (NotifyOutcome.RateLimited or NotifyOutcome.NetworkError);

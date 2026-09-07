@@ -11,7 +11,8 @@ public static class ResultNotifyParser
     public static NotifyResult Parse(int statusCode, string body)
     {
         string? state = null, reason = null, message = null;
-        bool? recorded = null;
+        bool? recorded = null, replayed = null;
+        int? alreadyPosted = null;
         try
         {
             using var doc = JsonDocument.Parse(body);
@@ -27,6 +28,14 @@ public static class ResultNotifyParser
                     state = st.GetString();
                 if (data.TryGetProperty("reason", out var rs) && rs.ValueKind == JsonValueKind.String)
                     reason = rs.GetString();
+                // `replayed` / `alreadyPosted`: KARAR vermiyoruz, yalnız teşhise taşıyoruz.
+                // Alan gelmezse `null` kalır — "gelmedi" ile "false" ayrı beyanlar.
+                if (data.TryGetProperty("replayed", out var rp) &&
+                    (rp.ValueKind == JsonValueKind.True || rp.ValueKind == JsonValueKind.False))
+                    replayed = rp.GetBoolean();
+                if (data.TryGetProperty("alreadyPosted", out var ap) && ap.ValueKind == JsonValueKind.Number
+                    && ap.TryGetInt32(out var apv))
+                    alreadyPosted = apv;
             }
         }
         catch (JsonException) { /* gövde JSON değil — durum koduna göre karar verilir */ }
@@ -42,6 +51,6 @@ public static class ResultNotifyParser
             _ => NotifyOutcome.NetworkError,
         };
 
-        return new NotifyResult(outcome, state, reason, statusCode, message ?? "");
+        return new NotifyResult(outcome, state, reason, statusCode, message ?? "", replayed, alreadyPosted);
     }
 }

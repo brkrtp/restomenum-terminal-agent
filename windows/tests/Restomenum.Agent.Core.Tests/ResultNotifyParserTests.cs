@@ -85,4 +85,39 @@ public class ResultNotifyParserTests
         Assert.Equal(NotifyOutcome.NetworkError, r.Outcome);
         Assert.False(r.IsFinal);
     }
+
+    // ── P26g: replayed / alreadyPosted — TEŞHİS alanları ────────────────────────
+
+    [Fact]
+    public void replayed_ve_alreadyPosted_ayristirilir()
+    {
+        var r = ResultNotifyParser.Parse(200,
+            """{"success":true,"data":{"recorded":true,"state":"APPROVED","replayed":true,"alreadyPosted":2}}""");
+        Assert.Equal(NotifyOutcome.Recorded, r.Outcome);
+        Assert.True(r.Replayed);
+        Assert.Equal(2, r.AlreadyPosted);
+    }
+
+    [Fact]
+    public void Alanlar_YOKSA_null_kalir_false_DEGIL()
+    {
+        // ← ÇİVİ: "alan gelmedi" ile "false" ayrı beyanlar. `false` yazsaydık, alanı hiç
+        // göndermeyen bir sürümü "tekrar değil" diye okur ve replay fırtınasını göremezdik.
+        var r = ResultNotifyParser.Parse(200, """{"success":true,"data":{"recorded":true,"state":"APPROVED"}}""");
+        Assert.Null(r.Replayed);
+        Assert.Null(r.AlreadyPosted);
+    }
+
+    [Fact]
+    public void Kurtarma_sonucu_stale_ile_reddedilirse_Superseded()
+    {
+        // Sahada ölçüldü (2026-09-07 21:03): UNKNOWN denemeye gelen yoklama sonucu
+        // `recorded:false` + `reason:"stale"` ile düştü. Sınıf `Superseded`.
+        var r = ResultNotifyParser.Parse(200,
+            """{"success":true,"data":{"recorded":false,"state":"UNKNOWN","reason":"stale"}}""");
+        Assert.Equal(NotifyOutcome.Superseded, r.Outcome);
+        Assert.Equal("stale", r.Reason);
+        Assert.True(r.IsFinal);       // outbox'ta bekletilmez
+        Assert.False(r.IsProblem);    // alarm değil — bilgi
+    }
 }
