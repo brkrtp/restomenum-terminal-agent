@@ -38,6 +38,15 @@ public sealed class LocalSaleHandler
     /// </summary>
     private readonly SemaphoreSlim _islemKilidi = new(1, 1);
 
+    /// <summary>
+    /// Aynı anda TEK kurtarma turu. Açılış kurtarması ile periyodik kurtarma (W31) aynı metodu
+    /// çağırıyor ve uzun bir kuyrukta ÜST ÜSTE BİNİYORLARDI — canlıda görüldü (2026-09-07 20:59):
+    /// açılış turu 7 komutu ~31 sn'de bir yoklarken 60 sn'lik periyodik tur başa dönüp aynı
+    /// komutları yeniden sordu. Bozulma yok (her yoklama terminal kilidini alıyor) ama cihaza
+    /// gereksiz tur bindiriyor ve kuyruk uzadıkça turlar üst üste yığılırdı.
+    /// </summary>
+    private readonly SemaphoreSlim _kurtarmaKilidi = new(1, 1);
+
     /// <summary>Açılışta yoklanacak <c>UNKNOWN</c> kayıtların yaş sınırı (saat).</summary>
     private const int UnknownKurtarmaSaati = 24;
 
@@ -76,6 +85,15 @@ public sealed class LocalSaleHandler
     /// <c>AgentSession.KurtarAsync</c>'ın yerini alır; aynı orkestratör+outbox mantığını kullanır.</para>
     /// </summary>
     public async Task RecoverPendingAsync(CancellationToken ct = default)
+    {
+        // Tur zaten koşuyorsa BEKLEME, ATLA: bekleseydik turlar sıraya girip aynı işi arka arkaya
+        // tekrarlardı. Atlamak güvenli — koşan tur zaten aynı listeyi işliyor.
+        if (!await _kurtarmaKilidi.WaitAsync(0, ct)) return;
+        try { await KurtarmaTuruAsync(ct); }
+        finally { _kurtarmaKilidi.Release(); }
+    }
+
+    private async Task KurtarmaTuruAsync(CancellationToken ct)
     {
         // 24 saat: kasanın deneme TTL'i. Ondan sonra kasa o ServiceID ile geri gelmez ve platform
         // denemeyi çoktan operatöre düşürmüştür; yoklamaya devam etmek yalnız açılışı geciktirir.

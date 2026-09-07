@@ -114,6 +114,32 @@ public class LocalSaleHandlerTests : IDisposable
     private static JsonElement Resp(string json) =>
         JsonDocument.Parse(json).RootElement.GetProperty("SaleToPOIResponse").GetProperty("PaymentResponse").GetProperty("Response");
 
+    // ── W31: KURTARMA TURLARI ÜST ÜSTE BİNMEZ ───────────────────────────────────
+
+    [Fact]
+    public async Task Ayni_anda_TEK_kurtarma_turu_kosar()
+    {
+        // ← ÇİVİ (canlıda görüldü, 2026-09-07 20:59): açılış kurtarması 7 komutu ~31 sn'de bir
+        // yoklarken 60 sn'lik periyodik tur başa dönüp AYNI komutları yeniden sordu. Bozulma yok
+        // ama cihaza gereksiz tur biniyor; kuyruk uzadıkça turlar yığılırdı.
+        _store.Save("svc-A", Pay, "term-01", _clock.ServerNow() + 600_000);
+        _store.Advance("svc-A", CommandState.RECEIVED, CommandState.SENT_TO_TERMINAL);
+
+        var sim = new SimulatorTransport { Delay = TimeSpan.FromMilliseconds(250) };
+        var orch = new AgentOrchestrator(_store, sim, _clock, RecoveryPolicy.Immediate);
+        var h = new LocalSaleHandler(new FakeAmounts { Result = new PaymentDetailResult.Ok(Detail()) },
+            orch, _store, new FakeResolver(), new FakePaymentMethods(),
+            new FakeNotifier(), _outbox, sim);
+
+        // İki tur AYNI ANDA: biri koşar, diğeri ATLAR (beklemez).
+        var t1 = h.RecoverPendingAsync();
+        var t2 = h.RecoverPendingAsync();
+        await Task.WhenAll(t1, t2);
+
+        // Terminale komut başına TEK yoklama gitti — iki tur çalışsaydı iki olurdu.
+        Assert.Equal(1, sim.ReadTicketCalls + sim.ProbeCalls);
+    }
+
     // ── W30: `info` KASAYA VE DEFTERE ULAŞMALI ──────────────────────────────────
 
     [Fact]
