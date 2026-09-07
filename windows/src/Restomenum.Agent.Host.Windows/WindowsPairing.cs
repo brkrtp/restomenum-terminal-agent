@@ -70,7 +70,24 @@ public static class WindowsPairing
         var nullOran = departments.Count(d => d.TaxRateBasisPoints is null);
         try
         {
-            var ok = client.ReportDepartmentsAsync(departments, info).GetAwaiter().GetResult();
+            // Kurulu ödeme uygulamaları (banka). OKUNAMAZSA alan HİÇ gönderilmez — platformdaki
+            // saklanan liste korunur. "Okuyamadım"ı "yok" diye bildirmek panelde çalışan bankaları
+            // sildirirdi; boş dizi ile okunamama farklı şeyler.
+            string? uygulamalar = null;
+            var appRc = gmp.GetPaymentApplicationsRaw(out var appJson, out var appToplam, out var appAlinan);
+            if (appRc.Ok)
+            {
+                uygulamalar = appJson;
+                log.LogInformation("kurulu ödeme uygulamaları okundu: toplam={Toplam} alınan={Alinan}",
+                    appToplam, appAlinan);
+            }
+            else
+            {
+                log.LogWarning("kurulu ödeme uygulamaları OKUNAMADI (rc={Rc}) — alan gönderilmiyor, " +
+                    "platformdaki liste korunuyor.", appRc.Code);
+            }
+
+            var ok = client.ReportDepartmentsAsync(departments, info, uygulamalar).GetAwaiter().GetResult();
             log.LogInformation("departman tablosu config kanalına bildirildi: {Adet} departman ({Null} oranı null), sonuç={Ok}",
                 departments.Count, nullOran, ok);
         }

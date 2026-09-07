@@ -86,8 +86,15 @@ public sealed class DeviceConfigClient
     }
 
     /// <summary>Cihazın departman tablosunu (yalnız EŞLİYKEN okunur) + kimliğini platforma bildirir.</summary>
+    /// <param name="paymentAppsJson">
+    /// Cihazdan okunan KURULU ödeme (banka) uygulamalarının ham JSON dizisi. <c>null</c> ise alan
+    /// gönderilmez ve platformdaki saklanan liste KORUNUR; boş dizi ise "kurulu uygulama yok"
+    /// beyanıdır. Ayrım önemli: okuyamadığımız bir durumu "yok" diye bildirmek, panelde çalışan
+    /// bankaları silerdi.
+    /// </param>
     public async Task<bool> ReportDepartmentsAsync(
-        IReadOnlyList<DeviceDepartment> departments, GmpDeviceInfo? deviceInfo, CancellationToken ct = default)
+        IReadOnlyList<DeviceDepartment> departments, GmpDeviceInfo? deviceInfo,
+        string? paymentAppsJson = null, CancellationToken ct = default)
     {
         try
         {
@@ -99,6 +106,10 @@ public sealed class DeviceConfigClient
                 departments = departments.Select(d => new { index = d.Index, name = d.Name, taxRateBasisPoints = d.TaxRateBasisPoints }),
                 deviceInfo = deviceInfo is null ? null : new { brand = deviceInfo.Brand, model = deviceInfo.Model, serial = deviceInfo.Serial, version = deviceInfo.Version },
                 capabilities = AgentCapabilities.Declared,
+                // Ham diziyi olduğu gibi gömüyoruz: alanları burada yeniden şekillendirmek,
+                // ölçtüğümüz veriyle gönderdiğimiz veri arasında ikinci bir yorum katmanı yaratırdı.
+                paymentApplications = paymentAppsJson is null
+                    ? null : System.Text.Json.Nodes.JsonNode.Parse(paymentAppsJson),
             };
             using var req = new HttpRequestMessage(HttpMethod.Post, new Uri(_baseUri, "api/device/departments"))
             {
