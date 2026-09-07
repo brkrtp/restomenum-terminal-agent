@@ -187,7 +187,48 @@ public sealed record TransportResult(
     /// <para><c>CLOSED</c> YALNIZ <c>Close</c> başarılıysa yazılır — baskı/kapatma yarım kalmışsa
     /// fiş hâlâ açıktır ve öyle bildirilir.</para>
     /// </summary>
-    string? TicketState = null);
+    string? TicketState = null,
+
+    /// <summary>
+    /// Fişin kalıcı kimliği (<c>Restomenum.ticketId</c>) — fiş açılışında üretilir, ömrü boyunca
+    /// sabittir. Platform bir fişin ödemelerini kapanış bildirimiyle bununla eşleştirir.
+    /// Bağ yoksa (ör. cihazda başkasından kalmış fiş) <c>null</c> — uydurulmaz.
+    /// </summary>
+    string? TicketId = null,
+
+    /// <summary>
+    /// Fiş KAPANDIYSA o fişin ödemeleri — <b>bizim <c>paymentId</c>'lerimizle</b>, kendi
+    /// defterimizden. Cihazın listesi değil: cihaz bizim kimliğimizi bilmez ve başarısız
+    /// denemeleri de kayıt olarak tutar.
+    ///
+    /// <para><c>null</c> = fiş kapanmadı ya da kimlik yok. Boş liste = kapandı ama kayıtlı
+    /// ödememiz yok — ikisi AYRI beyandır.</para>
+    /// </summary>
+    IReadOnlyList<TicketPaymentRow>? ClosedTicketPayments = null,
+
+    /// <summary>
+    /// Fiş kapanırken cihazın gördüğü TAHSİL toplamı. Bizim satırlarımızın toplamı DEĞİL: fark
+    /// varsa deftere yazılmayan bir tahsilat var demektir ve bunu platform ancak iki sayıyı
+    /// karşılaştırarak görebilir.
+    /// </summary>
+    long? DevicePaidMinor = null,
+
+    /// <summary>
+    /// İptalde: kaç ödeme geri alındı. Fiş bazlı iptalde <c>TicketVoidResult</c> bunu taşıyordu;
+    /// ÖDEME bazlı iptalde kasa aynı bilgiyi göremiyordu ve "ne iptal edildi" sorusu cevapsız
+    /// kalıyordu. Tek üretici, iki hedef: aynı sayı hem kasaya hem deftere gider.
+    /// </summary>
+    int? VoidedPaymentCount = null,
+
+    /// <summary>İptalde: geri alınan toplam tutar (kuruş).</summary>
+    long? VoidedAmountMinor = null,
+
+    /// <summary>
+    /// İptalde: cihazda GERÇEKTEN iptal edilen fişin sahibi satış oturumu. İsteği yapan oturum
+    /// DEĞİL — kasiyer başka bir kasadan kalmış fişi iptal etmiş olabilir ve platform doğru
+    /// oturumun satırlarını düşürmeli. Bağ yoksa <c>null</c>: "bilmiyorum" da bir cevaptır.
+    /// </summary>
+    string? CancelledSaleSessionId = null);
 
 /// <summary>
 /// Terminalin ödeme modeli — <b>pazara göre değişir ve belirsizlik çözümünü değiştirir.</b>
@@ -274,8 +315,14 @@ public sealed record TicketState(
     /// <summary>Cihazın uygulama hata kodu — bkz. <see cref="GmpTicket.LastPaymentAppErrorCode"/>.</summary>
     string? LastPaymentAppErrorCode = null,
 
-    /// <summary>Fişteki TÜM ödemeler — fiş kapanınca deftere yazılacak satırların kaynağı.</summary>
+    /// <summary>
+    /// Cihazın bu okumada DOLDURDUĞU ödeme satırları. Tamamı olup olmadığını
+    /// <see cref="PaymentsAreComplete"/> söyler — bkz. <see cref="GmpTicket.PaymentsAreComplete"/>.
+    /// </summary>
     IReadOnlyList<GmpPaymentLine>? Payments = null,
+
+    /// <summary><see cref="Payments"/> fişin TAMAMI mı? Değilse deftere satır yazılamaz.</summary>
+    bool PaymentsAreComplete = false,
 
     /// <summary><c>ST_PaymentErrMessage.AppErrorMsg</c> — ayrı tutuluyor, birleştirme teşhisi kör eder.</summary>
     string? LastPaymentAppErrorText = null)

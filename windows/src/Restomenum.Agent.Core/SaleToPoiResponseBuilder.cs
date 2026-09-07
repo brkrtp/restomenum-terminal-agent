@@ -98,6 +98,10 @@ public static class SaleToPoiResponseBuilder
         // Fiş durumu: platform satırları fiş KAPANINCA tek seferde yazacak; kasa da "bu ödeme
         // deftere geçti mi" sorusunu bununla cevaplıyor.
         if (result.TicketState is not null) ek["ticketState"] = result.TicketState;
+        // Fiş kimliği: `ticketState` tek başına yetmez. Aynı masa oturumunda arka arkaya İKİ fiş
+        // kapanabilir (kısmi öde → kapan → aynı masaya yeni sipariş); platform hangi ödemenin
+        // hangi fişe ait olduğunu ancak bununla bilir. Bağ yoksa alan KONMAZ — uydurulmaz.
+        if (result.TicketId is not null) ek["ticketId"] = result.TicketId;
         if (result.DeviceTicketTotalMinor is long dt) ek["deviceTicketTotalMinor"] = dt;
         if (result.DeviceRemainingMinor is long dk) ek["deviceRemainingMinor"] = dk;
         govde["Restomenum"] = ek;
@@ -232,7 +236,7 @@ public static class SaleToPoiResponseBuilder
                 },
                 ["ReversalResponse"] = govde,
                 // İptalde `FP3_Payment` çağrılmaz; alan yine de ATLANMAZ (sözleşme: hep var).
-                ["Restomenum"] = Ek(paymentInvoked: false, result.Reason, result.Info),
+                ["Restomenum"] = IptalEk(req, result),
             },
         }.ToJsonString();
     }
@@ -353,6 +357,105 @@ public static class SaleToPoiResponseBuilder
                     info: RestomenumReasons.LandedRetracted),
             },
         }.ToJsonString();
+
+    /// <summary>
+    /// <b>FİŞ KAPANDI</b> bildirimi (K-26/P27) — <c>POST /plugin-api/payments/ticket-closed</c>.
+    ///
+    /// <para><b>Neden var:</b> kullanıcı kararı, ödemeler deftere fiş TAMAMEN kapandıktan sonra
+    /// yazılıyor. Kısmi ödemede satır yazmak, sonradan iptal edilen bir fişin satırlarını geri
+    /// almayı gerektirirdi.</para>
+    ///
+    /// <para><b>Ödemeler BİZİM defterimizden gelir</b>, cihazın listesinden değil: cihaz bizim
+    /// <c>paymentId</c>'mizi bilmez ve BAŞARISIZ denemeleri de fişte kayıt olarak tutar (ölçüldü
+    /// 2026-09-07: banka hattı yokken kart bacağı <c>payAmount=0</c> ile fişte duruyor). Sıraya
+    /// bakıp eşleştirmek sessizce kayardı.</para>
+    ///
+    /// <para><b><c>paidMinor</c> CİHAZDAN gelir, listemizin toplamı DEĞİL.</b> İkisi ayrı ayrı
+    /// gittiği için platform "listede olmayan bir tahsilat var mı" sorusunu kendi başına
+    /// cevaplayabilir; tek sayı gönderseydik eksik liste sessizce tutarlı görünürdü.</para>
+    ///
+    /// <para>Zarf <c>/ticket-cancel/result</c> ile bilerek aynı şekilde; <c>MessageCategory</c>
+    /// <c>"Event"</c>. nexo'nun <c>EventNotification</c> şemasına uyduğu İDDİA EDİLMİYOR — tüm
+    /// alanlar <c>Restomenum</c> bloğunda.</para>
+    /// </summary>
+    public static string BuildTicketClosed(
+        string terminalId, string ticketId, string? saleSessionId,
+        IReadOnlyList<TicketPaymentRow> payments, long? totalMinor, long? paidMinor)
+    {
+        var satirlar = new JsonArray();
+        foreach (var o in payments)
+        {
+            var satir = new JsonObject
+            {
+                ["paymentId"] = o.PaymentId,
+                ["amountMinor"] = o.AmountMinor,
+            };
+            // Tip adı YALNIZ bildiğimiz üç değerde. Bilmediğimiz bir tipe isim uydurmak, defterde
+            // yanlış ödeme türü demektir; alanı koymamak "bilmiyorum" der ve tutar yine gider.
+            var ad = o.MethodType switch
+            {
+                GmpPaymentTypes.Cash => "cash",
+                GmpPaymentTypes.Card => "card",
+                GmpPaymentTypes.Mobile => "qr",
+                _ => null,
+            };
+            if (ad is not null) satir["methodType"] = ad;
+            if (o.BankBkmId is int bkm) satir["bankBkmId"] = bkm;
+            satirlar.Add(satir);
+        }
+
+        var ek = new JsonObject
+        {
+            ["v"] = 1,
+            ["scope"] = "ticket",
+            ["ticketId"] = ticketId,
+            ["ticketState"] = "CLOSED",
+            ["payments"] = satirlar,
+        };
+        if (saleSessionId is not null) ek["saleSessionId"] = saleSessionId;
+        if (totalMinor is long t) ek["totalMinor"] = t;
+        if (paidMinor is long pd) ek["paidMinor"] = pd;
+
+        return new JsonObject
+        {
+            ["SaleToPOIResponse"] = new JsonObject
+            {
+                // Sözleşmede yazan İKİ alan. Fazlasını koymuyoruz: doğrulamadığımız bir alana
+                // beklenmedik bir değer yazmak, bildirimi 400'e düşürüp fişi deftersiz bırakırdı.
+                ["MessageHeader"] = new JsonObject
+                {
+                    ["MessageCategory"] = "Event",
+                    ["POIID"] = terminalId,
+                },
+                ["Restomenum"] = ek,
+            },
+        }.ToJsonString();
+    }
+
+    /// <summary>
+    /// ÖDEME bazlı iptalin <c>Restomenum</c> bloğu — fiş bazlı iptalinkiyle AYNI alanlar.
+    ///
+    /// <para><b>Neden aynı:</b> kasa 17:44'te iptalin sonucunu gördü ama "ne iptal edildi"i
+    /// göremedi: sayaçlar yalnız fiş kapsamında üretiliyordu (ölçüldü 2026-09-07). Aynı olayın
+    /// kasaya ve deftere iki farklı zenginlikte gitmesi, kasada "2 ödeme / 2,00 ₺ iptal edildi"
+    /// diyememek ve BAŞKA bir oturumun fişinin iptal edildiğini fark edememek demekti.</para>
+    ///
+    /// <para>Sayaçlar yalnız ÖLÇÜLDÜYSE konur; iptal yarım kaldıysa (<c>VOID_INCOMPLETE</c>)
+    /// taşıma katmanı zaten doldurmaz — "kaç ödeme geri gitti" o durumda bilinmiyor demektir.</para>
+    /// </summary>
+    private static JsonObject IptalEk(ReversalRequest req, TransportResult result)
+    {
+        var ek = Ek(paymentInvoked: false, result.Reason, result.Info);
+        if (result.VoidedPaymentCount is int vs) ek["voidedPaymentCount"] = vs;
+        if (result.VoidedAmountMinor is long vt) ek["voidedAmountMinor"] = vt;
+        // Bağ yoksa AÇIKÇA null: platform "bilinmiyor" ile "yok"u ayırt edebilsin (fiş bazlı
+        // iptalde de böyle davranıyoruz).
+        if (result.VoidedPaymentCount is not null)
+            ek["cancelledSaleSessionId"] = result.CancelledSaleSessionId is null
+                ? null : JsonValue.Create(result.CancelledSaleSessionId);
+        if (req.SaleSessionId is not null) ek["saleSessionId"] = req.SaleSessionId;
+        return ek;
+    }
 
     private static JsonObject Ek(bool paymentInvoked, string? reason, string? info = null)
     {

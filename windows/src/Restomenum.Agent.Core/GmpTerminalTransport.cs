@@ -80,6 +80,7 @@ public sealed class GmpTerminalTransport : ITerminalTransport
         _terminalId = request.TerminalId;
 
         string? bilgi = null;
+        string? fisId = null;                         // fisin kalici kimligi (P27)
         var devam = false;                            // AYNI satisin acik fisine odeme ekleme
         var r = _gmp.Start(out var handle);
 
@@ -101,6 +102,10 @@ public sealed class GmpTerminalTransport : ITerminalTransport
                 if (engel is not null) return engel;
                 devam = true;
                 _handle = handle;
+                // Kimlik fis ACILISINDA uretildi; devam yolunda YENIDEN uretilmez, OKUNUR.
+                // Uretilseydi ayni fisin odemeleri iki ayri fise bolunur ve kapanis listesi
+                // eksik giderdi - yani gerceklesmis bir tahsilat deftere hic yazilmazdi.
+                fisId = _snapshots?.ReadOpenTicketId(request.TerminalId);
                 _log("[gmp] ayni satisin acik fisine devam ediliyor", new
                 {
                     request.CommandId, saleSessionId = request.SaleSessionId,
@@ -153,7 +158,7 @@ public sealed class GmpTerminalTransport : ITerminalTransport
             // odemede Close ile, iptalde VoidAll ile silinir; baska satis geldiginde zaten
             // eslesmez ve bayat-fis mantigi isler.
             if (request.SaleSessionId is string yeniOturum)
-                _snapshots?.BindOpenTicket(request.TerminalId, yeniOturum);
+                fisId = _snapshots?.BindOpenTicket(request.TerminalId, yeniOturum);
         }
 
         // ── ANLIK GÖRÜNTÜ: belirsizlik çözümünün tek dayanağı ────────────────────
@@ -186,22 +191,58 @@ public sealed class GmpTerminalTransport : ITerminalTransport
         // kasiyer kalanı ekleyecek. Fişi burada kapatmak, yarım ödenmiş fiş üretmek olurdu.
         // Fiş durumu ödemeden SONRA belirlenir; `CLOSED` yalnız `Close` gerçekten başarılıysa.
         var fisDurumu = "OPEN";
-        IReadOnlyList<GmpPaymentLine>? kapanisOdemeleri = null;
+        IReadOnlyList<TicketPaymentRow>? kapanisOdemeleri = null;
+        long? cihazTahsil = null, cihazToplam = null;
+
+        // ── ÖDEMEYİ KENDİ DEFTERİMİZE YAZ ────────────────────────────────────────
+        // Cihaz bu ödemeyi tutarı ve tipiyle tutar ama BİZİM `paymentId`'mizi bilmez. Fiş kapanınca
+        // platforma "bu fişte şu denemeler var" diyebilmemizin tek yolu bu kayıt. Kapanış anında
+        // cihazın listesinden sırayla türetmek sessizce kayardı: cihaz BAŞARISIZ denemeleri de
+        // kayıt olarak tutuyor (ölçüm 2026-09-07: kart bacağı `payAmount=0` ile fişte duruyor).
+        if (fisId is not null)
+        {
+            // Kullanılan bankayı cihaz söyler: ödeme yankısında SON dolu satır bu ödemedir.
+            // Tutar tutmuyorsa banka İDDİA EDİLMEZ — yanlış banka yazmaktansa boş bırak.
+            var sonSatir = tk.Payments is { Count: > 0 } satirlar ? satirlar[^1] : (GmpPaymentLine?)null;
+            var banka = sonSatir is { } sat && sat.AmountMinor == request.AmountMinor
+                ? sat.BankBkmId : null;
+            _snapshots?.RecordTicketPayment(fisId, request.PaymentId, request.AmountMinor,
+                request.PaymentType, banka);
+        }
 
         if (tk.IsFullyPaid)
         {
-            // Kapanış ödemelerini kapatMADAN ÖNCE oku: `Close` sonrası fiş erişilemez olur ve
-            // deftere yazılacak satırların kaynağı kaybolur.
+            // Fişi kapatMADAN ÖNCE oku: `Close` sonrası fiş erişilemez olur.
+            //
+            // AYRI bir `GetTicket` şart: `FP3_Payment`'ın döndürdüğü fişte cihaz yalnız SON kaydı
+            // doldurur (ölçüm 2026-09-07 18:00: 3 kayıtlık dizide 1 dolu, ilk ikisi sıfır).
             if (_gmp.OptionFlags(handle, GmpEchoFlags.Reload).Ok
-                && _gmp.GetTicket(handle, out var kapanisFisi).Ok)
-                kapanisOdemeleri = kapanisFisi.Payments;
+                && _gmp.GetTicket(handle, out var kapanisFisi).Ok
+                && kapanisFisi.PaymentsAreComplete)
+            {
+                cihazTahsil = kapanisFisi.PaidAmountMinor;
+                cihazToplam = kapanisFisi.TotalAmountMinor;
+                // Cihazın TAHSİL EDİLMİŞ satır sayısı (tutarı 0 olanlar başarısız denemedir).
+                // Kendi defterimizle tutmuyorsa bu gürültü değil ALARM: gerçekleşmiş bir tahsilat
+                // bizim kaydımızda olmayabilir ve deftere hiç yazılmaz.
+                var cihazSatir = kapanisFisi.Payments?.Count(x => x.AmountMinor > 0) ?? -1;
+                var bizim = fisId is null ? null : _snapshots?.ReadTicketPayments(fisId);
+                if (bizim is not null && cihazSatir >= 0 && bizim.Count != cihazSatir)
+                    _log("[gmp] KAPANIŞ UYUŞMAZLIĞI: cihazdaki tahsilat sayısı defterimizle tutmuyor",
+                        new { request.CommandId, fisId, cihazSatir, bizim = bizim.Count });
+            }
 
-            var kapanis = Kapat(handle);
-            if (kapanis is not null) return kapanis;
-            fisDurumu = "CLOSED";
-            // Fis kapandi: bag artik yok. Birakilsaydi bir sonraki satis "ayni satisin fisi" sanip
-            // KAPANMIS bir fise odeme eklemeye calisirdi.
-            _snapshots?.ClearOpenTicketBinding(request.TerminalId);
+            var (kapanisHatasi, kapandi) = Kapat(handle);
+            if (kapanisHatasi is not null) return kapanisHatasi;
+            if (kapandi)
+            {
+                fisDurumu = "CLOSED";
+                // Bağ SİLİNMEDEN önce oku — silindikten sonra fişin ödemelerini soracak kimlik kalmaz.
+                if (fisId is not null) kapanisOdemeleri = _snapshots?.ReadTicketPayments(fisId);
+                // Fis kapandi: bag artik yok. Birakilsaydi bir sonraki satis "ayni satisin fisi"
+                // sanip KAPANMIS bir fise odeme eklemeye calisirdi.
+                _snapshots?.ClearOpenTicketBinding(request.TerminalId);
+            }
         }
         else if (request.SaleSessionId is string oturum)
         {
@@ -217,7 +258,11 @@ public sealed class GmpTerminalTransport : ITerminalTransport
             CardLast4: tk.CardLast4,
             ProviderResultCode: pr.ToString(),
             Info: bilgi,
-            TicketState: fisDurumu);
+            TicketState: fisDurumu,
+            TicketId: fisId,
+            ClosedTicketPayments: kapanisOdemeleri,
+            DevicePaidMinor: cihazTahsil,
+            DeviceTicketTotalMinor: cihazToplam);
     }
 
     /// <summary>
@@ -326,7 +371,17 @@ public sealed class GmpTerminalTransport : ITerminalTransport
     }
 
     /// <summary>Baskı + kapatma dizisi. <c>PrintMF</c> sahada 3 denemeye kadar tekrarlanıyor.</summary>
-    private TransportResult? Kapat(ulong handle)
+    /// <returns>
+    /// <c>Hata</c>: kasaya dönecek erken sonuç (bugün hep <c>null</c> — ödeme alınmıştır, baskı
+    /// hatası "reddedildi" diye raporlanamaz). <c>Kapandi</c>: fiş cihazda GERÇEKTEN kapandı mı.
+    ///
+    /// <para><b><c>Kapandi</c> neden ayrı bir cevap:</b> baskı adımı yarıda kalırsa <c>FP3_Close</c>
+    /// hiç çağrılmaz ve fiş cihazda AÇIK kalır. Bunu "kapandı" saymak iki ayrı hasar üretirdi:
+    /// (1) platform o fişin ödemelerini deftere yazar — oysa fiş hâlâ iptal edilebilir durumda;
+    /// (2) bağ silindiği için aynı satışın bir sonraki ödemesi kendi fişini "başkasının bayat
+    /// fişi" sanıp <c>TICKET_ALREADY_OPEN</c> ile reddedilir ve kasa manuel ödemeye düşer.</para>
+    /// </returns>
+    private (TransportResult? Hata, bool Kapandi) Kapat(ulong handle)
     {
         foreach (var (ad, cagri) in new (string, Func<GmpResult>)[]
         {
@@ -338,7 +393,13 @@ public sealed class GmpTerminalTransport : ITerminalTransport
             var r = cagri();
             // ⚠️ Baskı başarısız olsa bile ödeme ALINMIŞTIR. Burada `Declined` dönmek, alınmış bir
             // parayı "reddedildi" diye raporlamak olurdu — yanlış yön, tehlikeli yön.
-            if (!r.Ok) { _log("[gmp] baskı adımı başarısız (ödeme ALINDI)", new { ad, code = r.ToString() }); return null; }
+            // Ama fiş de KAPANMADI: `Close`'a hiç gelinmedi.
+            if (!r.Ok)
+            {
+                _log("[gmp] baskı adımı başarısız (ödeme ALINDI, fiş AÇIK kaldı)",
+                    new { ad, code = r.ToString() });
+                return (null, false);
+            }
         }
 
         for (var i = 0; i < 3; i++)
@@ -346,9 +407,15 @@ public sealed class GmpTerminalTransport : ITerminalTransport
             if (_gmp.PrintMF(handle).Ok) break;
             _log("[gmp] PrintMF tekrar", new { deneme = i + 1 });
         }
-        _gmp.Close(handle);
+        var kapanis = _gmp.Close(handle);
+        if (!kapanis.Ok)
+        {
+            // Ödeme alındı ama fiş kapanmadı: açık fiş olarak bildirilir, bağ KORUNUR.
+            _log("[gmp] Close başarısız (ödeme ALINDI, fiş AÇIK kaldı)", new { code = kapanis.ToString() });
+            return (null, false);
+        }
         lock (_gate) _handle = 0;
-        return null;
+        return (null, true);
     }
 
     /// <summary>
@@ -580,11 +647,15 @@ public sealed class GmpTerminalTransport : ITerminalTransport
             lock (_gate) h = _handle;
         }
 
-        // Denetim izi: neyi iptal ettiğimiz, iptalden ÖNCE yazılır.
+        // Denetim izi: neyi iptal ettiğimiz, iptalden ÖNCE yazılır. Aynı okuma kasaya dönecek
+        // sayaçların da tek kaynağı — iptalden SONRA fiş yok, sorulacak yer kalmaz.
         long iptalTutar = 0;
+        int iptalSayi = 0;
+        var fisSahibi = _snapshots?.ReadOpenTicketBinding(_terminalId);
         if (_gmp.OptionFlags(h, GmpEchoFlags.Reload).Ok && _gmp.GetTicket(h, out var oncesi).Ok)
         {
             iptalTutar = oncesi.PaidAmountMinor;
+            iptalSayi = oncesi.PaymentCount;
             _log("[gmp] iptal öncesi fiş", new
             {
                 toplam = oncesi.TotalAmountMinor, tahsil = oncesi.PaidAmountMinor,
@@ -600,7 +671,9 @@ public sealed class GmpTerminalTransport : ITerminalTransport
             _snapshots?.ClearOpenTicketBinding(_terminalId);   // fis gitti, bag da gitmeli
             return new TransportResult(TransportOutcome.Approved,
                 ApprovedAmountMinor: iptalTutar > 0 ? iptalTutar : null,
-                Info: RestomenumReasons.TicketCancelled);
+                Info: RestomenumReasons.TicketCancelled,
+                VoidedPaymentCount: iptalSayi, VoidedAmountMinor: iptalTutar,
+                CancelledSaleSessionId: fisSahibi);
         }
 
         if (r.Code == GmpCodes.CannotVoid)
@@ -745,7 +818,7 @@ public sealed class GmpTerminalTransport : ITerminalTransport
         LastPaymentErrorCode: t.LastPaymentErrorCode, LastPaymentErrorText: t.LastPaymentErrorText,
         LastPaymentAppErrorCode: t.LastPaymentAppErrorCode,
         LastPaymentAppErrorText: t.LastPaymentAppErrorText,
-        Payments: t.Payments);
+        Payments: t.Payments, PaymentsAreComplete: t.PaymentsAreComplete);
 
     /// <summary>
     /// Terminale <b>hiç gidilmeden</b> üretilen ret. <c>FP3_Payment</c> çağrılmadığı için para

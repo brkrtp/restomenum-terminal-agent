@@ -7,6 +7,11 @@ namespace Restomenum.Agent.Core;
 /// başlatmada "benim ödemem işlendi mi" sorusu cevaplanamaz — çözülebilir bir vaka gereksiz yere
 /// insana çıkar. <see cref="CommandStore"/> bunu uygular.</para>
 /// </summary>
+/// <summary>Bir fişe düşmüş ödeme kaydı — cihazın tablosu değil, BİZİM defterimiz.</summary>
+/// <param name="MethodType">DLL ödeme tipi: 1=nakit, 4=kart, 16=mobil/QR.</param>
+public readonly record struct TicketPaymentRow(
+    string PaymentId, long AmountMinor, int MethodType, int? BankBkmId);
+
 public interface ITicketSnapshotStore
 {
     /// <param name="saleSessionId">
@@ -26,10 +31,33 @@ public interface ITicketSnapshotStore
     /// kaybolurdu ve kalan tahsilat yapılamazdı — fiş açık, kimse sahiplenemiyor. Bu bağ olmadan
     /// "açık fiş benim satışıma mı ait" sorusu cevaplanamaz ve tek güvenli cevap "hayır"dır.</para>
     /// </summary>
-    void BindOpenTicket(string terminalId, string saleSessionId, long? now = null);
+    /// <returns>
+    /// Fişin <b>kalıcı kimliği</b>. Fiş açılışında üretilir, ömrü boyunca sabittir ve yeniden
+    /// başlatmaya dayanır — platform bir fişin ödemelerini kapanış bildirimiyle bununla eşleştirir.
+    /// Aynı fişe ikinci kez bağlanmak kimliği değiştirmez.
+    /// </returns>
+    string BindOpenTicket(string terminalId, string saleSessionId, long? now = null);
 
     /// <summary>Açık fişin sahibi satış oturumu; bağ yoksa <c>null</c>.</summary>
     string? ReadOpenTicketBinding(string terminalId);
+
+    /// <summary>Açık fişin kimliği; bağ yoksa <c>null</c>.</summary>
+    string? ReadOpenTicketId(string terminalId);
+
+    /// <summary>
+    /// Bir fişe düşen ödemeyi <b>bizim <c>paymentId</c>'mizle</b> kaydeder.
+    ///
+    /// <para><b>Neden gerekli:</b> fiş kapanınca deftere hangi denemelerin yazılacağı sorusunu
+    /// cihaz cevaplayamaz — cihaz tutarı ve tipi bilir, bizim kimliğimizi bilmez. Sıraya bakıp
+    /// eşleştirmek de olmaz: cihaz BAŞARISIZ denemeleri de fişte kayıt olarak tutuyor (ölçüldü
+    /// 2026-09-07: banka hattı yokken kart bacağı <c>payAmount=0</c> ile fişte duruyor), yani
+    /// "cihazın n'inci ödemesi = bizim n'inci denememiz" sessizce kayardı.</para>
+    /// </summary>
+    void RecordTicketPayment(string ticketId, string paymentId, long amountMinor,
+        int methodType, int? bankBkmId, long? now = null);
+
+    /// <summary>Bir fişin kaydedilmiş ödemeleri — kaydedilme sırasına göre.</summary>
+    IReadOnlyList<TicketPaymentRow> ReadTicketPayments(string ticketId);
 
     /// <summary>Bağı siler — fiş kapandığında (tam ödeme) ya da iptal edildiğinde.</summary>
     void ClearOpenTicketBinding(string terminalId);
@@ -182,11 +210,24 @@ public readonly record struct GmpTicket(
     string? LastPaymentAppErrorText = null,
 
     /// <summary>
-    /// Fişteki TÜM ödemeler (cihazın kendi tablosu). Şimdiye kadar yalnız SONUNCUSU taşınıyordu;
-    /// belirsizlik çözümü için o yetiyordu ama fiş kapanınca deftere yazılacak satırlar için
-    /// hepsi lazım — iki kısmi ödemeli bir fişte tek satır yazmak defteri cihazdan ayırırdı.
+    /// Cihazın DOLDURDUĞU ödeme satırları — tamamı DEĞİL, <c>numberOfPaymentsInThis</c> kadarı.
+    /// <see cref="PaymentsAreComplete"/> bu listenin fişin TAMAMI olup olmadığını söyler.
     /// </summary>
-    IReadOnlyList<GmpPaymentLine>? Payments = null)
+    IReadOnlyList<GmpPaymentLine>? Payments = null,
+
+    /// <summary>
+    /// <see cref="Payments"/> fişin TAMAMINI mı taşıyor (<c>numberOfPaymentsInThis ==
+    /// totalNumberOfPayments</c>)?
+    ///
+    /// <para><b>Ölçüm (2026-09-07 18:00, GMP izi):</b> <c>FP3_Payment</c>'ın döndürdüğü fişte
+    /// <c>totalNumberOfPayments=3</c> ama <c>numberOfPaymentsInThis=1</c>'di ve dizinin İLK İKİ
+    /// kaydı SIFIRDI — cihaz yalnız SON kaydı doldurmuş. Aynı fişi <c>FP3_GetTicket</c> ile
+    /// okuyunca <c>2/2</c> geldi ve ikisi de doluydu.</para>
+    ///
+    /// <para>Bu ayrım şart: doldurulmamış bir kaydı "0 TL'lik ödeme" saymak, deftere olmayan
+    /// satırlar yazdırırdı. Boş kayıt "ödeme yok" değil, "bu çağrıda gelmedi" demek.</para>
+    /// </summary>
+    bool PaymentsAreComplete = false)
 {
     public bool IsFullyPaid => TotalAmountMinor > 0 && PaidAmountMinor >= TotalAmountMinor;
     public long RemainingMinor => Math.Max(0, TotalAmountMinor - PaidAmountMinor);
@@ -202,14 +243,26 @@ public readonly record struct GmpTicket(
     public bool HasBankLeg => GmpPaymentTypes.HasBankLeg(LastPaymentType);
 }
 
-/// <summary>Fişteki tek bir ödeme kaydı — cihazın gördüğü hâliyle.</summary>
+/// <summary>
+/// Fişteki tek bir ödeme kaydı — cihazın gördüğü hâliyle.
+///
+/// <para><b><c>AmountMinor == 0</c> BAŞARISIZ denemedir, "sıfır liralık ödeme" değil.</b> Ölçüldü
+/// (2026-09-07 18:00): banka hattı yokken kart denemesi fişte kayıt AÇIYOR — tip 4, banka adı ve
+/// BKM kimliği dolu (GARANTİ BBVA/62, AKBANK/46), <c>payAmount 0</c>, hata alanları dolu
+/// ("NO RESPONSE" / 2202 "TERMINAL KAPALI"). Cihazın <c>totalNumberOfPayments</c> sayacı bu
+/// denemeleri de sayar. Deftere satır yazarken tutarı 0 olanlar DIŞARIDA bırakılmalı.</para>
+/// </summary>
 public readonly record struct GmpPaymentLine(
     /// <summary>Ödeme tipi: 1=nakit, 4=kart, 16=mobil/QR.</summary>
     int Type,
-    /// <summary>Tahsil edilen tutar (kuruş).</summary>
+    /// <summary>Tahsil edilen tutar (kuruş). <b>0 = deneme başarısız.</b></summary>
     long AmountMinor,
-    /// <summary>Kart bacağında bankanın BKM kimliği; yoksa <c>null</c>.</summary>
-    int? BankBkmId = null);
+    /// <summary>Bankanın BKM kimliği (kart bacağı); yoksa <c>null</c>. Başarısız denemede de dolabilir.</summary>
+    int? BankBkmId = null,
+    /// <summary>Cihazın yazdığı banka adı (ör. "GARANTİ BBVA"); yoksa <c>null</c>.</summary>
+    string? BankName = null,
+    /// <summary>Bu bacağın hata metni (ör. "NO RESPONSE", "TERMINAL KAPALI"); yoksa <c>null</c>.</summary>
+    string? ErrorMessage = null);
 
 /// <summary>Ödeme tipleri — <b>DLL seviyesi</b>.</summary>
 public static class GmpPaymentTypes

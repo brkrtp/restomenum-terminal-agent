@@ -27,6 +27,9 @@ public sealed class HttpResultNotifier : IResultNotifier
     public Task<NotifyResult> NotifyTicketCancelAsync(string bodyJson, CancellationToken ct = default) =>
         GonderAsync("plugin-api/payments/ticket-cancel/result", bodyJson, ct);
 
+    public Task<NotifyResult> NotifyTicketClosedAsync(string bodyJson, CancellationToken ct = default) =>
+        GonderAsync("plugin-api/payments/ticket-closed", bodyJson, ct);
+
     public Task<NotifyResult> NotifyAsync(string paymentId, string bodyJson, CancellationToken ct = default) =>
         GonderAsync($"plugin-api/payments/{Uri.EscapeDataString(paymentId)}/result", bodyJson, ct);
 

@@ -117,8 +117,12 @@ public sealed class SimulatorTransport : ITerminalTransport
             return new TransportResult(TransportOutcome.Declined,
                 ProviderResultCode: "NO_OPEN_TICKET", ErrorCondition: "NotFound");
 
+        // Gerçek taşıma katmanı gibi: neyin iptal edildiği iptalden ÖNCE okunur.
+        var sayi = _ticket.PaymentCount;
+        var tutar = _ticket.PaidAmountMinor;
         _ticket = new TicketState(HasOpenTicket: false, TotalAmountMinor: 0, PaidAmountMinor: 0);
-        return new TransportResult(TransportOutcome.Approved, Info: RestomenumReasons.TicketCancelled);
+        return new TransportResult(TransportOutcome.Approved, Info: RestomenumReasons.TicketCancelled,
+            VoidedPaymentCount: sayi, VoidedAmountMinor: tutar);
     }
 
     /// <summary>

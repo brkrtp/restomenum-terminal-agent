@@ -492,13 +492,23 @@ public sealed class GmpWrapper : IGmpWrapper
         string? errText = null;
         string? appErrText = null;
 
-        // Fişteki TÜM ödemeler: fiş kapanınca deftere yazılacak satırların kaynağı.
-        for (int i = 0; i < count && payments is not null && i < payments.Length; i++)
+        // ── ÖDEME SATIRLARI: yalnız cihazın DOLDURDUĞU pencere ────────────────────────
+        // Cihaz diziyi `totalNumberOfPayments` kadar AYIRIR ama yalnız `numberOfPaymentsInThis`
+        // kadarını DOLDURUR — ve doldurduğu SONDAKİLERDİR. Ölçüldü (2026-09-07 18:00:27, GMP izi):
+        // `FP3_Payment` yanıtında 3/1 geldi, ilk iki kayıt tamamen sıfırdı; aynı fiş `FP3_GetTicket`
+        // ile 2/2 okundu ve ikisi de doluydu. Diziyi baştan taramak, doldurulmamış kayıtları
+        // "0 TL'lik ödeme" sanıp deftere hayalet satır yazdırırdı.
+        int dolu = t.numberOfPaymentsInThis;
+        if (dolu < 0 || dolu > count) dolu = 0;          // tutarsız sayaç → hiçbir şey iddia etme
+        for (int i = count - dolu; i < count && payments is not null && i >= 0 && i < payments.Length; i++)
         {
             var pl = payments[i];
             if (pl is null) continue;
-            int? bkm = pl.stBankPayment is { } bp && bp.bankBkmId != 0 ? bp.bankBkmId : null;
-            satirlar.Add(new GmpPaymentLine((int)pl.typeOfPayment, pl.payAmount, bkm));
+            var bp = pl.stBankPayment;
+            int? bkm = bp is not null && bp.bankBkmId != 0 ? bp.bankBkmId : null;
+            var ad = Bos(bp?.bankName) ? null : bp!.bankName;
+            var hata = Bos(bp?.stPaymentErrMessage?.ErrorMsg) ? null : bp!.stPaymentErrMessage!.ErrorMsg;
+            satirlar.Add(new GmpPaymentLine((int)pl.typeOfPayment, pl.payAmount, bkm, ad, hata));
         }
 
         if (count > 0)
@@ -536,7 +546,8 @@ public sealed class GmpWrapper : IGmpWrapper
             }
         }
 
-        return new GmpTicket(total, paid, count, lastType, rrn, last4, errCode, errText, appErrCode, appErrText, satirlar);
+        return new GmpTicket(total, paid, count, lastType, rrn, last4, errCode, errText, appErrCode,
+            appErrText, satirlar, PaymentsAreComplete: dolu == count);
     }
 
     private static bool Bos(string? s) => string.IsNullOrWhiteSpace(s);

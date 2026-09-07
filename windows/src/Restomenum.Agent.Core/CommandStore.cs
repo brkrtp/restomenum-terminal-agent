@@ -117,6 +117,23 @@ public sealed class CommandStore : ITicketSnapshotStore, IDisposable
                 )
                 """;
             cmd.ExecuteNonQuery();
+            // Bir fişin ödemeleri — bizim `paymentId`'lerimizle. Cihaz tutarı ve tipi bilir ama
+            // BİZİM kimliğimizi bilmez; fiş kapanınca deftere hangi denemelerin yazılacağını
+            // ancak bu tablo söyleyebilir. Sıraya bakıp eşleştirmek (cihazın n'inci ödemesi =
+            // bizim n'inci denememiz) sessizce yanlış olurdu: cihaz BAŞARISIZ denemeleri de
+            // kayıt olarak tutuyor (ölçüldü 2026-09-07: kart bacağı payAmount=0 ile fişte duruyor).
+            cmd.CommandText = """
+                CREATE TABLE IF NOT EXISTS ticket_payments (
+                    ticket_id    TEXT NOT NULL,
+                    payment_id   TEXT NOT NULL,
+                    amount_minor INTEGER NOT NULL,
+                    method_type  INTEGER NOT NULL,
+                    bank_bkm_id  INTEGER,
+                    recorded_at  INTEGER NOT NULL,
+                    PRIMARY KEY (ticket_id, payment_id)
+                )
+                """;
+            cmd.ExecuteNonQuery();
 
             // ── ŞEMA GEÇİŞİ: `kind` sütunu (genişlet → geçir → daralt) ─────────────────
             // Sütun sonradan eklendi ve varsayılanı 'sale'. Böylece ESKİ kayıtlar bozulmadan
@@ -144,6 +161,21 @@ public sealed class CommandStore : ITicketSnapshotStore, IDisposable
             if (!snapKolon.Contains("sale_session_id"))
             {
                 cmd.CommandText = "ALTER TABLE ticket_snapshots ADD COLUMN sale_session_id TEXT";
+                cmd.ExecuteNonQuery();
+            }
+
+            // Fiş kimliği: fiş AÇILIŞINDA üretilir, ömrü boyunca değişmez, YENİDEN BAŞLATMAYA
+            // dayanır. Platform bir fişin ödemelerini kapanış bildirimiyle bununla eşleştiriyor.
+            // `sale.uuid` yetmiyor: aynı masa oturumunda arka arkaya İKİ fiş kapanabilir (kısmi
+            // öde → fiş kapan → aynı masaya yeni sipariş) ve tekilleştirme oturuma dayansaydı
+            // ikinci kapanış "tekrar" sayılıp o fişin ödemeleri deftere HİÇ yazılmazdı.
+            var fisKolon = new List<string>();
+            cmd.CommandText = "PRAGMA table_info(open_ticket)";
+            using (var r3 = cmd.ExecuteReader())
+                while (r3.Read()) fisKolon.Add(r3.GetString(1));
+            if (!fisKolon.Contains("ticket_id"))
+            {
+                cmd.CommandText = "ALTER TABLE open_ticket ADD COLUMN ticket_id TEXT";
                 cmd.ExecuteNonQuery();
             }
 
@@ -337,20 +369,106 @@ public sealed class CommandStore : ITicketSnapshotStore, IDisposable
         }
     }
 
-    public void BindOpenTicket(string terminalId, string saleSessionId, long? now = null)
+    /// <summary>
+    /// Açık fişi satış oturumuna bağlar ve fişin <b>kalıcı kimliğini</b> döndürür.
+    ///
+    /// <para>Kimlik yalnız fiş <b>gerçekten yeniyse</b> üretilir: satır yoksa, oturum değiştiyse
+    /// ya da eski satırda kimlik yoksa. Aynı fişe ikinci kez bağlanmak (ödeme öncesi + kısmi ödeme
+    /// sonrası) kimliği DEĞİŞTİRMEZ — değişseydi aynı fişin ödemeleri iki ayrı fişe bölünür ve
+    /// kapanış listesi eksik giderdi.</para>
+    ///
+    /// <para>Biçim: <c>tkt_</c> + 32 onaltılık hane (36 karakter). Sözleşme sınırı 128 karakter ve
+    /// yalnız <c>A-Za-z0-9._:-</c>; eğik çizgi yok.</para>
+    /// </summary>
+    public string BindOpenTicket(string terminalId, string saleSessionId, long? now = null)
+    {
+        lock (_gate)
+        {
+            using var oku = _conn.CreateCommand();
+            oku.CommandText = "SELECT sale_session_id, ticket_id FROM open_ticket WHERE terminal_id = $t";
+            oku.Parameters.AddWithValue("$t", terminalId);
+            string? eskiOturum = null, eskiFis = null;
+            using (var r = oku.ExecuteReader())
+                if (r.Read())
+                {
+                    eskiOturum = r.IsDBNull(0) ? null : r.GetString(0);
+                    eskiFis = r.IsDBNull(1) ? null : r.GetString(1);
+                }
+
+            var fisId = eskiFis is not null && string.Equals(eskiOturum, saleSessionId, StringComparison.Ordinal)
+                ? eskiFis
+                : "tkt_" + Guid.NewGuid().ToString("N");
+
+            using var cmd = _conn.CreateCommand();
+            cmd.CommandText = """
+                INSERT INTO open_ticket (terminal_id, sale_session_id, updated_at, ticket_id)
+                VALUES ($t, $s, $now, $f)
+                ON CONFLICT(terminal_id) DO UPDATE SET
+                    sale_session_id = $s, updated_at = $now, ticket_id = $f
+                """;
+            cmd.Parameters.AddWithValue("$t", terminalId);
+            cmd.Parameters.AddWithValue("$s", saleSessionId);
+            cmd.Parameters.AddWithValue("$now", now ?? DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+            cmd.Parameters.AddWithValue("$f", fisId);
+            cmd.ExecuteNonQuery();
+            return fisId;
+        }
+    }
+
+    /// <summary>Terminaldeki açık fişin kimliği; bağ yoksa <c>null</c>.</summary>
+    public string? ReadOpenTicketId(string terminalId)
+    {
+        lock (_gate)
+        {
+            using var cmd = _conn.CreateCommand();
+            cmd.CommandText = "SELECT ticket_id FROM open_ticket WHERE terminal_id = $t";
+            cmd.Parameters.AddWithValue("$t", terminalId);
+            return cmd.ExecuteScalar() as string;
+        }
+    }
+
+    /// <summary>
+    /// Bir fişe düşen ÖDEMEYİ kaydeder — cihazın bilmediği tek şey: bizim <c>paymentId</c>'miz.
+    /// Aynı (fiş, ödeme) ikinci kez yazılmaz.
+    /// </summary>
+    public void RecordTicketPayment(string ticketId, string paymentId, long amountMinor,
+        int methodType, int? bankBkmId, long? now = null)
     {
         lock (_gate)
         {
             using var cmd = _conn.CreateCommand();
             cmd.CommandText = """
-                INSERT INTO open_ticket (terminal_id, sale_session_id, updated_at)
-                VALUES ($t, $s, $now)
-                ON CONFLICT(terminal_id) DO UPDATE SET sale_session_id = $s, updated_at = $now
+                INSERT OR IGNORE INTO ticket_payments
+                    (ticket_id, payment_id, amount_minor, method_type, bank_bkm_id, recorded_at)
+                VALUES ($f, $p, $a, $m, $b, $now)
                 """;
-            cmd.Parameters.AddWithValue("$t", terminalId);
-            cmd.Parameters.AddWithValue("$s", saleSessionId);
+            cmd.Parameters.AddWithValue("$f", ticketId);
+            cmd.Parameters.AddWithValue("$p", paymentId);
+            cmd.Parameters.AddWithValue("$a", amountMinor);
+            cmd.Parameters.AddWithValue("$m", methodType);
+            cmd.Parameters.AddWithValue("$b", (object?)bankBkmId ?? DBNull.Value);
             cmd.Parameters.AddWithValue("$now", now ?? DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
             cmd.ExecuteNonQuery();
+        }
+    }
+
+    /// <summary>Bir fişin kaydedilmiş ödemeleri — kaydedilme sırasına göre.</summary>
+    public IReadOnlyList<TicketPaymentRow> ReadTicketPayments(string ticketId)
+    {
+        lock (_gate)
+        {
+            using var cmd = _conn.CreateCommand();
+            cmd.CommandText = """
+                SELECT payment_id, amount_minor, method_type, bank_bkm_id
+                FROM ticket_payments WHERE ticket_id = $f ORDER BY recorded_at, rowid
+                """;
+            cmd.Parameters.AddWithValue("$f", ticketId);
+            var liste = new List<TicketPaymentRow>();
+            using var r = cmd.ExecuteReader();
+            while (r.Read())
+                liste.Add(new TicketPaymentRow(r.GetString(0), r.GetInt64(1), r.GetInt32(2),
+                    r.IsDBNull(3) ? null : r.GetInt32(3)));
+            return liste;
         }
     }
 

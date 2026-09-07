@@ -50,4 +50,16 @@ public interface IResultNotifier
     /// Komutu gövdedeki <c>ticketCancelId</c> tanımlar.</para>
     /// </summary>
     Task<NotifyResult> NotifyTicketCancelAsync(string bodyJson, CancellationToken ct = default);
+
+    /// <summary>
+    /// FİŞ KAPANDI bildirimi (K-26/P27) — <c>POST /plugin-api/payments/ticket-closed</c>.
+    ///
+    /// <para><b>Neden ayrı uç ve neden paymentId yok:</b> bildirim tek bir denemeye değil, bir
+    /// FİŞE aittir; içinde o fişin BÜTÜN ödemeleri var. Ödeme ucuna gönderilseydi hangi
+    /// paymentId ile adresleneceği keyfî olurdu ve platform tekilleştirmeyi yanlış anahtara
+    /// dayardı. Tekilleştirme anahtarı gövdedeki <c>ticketId</c>.</para>
+    ///
+    /// <para>Kimlik <c>/ticket-cancel/result</c> ile AYNI (cihaz oturum JWT'si).</para>
+    /// </summary>
+    Task<NotifyResult> NotifyTicketClosedAsync(string bodyJson, CancellationToken ct = default);
 }

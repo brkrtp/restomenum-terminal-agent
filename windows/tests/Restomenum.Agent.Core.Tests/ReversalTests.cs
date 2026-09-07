@@ -296,6 +296,31 @@ public class ReversalTests : IDisposable
     }
 
     [Fact]
+    public async Task Odeme_bazli_iptalin_bloguu_fis_bazliyla_AYNI_alanlari_tasir()
+    {
+        // ← ÇİVİ (W23): 17:44'te kasa iptalin OLDUĞUNU gördü ama NE olduğunu göremedi — sayaçlar
+        // yalnız fiş kapsamında üretiliyordu. Aynı olayın kasaya ve deftere iki farklı zenginlikte
+        // gitmesi, kasada "2 ödeme / 4,90 ₺ iptal edildi" diyememek demekti.
+        var (h, sim) = Kur();
+        _store.Save("svc-orig", Pay, "term-01", _clock.ServerNow() + 60_000);
+        sim.WithTicket(new TicketState(HasOpenTicket: true, TotalAmountMinor: 990,
+            PaidAmountMinor: 490, PaymentCount: 2));
+        var req = ((ReversalParseResult.Ok)ReversalRequestParser.Parse(
+            Zarf(oturum: "oturum-A"))).Request;
+
+        var govde = await h.HandleReversalAsync(req);
+        var ek = Ek(govde);
+
+        Assert.Null(req.Scope);                                        // ÖDEME kapsamı
+        Assert.Equal("Success", Yanit(govde).GetProperty("Result").GetString());
+        Assert.Equal(2, ek.GetProperty("voidedPaymentCount").GetInt32());
+        Assert.Equal(490, ek.GetProperty("voidedAmountMinor").GetInt64());
+        Assert.Equal("oturum-A", ek.GetProperty("saleSessionId").GetString());
+        // Bağ yoksa alan AÇIKÇA null olur — "bilinmiyor" ile "yok" ayrı beyanlar.
+        Assert.Equal(JsonValueKind.Null, ek.GetProperty("cancelledSaleSessionId").ValueKind);
+    }
+
+    [Fact]
     public async Task Odeme_bazli_iptal_REGRESYONSUZ()
     {
         // scope yoksa eski davranış aynen sürer.
@@ -415,6 +440,9 @@ public class ReversalTests : IDisposable
             Task.FromResult(new NotifyResult(NotifyOutcome.Recorded, "OK", null, 200, ""));
         public Task<NotifyResult> NotifyTicketCancelAsync(string body, CancellationToken ct = default)
         { TicketCancelBodies.Add(body); return Task.FromResult(new NotifyResult(NotifyOutcome.Recorded, "OK", null, 200, "")); }
+        public List<string> TicketClosedBodies { get; } = new();
+        public Task<NotifyResult> NotifyTicketClosedAsync(string body, CancellationToken ct = default)
+        { TicketClosedBodies.Add(body); return Task.FromResult(new NotifyResult(NotifyOutcome.Recorded, "OK", null, 200, "")); }
     }
 
     private FakeNotifier _notifier = new();

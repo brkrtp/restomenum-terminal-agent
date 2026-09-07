@@ -394,10 +394,69 @@ public sealed class LocalSaleHandler
         finally { _islemKilidi.Release(); }
 
         // 4. Gövdeyi kur; ÖNCE platforma bildir, SONRA kasaya dön.
-        var body = SaleToPoiResponseBuilder.BuildResult(req, ToTransportResult(outcome), d.Exponent, _now());
+        var sonuc = ToTransportResult(outcome);
+        var body = SaleToPoiResponseBuilder.BuildResult(req, sonuc, d.Exponent, _now());
         await NotifyAsync(req.PaymentId, body, ct);
         _log("[yerel] sonuç", new { req.PaymentId, decision = outcome.Decision.ToString(), state = outcome.State.ToString() });
+
+        // Fiş bu ödemeyle KAPANDIYSA: satırların deftere yazılma anı budur (K-26).
+        await FisKapandiBildirAsync(req, sonuc, ct);
         return body;
+    }
+
+    /// <summary>
+    /// Fiş KAPANDI bildirimi (K-26/P27) — ödemeler deftere burada, tek seferde yazılıyor.
+    ///
+    /// <para><b>Neden dayanıklı (outbox ÖNCE):</b> fiş cihazda GERÇEKTEN kapandı ve mali kayıt
+    /// oluştu. Bildirim o an gidemezse o fişin ödemelerinin hiçbiri deftere yazılmaz — tahsilat
+    /// yapılmış, satır yok. Satıştan farklı olarak bunu sonradan keşfedecek bir kurtarma turu da
+    /// YOK: kapanmış fişi cihaza sorup "ödemeleri neydi" diye öğrenemeyiz.</para>
+    ///
+    /// <para>Tekilleştirme anahtarı <c>ticketId</c>: aynı fiş için ikinci bildirim güvenlidir
+    /// (platform tekrar sayar). <c>paymentId</c> anahtar OLAMAZDI — bildirim bir denemeye değil
+    /// bir FİŞE ait.</para>
+    /// </summary>
+    private async Task FisKapandiBildirAsync(SaleToPoiRequest req, TransportResult sonuc, CancellationToken ct)
+    {
+        if (!string.Equals(sonuc.TicketState, "CLOSED", StringComparison.Ordinal)) return;
+        if (sonuc.TicketId is not string fisId)
+        {
+            // Kimlik yoksa bildirim GÖNDERİLMEZ: platform tekilleştirmeyi ticketId'ye dayıyor,
+            // uydurulmuş bir kimlik aynı fişi iki kez yazdırabilirdi. Sessiz kalmıyoruz: alarm.
+            _log("[yerel] fiş KAPANDI ama kimlik yok — bildirim gönderilmedi (ALARM)",
+                new { req.PaymentId, req.PoiId });
+            return;
+        }
+
+        var govde = SaleToPoiResponseBuilder.BuildTicketClosed(
+            terminalId: req.PoiId, ticketId: fisId, saleSessionId: req.SaleSessionId,
+            payments: sonuc.ClosedTicketPayments ?? Array.Empty<TicketPaymentRow>(),
+            totalMinor: sonuc.DeviceTicketTotalMinor, paidMinor: sonuc.DevicePaidMinor);
+
+        var eid = fisId + ":ticket-closed";
+        _outbox.Enqueue(eid, req.PaymentId, OutboxKinds.TicketClosed, govde, "");
+        _log("[yerel] fiş KAPANDI", new
+        {
+            req.PaymentId, fisId, odemeSayisi = sonuc.ClosedTicketPayments?.Count ?? 0,
+            cihazTahsil = sonuc.DevicePaidMinor, cihazToplam = sonuc.DeviceTicketTotalMinor,
+        });
+        try
+        {
+            var bildirim = await _notifier.NotifyTicketClosedAsync(govde, ct);
+            if (bildirim.IsFinal) _outbox.Confirm(eid);
+            else _outbox.MarkAttempt(eid);
+            if (bildirim.IsProblem)
+                _log("[yerel] fiş kapandı bildirimi SORUNU (alarm)", new
+                {
+                    req.PaymentId, fisId, outcome = bildirim.Outcome.ToString(),
+                    bildirim.StatusCode, bildirim.Message,
+                });
+        }
+        catch (Exception e) when (e is not OperationCanceledException)
+        {
+            _log("[yerel] fiş kapandı bildirimi gönderilemedi — outbox'ta kaldı (replay)",
+                new { req.PaymentId, fisId, error = e.Message });
+        }
     }
 
     /// <summary>
@@ -413,9 +472,12 @@ public sealed class LocalSaleHandler
             {
                 // TÜRE GÖRE UÇ: fiş iptali AYRI uca gider (paymentId ile adreslenmiyor).
                 // Hepsini ödeme ucuna göndermek, replay edilen her iptali 404/409'a düşürürdü.
-                var res = e.Status == OutboxKinds.TicketCancel
-                    ? await _notifier.NotifyTicketCancelAsync(e.PayloadJson, ct)
-                    : await _notifier.NotifyAsync(e.PaymentId, e.PayloadJson, ct);
+                var res = e.Status switch
+                {
+                    OutboxKinds.TicketCancel => await _notifier.NotifyTicketCancelAsync(e.PayloadJson, ct),
+                    OutboxKinds.TicketClosed => await _notifier.NotifyTicketClosedAsync(e.PayloadJson, ct),
+                    _ => await _notifier.NotifyAsync(e.PaymentId, e.PayloadJson, ct),
+                };
                 if (res.IsFinal) _outbox.Confirm(e.EventId);
                 else _outbox.MarkAttempt(e.EventId);
                 if (res.IsProblem)

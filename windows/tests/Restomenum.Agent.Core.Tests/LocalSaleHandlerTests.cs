@@ -65,6 +65,9 @@ public class LocalSaleHandlerTests : IDisposable
         { Bodies.Add(body); return Task.FromResult(Result); }
         public Task<NotifyResult> NotifyTicketCancelAsync(string body, CancellationToken ct = default)
         { Bodies.Add(body); return Task.FromResult(Result); }
+        public List<string> TicketClosedBodies { get; } = new();
+        public Task<NotifyResult> NotifyTicketClosedAsync(string body, CancellationToken ct = default)
+        { TicketClosedBodies.Add(body); return Task.FromResult(Result); }
     }
 
     private const string Pay = "pay_0123456789abcdef0123456789abcdef01234567";
@@ -94,6 +97,92 @@ public class LocalSaleHandlerTests : IDisposable
 
     private static JsonElement Resp(string json) =>
         JsonDocument.Parse(json).RootElement.GetProperty("SaleToPOIResponse").GetProperty("PaymentResponse").GetProperty("Response");
+
+    // ── P27: FİŞ KAPANDI BİLDİRİMİ (K-26) ───────────────────────────────────────
+
+    [Fact]
+    public async Task Fis_kapandiysa_AYRI_bildirim_gider_ve_odemeleri_TASIR()
+    {
+        // Kullanıcı kararı: ödemeler deftere fiş TAMAMEN kapanınca yazılıyor. Bu bildirim o anın
+        // tek habercisi — gitmezse o fişin HİÇBİR ödemesi deftere yazılmaz.
+        var (h, _, notifier) = Kur(new PaymentDetailResult.Ok(Detail()),
+            terminal: new TransportResult(TransportOutcome.Approved, ApprovedAmountMinor: 24000,
+                TicketState: "CLOSED", TicketId: "tkt_abc",
+                ClosedTicketPayments: new[]
+                {
+                    new TicketPaymentRow("pay-1", 200, GmpPaymentTypes.Cash, null),
+                    new TicketPaymentRow("pay-2", 790, GmpPaymentTypes.Card, 62),
+                },
+                DevicePaidMinor: 990, DeviceTicketTotalMinor: 990));
+
+        await h.HandleAsync(Req());
+
+        var govde = Assert.Single(notifier.TicketClosedBodies);
+        var ek = JsonDocument.Parse(govde).RootElement
+            .GetProperty("SaleToPOIResponse").GetProperty("Restomenum");
+        Assert.Equal("tkt_abc", ek.GetProperty("ticketId").GetString());
+        Assert.Equal("CLOSED", ek.GetProperty("ticketState").GetString());
+        Assert.Equal("ticket", ek.GetProperty("scope").GetString());
+        var satirlar = ek.GetProperty("payments").EnumerateArray().ToList();
+        Assert.Equal(2, satirlar.Count);
+        Assert.Equal("pay-1", satirlar[0].GetProperty("paymentId").GetString());
+        Assert.Equal("cash", satirlar[0].GetProperty("methodType").GetString());
+        Assert.False(satirlar[0].TryGetProperty("bankBkmId", out _));     // nakitte banka YOK
+        Assert.Equal("card", satirlar[1].GetProperty("methodType").GetString());
+        Assert.Equal(62, satirlar[1].GetProperty("bankBkmId").GetInt32());
+        // ← ÇİVİ: tahsil toplamı CİHAZDAN gider, listemizin toplamı değil. Ayrı gittiği için
+        // platform "listede olmayan bir tahsilat var mı" sorusunu kendi cevaplayabilir.
+        Assert.Equal(990, ek.GetProperty("paidMinor").GetInt64());
+        // POIID sahiplik kapısı — yoksa platform 400 döner.
+        Assert.Equal("term-01", JsonDocument.Parse(govde).RootElement
+            .GetProperty("SaleToPOIResponse").GetProperty("MessageHeader")
+            .GetProperty("POIID").GetString());
+    }
+
+    [Fact]
+    public async Task Fis_ACIK_kaldiysa_kapanis_bildirimi_GITMEZ()
+    {
+        // ← ÇİVİ: kısmi ödemede satır yazmak, sonradan iptal edilen bir fişin satırlarını geri
+        // almayı gerektirirdi.
+        var (h, _, notifier) = Kur(new PaymentDetailResult.Ok(Detail()),
+            terminal: new TransportResult(TransportOutcome.Approved, ApprovedAmountMinor: 24000,
+                TicketState: "OPEN", TicketId: "tkt_abc"));
+
+        await h.HandleAsync(Req());
+
+        Assert.Empty(notifier.TicketClosedBodies);
+    }
+
+    [Fact]
+    public async Task Kimlik_YOKSA_kapanis_bildirimi_GONDERILMEZ()
+    {
+        // Platform tekilleştirmeyi `ticketId`'ye dayıyor. Uydurulmuş bir kimlik aynı fişi iki kez
+        // yazdırabilir ya da iki ayrı fişi birleştirebilirdi. Sessiz kalmıyoruz: log alarm basar.
+        var (h, _, notifier) = Kur(new PaymentDetailResult.Ok(Detail()),
+            terminal: new TransportResult(TransportOutcome.Approved, ApprovedAmountMinor: 24000,
+                TicketState: "CLOSED", TicketId: null));
+
+        await h.HandleAsync(Req());
+
+        Assert.Empty(notifier.TicketClosedBodies);
+    }
+
+    [Fact]
+    public async Task Kapanis_bildirimi_OUTBOXa_once_yazilir_ve_gonderilince_onaylanir()
+    {
+        // Fiş cihazda GERÇEKTEN kapandı; bildirim o an gidemezse satırlar hiç yazılmaz ve bunu
+        // sonradan keşfedecek bir kurtarma turu YOK. Bu yüzden önce diske, sonra ağa.
+        var (h, _, notifier) = Kur(new PaymentDetailResult.Ok(Detail()),
+            terminal: new TransportResult(TransportOutcome.Approved, ApprovedAmountMinor: 24000,
+                TicketState: "CLOSED", TicketId: "tkt_xyz"));
+        notifier.Result = new NotifyResult(NotifyOutcome.NetworkError, null, null, 0, "ağ");
+
+        await h.HandleAsync(Req());
+
+        var bekleyen = _outbox.Pending().Where(e => e.Status == OutboxKinds.TicketClosed).ToList();
+        var kayit = Assert.Single(bekleyen);
+        Assert.Equal("tkt_xyz:ticket-closed", kayit.EventId);   // tekilleştirme fiş bazlı
+    }
 
     [Fact]
     public async Task Onaylanan_odeme_Success_doner_ve_platforma_bildirilir()
