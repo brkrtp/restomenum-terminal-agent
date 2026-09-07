@@ -98,6 +98,25 @@ public class LocalSaleHandlerTests : IDisposable
     private static JsonElement Resp(string json) =>
         JsonDocument.Parse(json).RootElement.GetProperty("SaleToPOIResponse").GetProperty("PaymentResponse").GetProperty("Response");
 
+    // ── W27: RET GÖVDESİNDE ÜRÜN ADRESİ ─────────────────────────────────────────
+
+    [Fact]
+    public async Task Oran_celiskisinde_HANGI_URUN_oldugu_makine_okunur_gider()
+    {
+        // ← ÇİVİ: kasiyer "ayar eksik" görüp ne yapacağını bilemiyordu. Kod `AdditionalResponse`
+        // içinde de var ama orası serbest teşhis metni; kasanın oradan ayrıştırması kırılgan olur.
+        var (h, sim, _) = Kur(new PaymentDetailResult.Ok(Detail()), rate: 2000);   // departman %20
+
+        var govde = await h.HandleAsync(Req());
+        var ek = JsonDocument.Parse(govde).RootElement
+            .GetProperty("SaleToPOIResponse").GetProperty("Restomenum");
+
+        Assert.Equal("PROVIDER_CONFIG_INCOMPLETE", ek.GetProperty("reason").GetString());
+        Assert.Equal("p1", ek.GetProperty("productCode").GetString());     // ← ÇİVİ
+        Assert.False(ek.GetProperty("paymentInvoked").GetBoolean());
+        Assert.Empty(sim.SaleCalls);                                        // terminale GİDİLMEDİ
+    }
+
     // ── P27: FİŞ KAPANDI BİLDİRİMİ (K-26) ───────────────────────────────────────
 
     [Fact]

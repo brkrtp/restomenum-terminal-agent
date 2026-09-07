@@ -332,7 +332,8 @@ public sealed class LocalSaleHandler
             {
                 // GET başarılıydı (deneme ACCEPTED) → platforma bildir ki takılı kalmasın. Ürünü SÖYLE.
                 var reddi = SaleToPoiResponseBuilder.BuildFailure(req, "PaymentRestriction",
-                    $"PRODUCT_UNMAPPED:{item.ProductCode}", _now(), RestomenumReasons.ProductUnmapped);
+                    $"PRODUCT_UNMAPPED:{item.ProductCode}", _now(), RestomenumReasons.ProductUnmapped,
+                    productCode: item.ProductCode);
                 await NotifyAsync(req.PaymentId, reddi, ct);
                 _log("[yerel] eşlenmemiş ürün — terminale gidilmedi",
                     new { req.PaymentId, item.ProductCode, item.ProductLabel });
@@ -352,7 +353,7 @@ public sealed class LocalSaleHandler
             {
                 var reddi = SaleToPoiResponseBuilder.BuildFailure(req, "PaymentRestriction",
                     $"PROVIDER_CONFIG_INCOMPLETE:{item.ProductCode}", _now(),
-                    RestomenumReasons.ProviderConfigIncomplete);
+                    RestomenumReasons.ProviderConfigIncomplete, productCode: item.ProductCode);
                 await NotifyAsync(req.PaymentId, reddi, ct);
                 _log("[yerel] departman KDV'si TaxCode ile çelişiyor — terminale gidilmedi (mali sapma önlendi)",
                     new { req.PaymentId, item.ProductCode, item.TaxCode, deptRate, dept = m.Index });

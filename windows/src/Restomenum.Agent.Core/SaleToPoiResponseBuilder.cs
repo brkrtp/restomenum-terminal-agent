@@ -117,8 +117,16 @@ public static class SaleToPoiResponseBuilder
     /// (kesin-ret listesi → declined, gerisi → unknown). <paramref name="additionalResponse"/> ASCII
     /// makine kodu (Türkçe/serbest metin YASAK — tüm sonucu reddettirir).
     /// </summary>
+    /// <param name="productCode">
+    /// Reddi tetikleyen ÜRÜN — varsa <c>Restomenum.productCode</c> olarak ayrı alanda gider.
+    ///
+    /// <para><b>Neden ayrı alan:</b> kod zaten <c>AdditionalResponse</c> içinde de var
+    /// (<c>PROVIDER_CONFIG_INCOMPLETE:cb8e-0f77</c>) ama orası serbest teşhis metni; içeriği
+    /// değişebilir ve kasanın oradan ayrıştırma yapması kırılgan olurdu. Kasiyere "şu ürünü
+    /// düzeltin" diyebilmek için adresin makine-okunur olması gerekiyor.</para>
+    /// </param>
     public static string BuildFailure(SaleToPoiRequest req, string errorCondition, string? additionalResponse,
-        DateTimeOffset now, string? reason = null)
+        DateTimeOffset now, string? reason = null, string? productCode = null)
     {
         var response = new JsonObject { ["Result"] = "Failure", ["ErrorCondition"] = errorCondition };
         if (additionalResponse is not null) response["AdditionalResponse"] = additionalResponse;
@@ -142,7 +150,7 @@ public static class SaleToPoiResponseBuilder
                 },
                 // Bu üretici YALNIZ terminale gidilmeden üretilen retlerde çağrılıyor → ödeme
                 // fonksiyonu kesinlikle çalışmadı.
-                ["Restomenum"] = Ek(paymentInvoked: false, reason),
+                ["Restomenum"] = RetEk(reason, productCode),
             },
         }.ToJsonString();
     }
@@ -457,6 +465,14 @@ public static class SaleToPoiResponseBuilder
             ek["cancelledSaleSessionId"] = result.CancelledSaleSessionId is null
                 ? null : JsonValue.Create(result.CancelledSaleSessionId);
         if (req.SaleSessionId is not null) ek["saleSessionId"] = req.SaleSessionId;
+        return ek;
+    }
+
+    /// <summary>Terminale gidilmeden verilen retlerin <c>Restomenum</c> bloğu.</summary>
+    private static JsonObject RetEk(string? reason, string? productCode)
+    {
+        var ek = Ek(paymentInvoked: false, reason);
+        if (!string.IsNullOrWhiteSpace(productCode)) ek["productCode"] = productCode;
         return ek;
     }
 
