@@ -127,10 +127,16 @@ public sealed class DeviceConfigClient
                 {
                     var govde = await resp.Content.ReadAsStringAsync(ct);
                     using var doc = JsonDocument.Parse(govde);
-                    if (doc.RootElement.TryGetProperty("paymentApplicationsReported", out var pr)
+                    // Platform zarfı: {success, data:{...}} — bu uçta da geçerli. Kökte arayıp
+                    // bulamayınca "(teyit yok)" yazıyorduk ve teyit var sanıp kaçırıyorduk;
+                    // W21'in ilk koşusu tam bunu gösterdi (aynı desen, satır 190'da zaten çözülmüş).
+                    var kok = doc.RootElement;
+                    var d = kok.TryGetProperty("data", out var dataEl) && dataEl.ValueKind == JsonValueKind.Object
+                        ? dataEl : kok;
+                    if (d.TryGetProperty("paymentApplicationsReported", out var pr)
                         && (pr.ValueKind == JsonValueKind.True || pr.ValueKind == JsonValueKind.False))
                         appOk = pr.GetBoolean();
-                    if (doc.RootElement.TryGetProperty("paymentApplicationCount", out var pc)
+                    if (d.TryGetProperty("paymentApplicationCount", out var pc)
                         && pc.ValueKind == JsonValueKind.Number)
                         appAdet = pc.GetInt32();
                 }
