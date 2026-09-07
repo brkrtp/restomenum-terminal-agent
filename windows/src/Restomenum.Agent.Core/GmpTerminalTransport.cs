@@ -160,7 +160,7 @@ public sealed class GmpTerminalTransport : ITerminalTransport
         if (_gmp.GetTicket(handle, out var once).Ok)
         {
             _snapshots?.SaveSnapshot(request.CommandId,
-                once.TotalAmountMinor, once.PaidAmountMinor, once.PaymentCount);
+                once.TotalAmountMinor, once.PaidAmountMinor, once.PaymentCount, request.SaleSessionId);
         }
 
         // ── ÖDEME: kartta 20–32 sn bloke eder ────────────────────────────────────
@@ -463,6 +463,33 @@ public sealed class GmpTerminalTransport : ITerminalTransport
 
         if (once is not null && simdi.PaymentCount > once.Value.PaymentCount)
         {
+            // ── SAHİPLİK KAPISI ────────────────────────────────────────────────────────
+            // "Sayaç arttı" gözlemi TEK BAŞINA "benim ödemem geçti" demek DEĞİL. Cihazda o an
+            // BAŞKA bir satışın fişi duruyor olabilir ve onun ödemesi sayacı artırır.
+            //
+            // SAHADA OLDU (2026-09-07 16:36): sabah 2086 alıp hiç para almamış bir kart komutu,
+            // kurtarma turunda kullanıcının YENİ nakit satışının fişini gördü, "benim ödemem
+            // geçmiş" dedi ve kendini Approved ilan etti. Defterde masa-5'e 4,90 TL'lik HAYALET
+            // kart tahsilatı yazıldı; gerçek para masa-7'de nakitti. İki fişin tutarı da 990
+            // olduğu için tutar karşılaştırması da yakalamadı.
+            //
+            // Bu yüzden `Landed` ancak fişin BU komuta ait olduğu KANITLIYSA verilir. Kanıt:
+            // cihazdaki açık fişin bağı (`open_ticket.saleSessionId`) ile bu komutun anlık
+            // görüntüsünde saklanan oturumun EŞLEŞMESİ. Biri yoksa kanıt yoktur → belirsiz.
+            var fisSahibi = _snapshots?.ReadOpenTicketBinding(request.TerminalId);
+            var komutSahibi = once.Value.SaleSessionId;
+            if (komutSahibi is null || fisSahibi is null
+                || !string.Equals(komutSahibi, fisSahibi, StringComparison.Ordinal))
+            {
+                _log("[gmp] sayaç arttı ama fişin bu komuta aitliği KANITLANAMADI", new
+                {
+                    request.CommandId, komutSahibi = komutSahibi ?? "(yok)", fisSahibi = fisSahibi ?? "(yok)",
+                });
+                return new PaymentProbe(ProbeVerdict.Indeterminate,
+                    RemainingMinor: simdi.RemainingMinor,
+                    Note: "fişin sahipliği kanıtlanamadı — başka satışın ödemesi olabilir");
+            }
+
             // ÇELİŞKİ SAVUNMASI: sayaç arttı ama ödenen tutar artmadı (delta ≤ 0). "Landed" = para
             // HAREKET ETTİ demek; 0/negatif tutarla Landed dönmek sahte-onay üretir (Success +
             // AuthorizedAmount 0). Canlı ölçüldü: başarısız kart bacağında sayaç artıp tutar

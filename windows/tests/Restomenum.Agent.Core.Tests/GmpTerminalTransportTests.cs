@@ -81,10 +81,11 @@ public class GmpTerminalTransportTests
     /// süreç kart penceresinde ölürse görüntünün hayatta kalması şart.</summary>
     private sealed class FakeSnapshots : ITicketSnapshotStore
     {
-        private readonly Dictionary<string, (long, long, int)> _d = new();
-        public void SaveSnapshot(string commandId, long total, long paid, int count, long? now = null)
-            => _d[commandId] = (total, paid, count);
-        public (long TotalMinor, long PaidMinor, int PaymentCount)? ReadSnapshot(string commandId)
+        private readonly Dictionary<string, (long, long, int, string?)> _d = new();
+        public void SaveSnapshot(string commandId, long total, long paid, int count,
+            string? saleSessionId = null, long? now = null)
+            => _d[commandId] = (total, paid, count, saleSessionId);
+        public (long TotalMinor, long PaidMinor, int PaymentCount, string? SaleSessionId)? ReadSnapshot(string commandId)
             => _d.TryGetValue(commandId, out var v) ? v : null;
 
         /// <summary>Açık fiş ↔ satış oturumu bağı (gerçekte diskte, testte bellekte).</summary>
@@ -280,19 +281,61 @@ public class GmpTerminalTransportTests
     // ── PROBE: "benim ödemem işlendi mi" ─────────────────────────────────────
 
     [Fact]
-    public async Task Probe_odeme_sayaci_ARTMISSA_Landed()
+    public async Task Probe_odeme_sayaci_ARTMISSA_ve_fis_BIZIMSE_Landed()
     {
+        // Sayaç artışı `Landed` için GEREKLİ ama YETERLİ DEĞİL: fişin bu komuta ait olduğu da
+        // kanıtlanmalı (aşağıdaki `Probe_fis_BIZIM_DEGILSE_Landed_DEMEZ` testine bakın).
         var (t, g, _) = Kur();
         g.Ticket = new GmpTicket(3000, 0, 0, 0);              // ödeme öncesi anlık görüntü
         g.Codes["Payment"] = GmpCodes.Timeout;
-        await t.SaleAsync(Req());
+        await t.SaleAsync(Req(oturum: "oturum-A"));
 
         g.Ticket = new GmpTicket(3000, 1000, 1, GmpPaymentTypes.Card, "RRN9");
-        var p = await t.ProbeAsync(Req());
+        var p = await t.ProbeAsync(Req(oturum: "oturum-A"));
 
         Assert.Equal(ProbeVerdict.Landed, p.Verdict);
         Assert.Equal(1000, p.ApprovedAmountMinor);
         Assert.Equal(2000, p.RemainingMinor);   // kalan var ve bu ARIZA DEĞİL
+    }
+
+    [Fact]
+    public async Task Probe_fis_BIZIM_DEGILSE_Landed_DEMEZ()
+    {
+        // SAHADA OLDU (2026-09-07 16:36): sabah 2086 alıp hiç para almamış bir kart komutu,
+        // kurtarma turunda kullanıcının YENİ nakit satışının fişini gördü ve "benim ödemem
+        // geçmiş" dedi. Defterde masa-5'e 4,90 TL HAYALET kart tahsilatı yazıldı; gerçek para
+        // masa-7'de nakitti. İki fişin tutarı da aynı olduğu için tutar karşılaştırması da
+        // yakalamadı.
+        // ← ÇİVİ: sayaç artışı kimin ödemesi olduğunu SÖYLEMEZ. Sahiplik kanıtlanamıyorsa belirsiz.
+        var (t, g, snap) = Kur();
+        g.Ticket = new GmpTicket(3000, 0, 0, 0);
+        g.Codes["Payment"] = GmpCodes.Timeout;
+        await t.SaleAsync(Req(oturum: "oturum-A"));
+
+        // Cihazdaki açık fiş artık BAŞKA bir satışın.
+        snap.BindOpenTicket("t1", "oturum-B");
+        g.Ticket = new GmpTicket(3000, 1000, 1, GmpPaymentTypes.Card, "RRN9");
+
+        var p = await t.ProbeAsync(Req(oturum: "oturum-A"));
+
+        Assert.Equal(ProbeVerdict.Indeterminate, p.Verdict);   // ← ÇİVİ
+        Assert.Null(p.ApprovedAmountMinor);
+    }
+
+    [Fact]
+    public async Task Probe_sahiplik_BILINMIYORSA_Landed_DEMEZ()
+    {
+        // Oturum kimliği gelmeyen (eski platform) kayıtlarda kanıt kurulamaz. Maliyeti kabul
+        // edildi: o komutlar operatöre çıkar. Alternatifi başkasının ödemesini sahiplenmek.
+        var (t, g, _) = Kur();
+        g.Ticket = new GmpTicket(3000, 0, 0, 0);
+        g.Codes["Payment"] = GmpCodes.Timeout;
+        await t.SaleAsync(Req(oturum: null));
+
+        g.Ticket = new GmpTicket(3000, 1000, 1, GmpPaymentTypes.Card, "RRN9");
+        var p = await t.ProbeAsync(Req(oturum: null));
+
+        Assert.Equal(ProbeVerdict.Indeterminate, p.Verdict);
     }
 
     [Fact]
@@ -316,10 +359,10 @@ public class GmpTerminalTransportTests
         var (t, g, _) = Kur();
         g.Ticket = new GmpTicket(4000, 2000, 1, GmpPaymentTypes.Cash);
         g.Codes["Payment"] = GmpCodes.Timeout;
-        await t.SaleAsync(Req(amount: 2000, paymentType: GmpPaymentTypes.Cash));
+        await t.SaleAsync(Req(amount: 2000, paymentType: GmpPaymentTypes.Cash, oturum: "oturum-A"));
 
         g.Ticket = new GmpTicket(4000, 4000, 2, GmpPaymentTypes.Cash);
-        var p = await t.ProbeAsync(Req(amount: 2000, paymentType: GmpPaymentTypes.Cash));
+        var p = await t.ProbeAsync(Req(amount: 2000, paymentType: GmpPaymentTypes.Cash, oturum: "oturum-A"));
 
         Assert.Equal(ProbeVerdict.Landed, p.Verdict);
         Assert.Equal(2000, p.ApprovedAmountMinor);

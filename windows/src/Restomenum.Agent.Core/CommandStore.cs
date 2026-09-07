@@ -135,6 +135,18 @@ public sealed class CommandStore : ITicketSnapshotStore, IDisposable
                 cmd.ExecuteNonQuery();
             }
 
+            // Anlik goruntuye satis oturumu: yoklamanin SAHIPLIK kaniti. Eski satirlarda NULL
+            // kalir ve NULL "kanit yok" demektir - o kayitlarda Landed uretilemez (guvenli taraf).
+            var snapKolon = new List<string>();
+            cmd.CommandText = "PRAGMA table_info(ticket_snapshots)";
+            using (var r2 = cmd.ExecuteReader())
+                while (r2.Read()) snapKolon.Add(r2.GetString(1));
+            if (!snapKolon.Contains("sale_session_id"))
+            {
+                cmd.CommandText = "ALTER TABLE ticket_snapshots ADD COLUMN sale_session_id TEXT";
+                cmd.ExecuteNonQuery();
+            }
+
             // Yeniden başlatmada tamamlanmamış komutları bulmak için: durum sorgusu indekslenir.
             cmd.CommandText = "CREATE INDEX IF NOT EXISTS ix_commands_state ON commands(state)";
             cmd.ExecuteNonQuery();
@@ -273,37 +285,42 @@ public sealed class CommandStore : ITicketSnapshotStore, IDisposable
     }
 
     /// <summary>Ödeme öncesi fiş görüntüsünü <b>diske</b> yazar (yeniden başlatmaya dayanıklı).</summary>
-    public void SaveSnapshot(string commandId, long totalMinor, long paidMinor, int paymentCount, long? now = null)
+    public void SaveSnapshot(string commandId, long totalMinor, long paidMinor, int paymentCount,
+        string? saleSessionId = null, long? now = null)
     {
         lock (_gate)
         {
             using var cmd = _conn.CreateCommand();
             cmd.CommandText = """
-                INSERT INTO ticket_snapshots (command_id, total_minor, paid_minor, payment_count, taken_at)
-                VALUES ($cid, $t, $p, $c, $now)
+                INSERT INTO ticket_snapshots
+                    (command_id, total_minor, paid_minor, payment_count, taken_at, sale_session_id)
+                VALUES ($cid, $t, $p, $c, $now, $sid)
                 ON CONFLICT(command_id) DO UPDATE SET
-                    total_minor = $t, paid_minor = $p, payment_count = $c, taken_at = $now
+                    total_minor = $t, paid_minor = $p, payment_count = $c, taken_at = $now,
+                    sale_session_id = $sid
                 """;
             cmd.Parameters.AddWithValue("$cid", commandId);
             cmd.Parameters.AddWithValue("$t", totalMinor);
             cmd.Parameters.AddWithValue("$p", paidMinor);
             cmd.Parameters.AddWithValue("$c", paymentCount);
             cmd.Parameters.AddWithValue("$now", now ?? DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+            cmd.Parameters.AddWithValue("$sid", (object?)saleSessionId ?? DBNull.Value);
             cmd.ExecuteNonQuery();
         }
     }
 
     /// <summary>Saklanan görüntü; yoksa <c>null</c>.</summary>
-    public (long TotalMinor, long PaidMinor, int PaymentCount)? ReadSnapshot(string commandId)
+    public (long TotalMinor, long PaidMinor, int PaymentCount, string? SaleSessionId)? ReadSnapshot(string commandId)
     {
         lock (_gate)
         {
             using var cmd = _conn.CreateCommand();
-            cmd.CommandText = "SELECT total_minor, paid_minor, payment_count FROM ticket_snapshots WHERE command_id = $cid";
+            cmd.CommandText =
+                "SELECT total_minor, paid_minor, payment_count, sale_session_id FROM ticket_snapshots WHERE command_id = $cid";
             cmd.Parameters.AddWithValue("$cid", commandId);
             using var r = cmd.ExecuteReader();
             if (!r.Read()) return null;
-            return (r.GetInt64(0), r.GetInt64(1), r.GetInt32(2));
+            return (r.GetInt64(0), r.GetInt64(1), r.GetInt32(2), r.IsDBNull(3) ? null : r.GetString(3));
         }
     }
 

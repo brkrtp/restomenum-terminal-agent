@@ -9,8 +9,15 @@ namespace Restomenum.Agent.Core;
 /// </summary>
 public interface ITicketSnapshotStore
 {
-    void SaveSnapshot(string commandId, long totalMinor, long paidMinor, int paymentCount, long? now = null);
-    (long TotalMinor, long PaidMinor, int PaymentCount)? ReadSnapshot(string commandId);
+    /// <param name="saleSessionId">
+    /// Bu komutun satis oturumu. <b>Sahiplik kaniti:</b> yoklama, cihazdaki acik fisin BU komuta
+    /// ait oldugunu ancak bununla dogrulayabilir. Yoksa "sayac artmis" gozlemi baskasinin
+    /// odemesine ait olabilir.
+    /// </param>
+    void SaveSnapshot(string commandId, long totalMinor, long paidMinor, int paymentCount,
+        string? saleSessionId = null, long? now = null);
+
+    (long TotalMinor, long PaidMinor, int PaymentCount, string? SaleSessionId)? ReadSnapshot(string commandId);
 
     /// <summary>
     /// Cihazda AÇIK bırakılan fişin hangi satış oturumuna ait olduğunu yazar.

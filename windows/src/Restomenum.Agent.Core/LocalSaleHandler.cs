@@ -83,6 +83,23 @@ public sealed class LocalSaleHandler
         foreach (var k in pending)
         {
             if (ct.IsCancellationRequested) return;
+
+            // ── TERMİNAL KİLİDİ: kurtarma da sıraya girer ─────────────────────────────
+            // Kurtarma eskiden kilidi ALMIYORDU ve uçuştaki bir satışla AYNI ANDA koşabiliyordu.
+            // Sahada bunun bedeli ölçüldü (2026-09-07 16:36): kurtarma, kasanın o an yaptığı yeni
+            // satışın fişini gördü ve eski bir komut o ödemeyi sahiplendi (hayalet onay).
+            // Sahiplik kapısı artık bunu ayrıca engelliyor; bu kilit ikinci savunma ve aynı
+            // zamanda cihazı iki iş arasında paylaştırmama kuralının (değişmez #4) gereği.
+            //
+            // Satışa ÖNCELİK: 60 sn'de kilit alınamazsa tur ATLANIR. Kayıt duruyor, bir sonraki
+            // açılış/tur yeniden dener; kurtarmayı beklemek için satışı geciktirmek yanlış olurdu.
+            if (!await _islemKilidi.WaitAsync(TimeSpan.FromSeconds(60), ct))
+            {
+                _log("[yerel] açılış kurtarması atlandı — terminal meşgul (satış öncelikli)",
+                    new { k.CommandId });
+                return;
+            }
+
             AgentOutcome outcome;
             try
             {
@@ -96,6 +113,7 @@ public sealed class LocalSaleHandler
                 _log("[yerel] yarım komut çözülemedi", new { k.CommandId, error = e.Message });
                 continue;
             }
+            finally { _islemKilidi.Release(); }
             // Kasaya DÖNMÜYORUZ (çağrı bitti); yalnız platforma bildir. Exponent 2 (terminal sürüşü TR).
             var geri = new SaleToPoiRequest(k.CommandId, "", k.TerminalId, k.PaymentId, "", _now());
             var body = SaleToPoiResponseBuilder.BuildResult(geri, ToTransportResult(outcome), 2, _now());
