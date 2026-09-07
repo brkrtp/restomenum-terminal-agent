@@ -301,6 +301,56 @@ public static class SaleToPoiResponseBuilder
         }.ToJsonString();
     }
 
+    /// <summary>
+    /// <b>ONAY GERİ ÇEKME</b> — daha önce <c>Success</c> diye bildirilmiş bir sonucun düzeltmesi.
+    ///
+    /// <para>Gövde satış sonucu biçimindedir (<c>PaymentResponse</c>) çünkü düzelttiği şey bir
+    /// satış sonucudur. <c>Result: Failure</c> + <c>InProgress</c>: "artık onaylı demiyorum, ama
+    /// yerine kesin bir şey de diyemiyorum" — geri çekmek, tersini iddia etmek değildir.</para>
+    ///
+    /// <para><c>AuthorizedAmount</c> GÖNDERİLMEZ: geri çekilen zaten o tutarın iddiasıydı.</para>
+    /// </summary>
+    public static string BuildLandedRetraction(
+        string serviceId, string saleId, string poiId, string paymentId, DateTimeOffset now) =>
+        new JsonObject
+        {
+            ["SaleToPOIResponse"] = new JsonObject
+            {
+                ["MessageHeader"] = new JsonObject
+                {
+                    ["ProtocolVersion"] = "3.0",
+                    ["MessageClass"] = "Service",
+                    ["MessageCategory"] = "Payment",
+                    ["MessageType"] = "Response",
+                    ["ServiceID"] = serviceId,
+                    ["SaleID"] = saleId,
+                    ["POIID"] = poiId,
+                },
+                ["PaymentResponse"] = new JsonObject
+                {
+                    ["SaleData"] = new JsonObject
+                    {
+                        ["SaleTransactionID"] = new JsonObject
+                        {
+                            ["TransactionID"] = paymentId,
+                            ["TimeStamp"] = Iso(now),
+                        },
+                    },
+                    ["PaymentResult"] = new JsonObject(),
+                    ["Response"] = new JsonObject
+                    {
+                        ["Result"] = "Failure",
+                        ["ErrorCondition"] = "InProgress",
+                        ["AdditionalResponse"] = RestomenumReasons.LandedRetracted,
+                    },
+                },
+                // `paymentInvoked: true` — FP3_Payment gerçekten çağrılmıştı. Geri çekilen,
+                // "para hareket etti" iddiası; "çağırdık mı" sorusu değişmedi.
+                ["Restomenum"] = Ek(paymentInvoked: true, reason: null,
+                    info: RestomenumReasons.LandedRetracted),
+            },
+        }.ToJsonString();
+
     private static JsonObject Ek(bool paymentInvoked, string? reason, string? info = null)
     {
         var o = new JsonObject { ["v"] = 1, ["paymentInvoked"] = paymentInvoked };

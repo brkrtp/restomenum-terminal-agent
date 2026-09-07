@@ -1,5 +1,6 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Restomenum.Agent.Core;
 using Restomenum.Agent.Host;
 using Restomenum.Agent.Host.Windows;
 
@@ -15,9 +16,12 @@ bool configSmoke = args.Contains("--config-smoke");
 bool ticketModu = args.Contains("--ticket");
 bool voidOnayi = args.Contains("--onayla");
 bool paymentAppsModu = args.Contains("--payment-apps");
+// --retract <commandId>: daha önce onaylı bildirilmiş bir komutun düzeltmesini platforma yollar.
+var retractIdx = Array.IndexOf(args, "--retract");
+string? retractKomut = retractIdx >= 0 && retractIdx + 1 < args.Length ? args[retractIdx + 1] : null;
 var configArgs = args
     .Where(a => a != "--pair" && a != "--void" && a != "--config-smoke" && a != "--ticket"
-             && a != "--onayla" && a != "--payment-apps")
+             && a != "--onayla" && a != "--payment-apps" && a != "--retract" && a != retractKomut)
     .ToArray();
 
 var builder = Host.CreateApplicationBuilder(configArgs);
@@ -61,6 +65,16 @@ if (ticketModu)
 if (paymentAppsModu)
 {
     Environment.ExitCode = WindowsPaymentApps.Run(host.Services) ? 0 : 1;
+    return;
+}
+
+// BAKIM (--retract <commandId>): hatalı bir ONAYI platformda geri çeker. Cihaza DOKUNMAZ.
+// Karar insanda: W14'ten sonra hayaletin tekrar oluşması için bilinen bir yol yok, dolayısıyla
+// güvenilir bir otomatik tetikleyici de yok. Uydurma tetikleyici doğru onayları bozardı.
+if (retractKomut is not null)
+{
+    var h = host.Services.GetRequiredService<LocalSaleHandler>();
+    Environment.ExitCode = await h.RetractLandedAsync(retractKomut) ? 0 : 1;
     return;
 }
 

@@ -205,6 +205,19 @@ public static class RestomenumReasons
     public const string TicketNotOpen = "TICKET_NOT_OPEN";
 
     /// <summary>
+    /// <b>info:</b> daha önce ONAYLANDI diye bildirilen bir sonuç GERİ ÇEKİLİYOR.
+    ///
+    /// <para>2026-09-07'de böyle bir vaka yaşandı: bir komut, kurtarma turunda BAŞKA bir satışın
+    /// ödemesini görüp kendini onaylı ilan etti ve deftere olmayan bir tahsilat yazıldı (W14 bunu
+    /// kapattı). Onay bir kez deftere girdiğinde sessizce düzeltilemez — platformun bunu çelişki
+    /// olarak işleyip operatöre çıkarması gerekir.</para>
+    ///
+    /// <para><c>paymentInvoked</c> burada <c>true</c>: <c>FP3_Payment</c> gerçekten çağrılmıştı;
+    /// geri çekilen şey "para hareket etti" iddiası, "çağırdık mı" değil.</para>
+    /// </summary>
+    public const string LandedRetracted = "LANDED_RETRACTED";
+
+    /// <summary>
     /// İptal YARIM KALDI: ödeme geri alınamadı ya da fiş kapanamadı. Kasiyere söylenmesi gereken
     /// cümle "iptal olmadı" DEĞİL, <b>"durum belirsiz, fişe dokunmayın, yönetici çağırın"</b>dır —
     /// tekrar denemek yarım kalmış bir ters işlemin üstüne ikinciyi bindirebilir.

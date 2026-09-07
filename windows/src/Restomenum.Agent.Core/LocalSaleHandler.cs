@@ -210,6 +210,40 @@ public sealed class LocalSaleHandler
         return govde;
     }
 
+    /// <summary>
+    /// <b>ONAY GERİ ÇEKME</b> — daha önce onaylı bildirilmiş bir komutun düzeltmesini platforma
+    /// yollar. Operatör aracı: cihaza DOKUNMAZ, yalnız defteri düzeltmeye çağırır.
+    ///
+    /// <para><b>Neden otomatik değil:</b> W14'ün sahiplik kapısından sonra hayalet onayın tekrar
+    /// oluşması için bilinen bir yol kalmadı; "kendiliğinden fark et" diyebileceğim sağlam bir
+    /// tetikleyici YOK. Uydurma bir tetikleyici koymak, geri çekmeyi yanlış vakalarda ateşler ve
+    /// doğru onayları da bozardı. Bu yüzden karar insanda.</para>
+    ///
+    /// <para>Komut deposunda KALIR (durumu değişmez): geri çekme ayrı bir bildirimdir, yerel
+    /// geçmişi silmek değil.</para>
+    /// </summary>
+    public async Task<bool> RetractLandedAsync(string commandId, CancellationToken ct = default)
+    {
+        var kayit = _store.Read(commandId);
+        if (kayit is null)
+        {
+            _log("[geri-çekme] komut defterde YOK — bildirim gönderilmedi", new { commandId });
+            return false;
+        }
+
+        var govde = SaleToPoiResponseBuilder.BuildLandedRetraction(
+            serviceId: kayit.CommandId, saleId: "", poiId: kayit.TerminalId,
+            paymentId: kayit.PaymentId, now: _now());
+
+        var sonuc = await _notifier.NotifyAsync(kayit.PaymentId, govde, ct);
+        _log("[geri-çekme] gönderildi", new
+        {
+            commandId, kayit.PaymentId, durum = kayit.State.ToString(),
+            outcome = sonuc.Outcome.ToString(), sonuc.StatusCode, sonuc.Message,
+        });
+        return sonuc.Outcome == NotifyOutcome.Recorded;
+    }
+
     /// <summary>Açık fişin tamamını iptal eder; sonucu kasaya döner ve platforma bildirir.</summary>
     private async Task<string> FisIptalAsync(ReversalRequest req, CancellationToken ct)
     {

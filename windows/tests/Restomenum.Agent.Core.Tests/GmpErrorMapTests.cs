@@ -299,6 +299,34 @@ public class GmpErrorMapTests
         }
     }
 
+    // ── ONAY GERİ ÇEKME ─────────────────────────────────────────────────────────
+
+    [Fact]
+    public void Geri_cekme_govdesi_ONAYI_KALDIRIR_ama_tersini_IDDIA_ETMEZ()
+    {
+        // 2026-09-07: bir komut kurtarma turunda BAŞKA bir satışın ödemesini sahiplenip kendini
+        // onaylı ilan etti; deftere olmayan bir tahsilat yazıldı. Onay bir kez deftere girince
+        // sessizce düzeltilemez — platformun çelişki olarak işleyip operatöre çıkarması gerekir.
+        // ← ÇİVİ: `Failure` + `InProgress`. Geri çekmek, "kesinlikle olmadı" demek DEĞİL:
+        // "artık onaylı demiyorum, yerine kesin bir şey de diyemiyorum".
+        var govde = SaleToPoiResponseBuilder.BuildLandedRetraction(
+            "svc1", "kasa-1", "term-01", "pay_9e6374de37dcbfe3eca3e34143bd6c85e2e7e053", Simdi);
+        var resp = JsonDocument.Parse(govde).RootElement
+            .GetProperty("SaleToPOIResponse").GetProperty("PaymentResponse");
+
+        Assert.Equal("Failure", resp.GetProperty("Response").GetProperty("Result").GetString());
+        Assert.Equal("InProgress", resp.GetProperty("Response").GetProperty("ErrorCondition").GetString());
+        // Geri çekilen ZATEN tutar iddiasıydı; yeniden göndermek çelişki olurdu.
+        Assert.False(resp.GetProperty("PaymentResult").TryGetProperty("AmountsResp", out _));
+
+        var ek = JsonDocument.Parse(govde).RootElement
+            .GetProperty("SaleToPOIResponse").GetProperty("Restomenum");
+        Assert.Equal(RestomenumReasons.LandedRetracted, ek.GetProperty("info").GetString());
+        // ← ÇİVİ: `FP3_Payment` gerçekten çağrılmıştı. Geri çekilen "para hareket etti" iddiası;
+        // "çağırdık mı" sorusunun cevabı değişmedi.
+        Assert.True(ek.GetProperty("paymentInvoked").GetBoolean());
+    }
+
     private static JsonElement Ek(string govde) =>
         JsonDocument.Parse(govde).RootElement.GetProperty("SaleToPOIResponse").GetProperty("Restomenum");
 }
