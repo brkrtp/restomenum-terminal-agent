@@ -169,7 +169,8 @@ public sealed class GmpTerminalTransport : ITerminalTransport
         }
 
         // ── ÖDEME: kartta 20–32 sn bloke eder ────────────────────────────────────
-        var pr = _gmp.Payment(handle, new GmpPaymentRequest(request.AmountMinor, request.PaymentType), out var tk);
+        var pr = _gmp.Payment(handle,
+            new GmpPaymentRequest(request.AmountMinor, request.PaymentType, request.BankBkmId), out var tk);
 
         if (!pr.Ok)
         {
@@ -199,16 +200,14 @@ public sealed class GmpTerminalTransport : ITerminalTransport
         // platforma "bu fişte şu denemeler var" diyebilmemizin tek yolu bu kayıt. Kapanış anında
         // cihazın listesinden sırayla türetmek sessizce kayardı: cihaz BAŞARISIZ denemeleri de
         // kayıt olarak tutuyor (ölçüm 2026-09-07: kart bacağı `payAmount=0` ile fişte duruyor).
+        // Kullanılan bankayı cihaz söyler: ödeme yankısında SON dolu satır bu ödemedir. Tutar
+        // tutmuyorsa banka İDDİA EDİLMEZ — yanlış banka bildirmektense "bilmiyorum" demek.
+        var sonSatir = tk.Payments is { Count: > 0 } satirlar ? satirlar[^1] : (GmpPaymentLine?)null;
+        var banka = sonSatir is { } sat && sat.AmountMinor == request.AmountMinor
+            ? sat.BankBkmId : null;
         if (fisId is not null)
-        {
-            // Kullanılan bankayı cihaz söyler: ödeme yankısında SON dolu satır bu ödemedir.
-            // Tutar tutmuyorsa banka İDDİA EDİLMEZ — yanlış banka yazmaktansa boş bırak.
-            var sonSatir = tk.Payments is { Count: > 0 } satirlar ? satirlar[^1] : (GmpPaymentLine?)null;
-            var banka = sonSatir is { } sat && sat.AmountMinor == request.AmountMinor
-                ? sat.BankBkmId : null;
             _snapshots?.RecordTicketPayment(fisId, request.PaymentId, request.AmountMinor,
                 request.PaymentType, banka);
-        }
 
         if (tk.IsFullyPaid)
         {
@@ -239,8 +238,14 @@ public sealed class GmpTerminalTransport : ITerminalTransport
                 fisDurumu = "CLOSED";
                 // Bağ SİLİNMEDEN önce oku — silindikten sonra fişin ödemelerini soracak kimlik kalmaz.
                 if (fisId is not null) kapanisOdemeleri = _snapshots?.ReadTicketPayments(fisId);
-                // Fis kapandi: bag artik yok. Birakilsaydi bir sonraki satis "ayni satisin fisi"
-                // sanip KAPANMIS bir fise odeme eklemeye calisirdi.
+                // ⚠️ SIRA ÖNEMLİ. Bağ silinmek ZORUNDA: bırakılsaydı aynı oturumun bir sonraki
+                // satışı `BindOpenTicket`'ta eski satırı bulup KAPANMIŞ fişin kimliğini devralırdı.
+                // Ama kapanış gövdesi bir üst katmanda kuruluyor; silme ile outbox'a yazma
+                // arasında süreç ölürse replay edecek kimlik kalmaz ve o fişin ödemeleri deftere
+                // HİÇ yazılmaz. Bu yüzden önce kalıcı "kapandı, bildirilmedi" kaydı, sonra silme.
+                if (fisId is not null)
+                    _snapshots?.MarkTicketClosed(fisId, request.TerminalId, request.SaleSessionId,
+                        cihazToplam, cihazTahsil);
                 _snapshots?.ClearOpenTicketBinding(request.TerminalId);
             }
         }
@@ -258,6 +263,7 @@ public sealed class GmpTerminalTransport : ITerminalTransport
             CardLast4: tk.CardLast4,
             ProviderResultCode: pr.ToString(),
             Info: bilgi,
+            UsedBankBkmId: banka,
             TicketState: fisDurumu,
             TicketId: fisId,
             ClosedTicketPayments: kapanisOdemeleri,

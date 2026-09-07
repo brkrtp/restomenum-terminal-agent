@@ -42,8 +42,10 @@ public class GmpTerminalTransportTests
         { Calls.Add("OptionFlags"); return new GmpResult(StaleHandles.Contains(h) ? GmpCodes.InvalidHandle
             : Codes.TryGetValue("OptionFlags", out var c) ? c : GmpCodes.Ok); }
         public GmpResult ItemSale(ulong h, GmpItem i, out GmpTicket tk) { tk = Ticket; return Kod("ItemSale"); }
+        /// <summary>Cihaza GİDEN ödeme isteği — banka seçiminin taşınıp taşınmadığı burada görülür.</summary>
+        public GmpPaymentRequest? LastPaymentRequest;
         public GmpResult Payment(ulong h, GmpPaymentRequest r, out GmpTicket tk)
-        { var res = Kod("Payment"); tk = AfterPayment; return res; }
+        { LastPaymentRequest = r; var res = Kod("Payment"); tk = AfterPayment; return res; }
         public GmpResult GetTicket(ulong h, out GmpTicket tk)
         {
             Calls.Add("GetTicket"); tk = Ticket;
@@ -165,6 +167,29 @@ public class GmpTerminalTransportTests
     }
 
     [Fact]
+    public async Task Kapanis_kaydi_BAG_SILINMEDEN_once_yazilir()
+    {
+        // ← ÇİVİ: sıra. Bağ silinmek ZORUNDA (yoksa sonraki satış kapanmış fişin kimliğini
+        // devralır), ama kapanış gövdesi üst katmanda kuruluyor. Silme ile outbox'a yazma
+        // arasında süreç ölürse replay edecek kimlik kalmaz ve o fişin ödemeleri deftere HİÇ
+        // yazılmaz — üstelik bunu keşfedecek başka bir yol da yok.
+        var (t, g, snap) = Kur();
+        g.Ticket = new GmpTicket(990, 990, 1, GmpPaymentTypes.Cash, PaymentsAreComplete: true);
+        g.AfterPayment = new GmpTicket(990, 990, 1, GmpPaymentTypes.Cash);
+
+        var r = await t.SaleAsync(Req(amount: 990, paymentType: GmpPaymentTypes.Cash,
+            oturum: "oturum-A", satisToplam: 990, odeme: "pay-1"));
+
+        var mark = snap.KapanisSirasi.IndexOf("mark:" + r.TicketId);
+        var clear = snap.KapanisSirasi.IndexOf("clear:t1");
+        Assert.True(mark >= 0 && clear >= 0, "iki adım da çalışmalı");
+        Assert.True(mark < clear, "kalıcı kapanış kaydı bağ SİLİNMEDEN ÖNCE yazılmalı");
+        var bekleyen = Assert.Single(snap.PendingClosedTickets());
+        Assert.Equal(990, bekleyen.PaidMinor);
+        Assert.Equal("oturum-A", bekleyen.SaleSessionId);
+    }
+
+    [Fact]
     public async Task Kapanan_fisten_SONRA_ayni_oturumda_YENI_fis_YENI_kimlik_alir()
     {
         // ← ÇİVİ: aynı masa oturumunda arka arkaya İKİ fiş kapanabilir (kısmi öde → kapan →
@@ -183,6 +208,69 @@ public class GmpTerminalTransportTests
         Assert.Equal("CLOSED", r2.TicketState);
         Assert.NotEqual(r1.TicketId, r2.TicketId);                     // ← ÇİVİ
         Assert.Equal(new[] { "pay-2" }, r2.ClosedTicketPayments!.Select(x => x.PaymentId));
+    }
+
+    // ── W17(3): BANKA SEÇİMİ ────────────────────────────────────────────────────
+
+    [Fact]
+    public async Task Zarftan_gelen_banka_cihaza_GECER()
+    {
+        // Bir yöntem birden çok bankaya açık olabiliyor (K-27b) ve seçimi KASİYER yapıyor.
+        // Ölçüldü (2026-09-07): geçirmediğimizde cihaz kendi seçiyor ve aynı fişte art arda iki
+        // denemede FARKLI banka seçti (62 → 46) — yani bugün hangi bankadan çekildiği öngörülemez.
+        var (t, g, _) = Kur();
+        g.Ticket = new GmpTicket(990, 990, 1, GmpPaymentTypes.Card, PaymentsAreComplete: true);
+        g.AfterPayment = new GmpTicket(990, 990, 1, GmpPaymentTypes.Card);
+
+        await t.SaleAsync(Req(amount: 990, paymentType: GmpPaymentTypes.Card,
+            oturum: "oturum-A", satisToplam: 990, banka: 62));
+
+        Assert.Equal(62, g.LastPaymentRequest!.Value.BankBkmId);
+    }
+
+    [Fact]
+    public async Task Zarfta_banka_YOKSA_cihaz_secer()
+    {
+        // ← ÇİVİ: seçim yapmıyoruz. Listeden birini kendimiz seçmek, işletme iki banka açtığında
+        // sessizce hep birine gitmek olurdu ve kimse fark etmezdi.
+        var (t, g, _) = Kur();
+        g.Ticket = new GmpTicket(990, 990, 1, GmpPaymentTypes.Card, PaymentsAreComplete: true);
+        g.AfterPayment = new GmpTicket(990, 990, 1, GmpPaymentTypes.Card);
+
+        await t.SaleAsync(Req(amount: 990, paymentType: GmpPaymentTypes.Card,
+            oturum: "oturum-A", satisToplam: 990));
+
+        Assert.Null(g.LastPaymentRequest!.Value.BankBkmId);
+    }
+
+    [Fact]
+    public async Task Banka_bacagi_OLUSMADIYSA_kullanilan_banka_BILDIRILMEZ()
+    {
+        // Bugünkü 2086 hâli: hat yok, bacak oluşmuyor. "Banka bilinmiyor" ile "banka Garanti"
+        // ayrı beyanlar — 0 ya da tahmini bir değer paneli yanlış bankaya inandırırdı.
+        var (t, g, _) = Kur();
+        g.Ticket = new GmpTicket(990, 990, 1, GmpPaymentTypes.Card, PaymentsAreComplete: true);
+        g.AfterPayment = new GmpTicket(990, 990, 1, GmpPaymentTypes.Card);   // Payments YOK
+
+        var r = await t.SaleAsync(Req(amount: 990, paymentType: GmpPaymentTypes.Card,
+            oturum: "oturum-A", satisToplam: 990, banka: 62));
+
+        Assert.Null(r.UsedBankBkmId);          // ← ÇİVİ: İSTEDİĞİMİZ bankayı geri yansıtmıyoruz
+    }
+
+    [Fact]
+    public async Task Kullanilan_banka_cihazin_YANKISINDAN_bildirilir()
+    {
+        // İstenen 62 ama cihaz 46 kullandıysa 46 bildirilir — panel gerçeği görsün.
+        var (t, g, _) = Kur();
+        g.Ticket = new GmpTicket(990, 990, 1, GmpPaymentTypes.Card, PaymentsAreComplete: true);
+        g.AfterPayment = new GmpTicket(990, 990, 1, GmpPaymentTypes.Card,
+            Payments: new[] { new GmpPaymentLine(GmpPaymentTypes.Card, 990, 46, "AKBANK") });
+
+        var r = await t.SaleAsync(Req(amount: 990, paymentType: GmpPaymentTypes.Card,
+            oturum: "oturum-A", satisToplam: 990, banka: 62));
+
+        Assert.Equal(46, r.UsedBankBkmId);      // ← ÇİVİ
     }
 
     [Fact]
@@ -217,10 +305,10 @@ public class GmpTerminalTransportTests
 
     private static SaleRequest Req(long amount = 3000, int paymentType = GmpPaymentTypes.Card,
         IReadOnlyList<FiscalLine>? lines = null, string? oturum = null, long? satisToplam = null,
-        string komut = "c1", string odeme = "p1") =>
+        string komut = "c1", string odeme = "p1", int? banka = null) =>
         new(komut, odeme, "t1", amount, "TRY", 2, "prov",
             lines ?? new[] { new FiscalLine("prod1", "Kahve", 1, amount, 20m, DepartmentNo: 1) },
-            paymentType, oturum, satisToplam);
+            paymentType, oturum, satisToplam, banka);
 
     /// <summary>Bellek-içi görüntü deposu. Gerçekte <see cref="CommandStore"/> (disk) kullanılır —
     /// süreç kart penceresinde ölürse görüntünün hayatta kalması şart.</summary>
@@ -256,7 +344,10 @@ public class GmpTerminalTransportTests
         public string? ReadOpenTicketId(string terminalId)
             => _fisId.TryGetValue(terminalId, out var v) ? v : null;
         public void ClearOpenTicketBinding(string terminalId)
-        { _bag.Remove(terminalId); _fisId.Remove(terminalId); }
+        {
+            KapanisSirasi.Add("clear:" + terminalId);
+            _bag.Remove(terminalId); _fisId.Remove(terminalId);
+        }
 
         /// <summary>Fiş → ödemeler (bizim paymentId'lerimiz).</summary>
         public Dictionary<string, List<TicketPaymentRow>> Odemeler { get; } = new();
@@ -269,6 +360,20 @@ public class GmpTerminalTransportTests
         }
         public IReadOnlyList<TicketPaymentRow> ReadTicketPayments(string ticketId)
             => Odemeler.TryGetValue(ticketId, out var l) ? l : Array.Empty<TicketPaymentRow>();
+
+        /// <summary>Kapanmış-bildirilmemiş fişler + hangi sırayla yazıldıkları.</summary>
+        public List<ClosedTicketRow> Kapananlar { get; } = new();
+        public List<string> KapanisSirasi { get; } = new();
+        public void MarkTicketClosed(string ticketId, string terminalId, string? saleSessionId,
+            long? totalMinor, long? paidMinor, long? now = null)
+        {
+            KapanisSirasi.Add("mark:" + ticketId);
+            if (Kapananlar.Any(x => x.TicketId == ticketId)) return;
+            Kapananlar.Add(new ClosedTicketRow(ticketId, terminalId, saleSessionId, totalMinor, paidMinor));
+        }
+        public IReadOnlyList<ClosedTicketRow> PendingClosedTickets() => Kapananlar;
+        public void ConfirmTicketClosed(string ticketId, long? now = null)
+            => Kapananlar.RemoveAll(x => x.TicketId == ticketId);
     }
 
     private static (GmpTerminalTransport, FakeGmp, FakeSnapshots) Kur()

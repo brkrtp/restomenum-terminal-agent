@@ -111,4 +111,39 @@ public class SaleToPoiRequestParserTests
         var inv = Assert.IsType<SaleToPoiParseResult.Invalid>(SaleToPoiRequestParser.Parse(body));
         Assert.Equal(SaleToPoiRejectReason.Malformed, inv.Reason);
     }
+
+    // ── W17(3): BANKA SEÇİMİ ────────────────────────────────────────────────────
+
+    private static string BankaliZarf(string deger) => Gecerli.Replace(
+        "\"SaleReferenceID\":\"1042\"}}}}",
+        "\"SaleReferenceID\":\"1042\"}},\"Restomenum\":{\"v\":1,\"bankBkmId\":" + deger + "}}}");
+
+    [Fact]
+    public void Banka_kimligi_okunur()
+    {
+        var r = Assert.IsType<SaleToPoiParseResult.Ok>(SaleToPoiRequestParser.Parse(BankaliZarf("62")));
+        Assert.Equal(62, r.Request.BankBkmId);
+    }
+
+    [Theory]
+    [InlineData("0")]            // 0 = "cihaz seçsin" ile aynı anlama gelir, alan olarak taşınmaz
+    [InlineData("-1")]
+    [InlineData("70000")]        // cihazın alanı UInt16
+    [InlineData("\"62\"")]       // metin: sayı değil
+    [InlineData("62.5")]
+    public void Gecersiz_banka_kimligi_YOK_SAYILIR_cihaz_secer(string deger)
+    {
+        // ← ÇİVİ: sığmayan/bozuk bir değeri KIRPMAK, kasiyerin seçtiğinden BAŞKA bir bankaya
+        // göndermek olurdu. Yok saymak cihazın kendi seçmesine düşürür — ikisinden güvenli olanı.
+        // Zarf reddedilmez: banka seçimi ödemenin ön koşulu değil, iyileştirmesi.
+        var r = Assert.IsType<SaleToPoiParseResult.Ok>(SaleToPoiRequestParser.Parse(BankaliZarf(deger)));
+        Assert.Null(r.Request.BankBkmId);
+    }
+
+    [Fact]
+    public void Banka_alani_YOKSA_null()
+    {
+        var r = Assert.IsType<SaleToPoiParseResult.Ok>(SaleToPoiRequestParser.Parse(Gecerli));
+        Assert.Null(r.Request.BankBkmId);
+    }
 }

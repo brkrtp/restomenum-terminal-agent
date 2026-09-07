@@ -79,13 +79,23 @@ public static partial class SaleToPoiRequestParser
             // nexo-dışı ad alanı (§22.8), yanıttakiyle simetrik. Alan YOKSA null kalır ve
             // kısmi-tahsilat devam yolu kapanır — sessizce "aynı satış" varsaymayız.
             string? saleSessionId = null;
+            int? bankBkmId = null;
             if (env.TryGetProperty("Restomenum", out var ek) && ek.ValueKind == JsonValueKind.Object)
+            {
                 saleSessionId = Str(ek, "saleSessionId");
+                // Banka kimliği: YALNIZ sayı ve YALNIZ cihazın alanına sığıyorsa. Sığmayan bir
+                // değeri kırpmak, kasiyerin seçtiğinden BAŞKA bir bankaya göndermek olurdu;
+                // yok saymak ise cihazın kendi seçmesine düşürür — ikisinden ikincisi güvenli.
+                if (ek.TryGetProperty("bankBkmId", out var bb) && bb.ValueKind == JsonValueKind.Number
+                    && bb.TryGetInt32(out var bkm) && bkm > 0 && bkm <= ushort.MaxValue)
+                    bankBkmId = bkm;
+            }
 
             return new SaleToPoiParseResult.Ok(new SaleToPoiRequest(
                 ServiceId: serviceId, SaleId: saleId, PoiId: poiId,
                 PaymentId: paymentId, SaleReferenceId: saleRef, TimeStamp: ts,
-                SaleSessionId: string.IsNullOrWhiteSpace(saleSessionId) ? null : saleSessionId));
+                SaleSessionId: string.IsNullOrWhiteSpace(saleSessionId) ? null : saleSessionId,
+                BankBkmId: bankBkmId));
         }
     }
 

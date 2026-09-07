@@ -140,6 +140,44 @@ public class LocalSaleHandlerTests : IDisposable
     }
 
     [Fact]
+    public async Task Govdesiz_kalmis_fis_kapanisi_ACILISTA_kurtarilir()
+    {
+        // ← ÇİVİ: taşıma katmanı fişi kapatıp bağı sildikten SONRA, gövde outbox'a yazılmadan
+        // önce süreç ölürse o fiş hiçbir kuyrukta görünmez — tahsilat yapılmış, satır yok, ve
+        // keşfedecek başka yol da yok. Kalıcı `closed_tickets` kaydı bu boşluğun tek izi.
+        var (h, _, notifier) = Kur(new PaymentDetailResult.Ok(Detail()));
+        _store.MarkTicketClosed("tkt_kayip", "term-01", "oturum-A", 990, 990);
+        _store.RecordTicketPayment("tkt_kayip", "pay-1", 200, GmpPaymentTypes.Cash, null);
+        _store.RecordTicketPayment("tkt_kayip", "pay-2", 790, GmpPaymentTypes.Card, 62);
+
+        await h.DrainOutboxAsync();
+
+        var govde = Assert.Single(notifier.TicketClosedBodies);
+        var ek = JsonDocument.Parse(govde).RootElement
+            .GetProperty("SaleToPOIResponse").GetProperty("Restomenum");
+        Assert.Equal("tkt_kayip", ek.GetProperty("ticketId").GetString());
+        Assert.Equal(2, ek.GetProperty("payments").GetArrayLength());
+        Assert.Equal(990, ek.GetProperty("paidMinor").GetInt64());
+        Assert.Empty(_store.PendingClosedTickets());       // devredildi
+    }
+
+    [Fact]
+    public async Task Kurtarilan_kapanis_IKINCI_turda_tekrar_gonderilmez()
+    {
+        // Aynı fişi iki kez bildirmek platformda tekrar sayılır (güvenli) ama gürültü üretir;
+        // asıl mesele kaydın devredildikten sonra kuyrukta ASILI KALMAMASI.
+        var (h, _, notifier) = Kur(new PaymentDetailResult.Ok(Detail()));
+        _store.MarkTicketClosed("tkt_bir", "term-01", "oturum-A", 990, 990);
+
+        await h.DrainOutboxAsync();
+        var ilk = notifier.TicketClosedBodies.Count;
+        await h.DrainOutboxAsync();
+
+        Assert.Equal(1, ilk);
+        Assert.Equal(ilk, notifier.TicketClosedBodies.Count);
+    }
+
+    [Fact]
     public async Task Fis_ACIK_kaldiysa_kapanis_bildirimi_GITMEZ()
     {
         // ← ÇİVİ: kısmi ödemede satır yazmak, sonradan iptal edilen bir fişin satırlarını geri

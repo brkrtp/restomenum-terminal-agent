@@ -134,6 +134,25 @@ public sealed class CommandStore : ITicketSnapshotStore, IDisposable
                 )
                 """;
             cmd.ExecuteNonQuery();
+            // KAPANMIŞ ama HENÜZ BİLDİRİLMEMİŞ fişler.
+            //
+            // Neden ayrı tablo: fiş kapanınca bağ SİLİNMEK ZORUNDA (bırakılırsa aynı oturumun bir
+            // sonraki satışı kapanmış fişin kimliğini devralır). Ama bildirim gövdesi bir üst
+            // katmanda kuruluyor; silme ile outbox'a yazma arasında süreç ölürse geriye replay
+            // edecek KİMLİK kalmaz ve o fişin ödemeleri deftere HİÇ yazılmaz. Bu tablo tam o
+            // aralığı kapatıyor: gövde outbox'a düşene kadar tek dayanak.
+            cmd.CommandText = """
+                CREATE TABLE IF NOT EXISTS closed_tickets (
+                    ticket_id       TEXT PRIMARY KEY,
+                    terminal_id     TEXT NOT NULL,
+                    sale_session_id TEXT,
+                    total_minor     INTEGER,
+                    paid_minor      INTEGER,
+                    closed_at       INTEGER NOT NULL,
+                    notified_at     INTEGER
+                )
+                """;
+            cmd.ExecuteNonQuery();
 
             // ── ŞEMA GEÇİŞİ: `kind` sütunu (genişlet → geçir → daralt) ─────────────────
             // Sütun sonradan eklendi ve varsayılanı 'sale'. Böylece ESKİ kayıtlar bozulmadan
@@ -447,6 +466,68 @@ public sealed class CommandStore : ITicketSnapshotStore, IDisposable
             cmd.Parameters.AddWithValue("$a", amountMinor);
             cmd.Parameters.AddWithValue("$m", methodType);
             cmd.Parameters.AddWithValue("$b", (object?)bankBkmId ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("$now", now ?? DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+            cmd.ExecuteNonQuery();
+        }
+    }
+
+    /// <summary>
+    /// Fişin KAPANDIĞINI, henüz bildirilmemiş olarak yazar. Bağ silinmeden ÖNCE çağrılır.
+    /// Aynı fiş ikinci kez yazılmaz (kapanış bir kez olur).
+    /// </summary>
+    public void MarkTicketClosed(string ticketId, string terminalId, string? saleSessionId,
+        long? totalMinor, long? paidMinor, long? now = null)
+    {
+        lock (_gate)
+        {
+            using var cmd = _conn.CreateCommand();
+            cmd.CommandText = """
+                INSERT OR IGNORE INTO closed_tickets
+                    (ticket_id, terminal_id, sale_session_id, total_minor, paid_minor, closed_at)
+                VALUES ($f, $t, $s, $tot, $paid, $now)
+                """;
+            cmd.Parameters.AddWithValue("$f", ticketId);
+            cmd.Parameters.AddWithValue("$t", terminalId);
+            cmd.Parameters.AddWithValue("$s", (object?)saleSessionId ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("$tot", (object?)totalMinor ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("$paid", (object?)paidMinor ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("$now", now ?? DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+            cmd.ExecuteNonQuery();
+        }
+    }
+
+    /// <summary>Kapanmış ama bildirimi henüz outbox'a düşmemiş fişler (açılışta kurtarılır).</summary>
+    public IReadOnlyList<ClosedTicketRow> PendingClosedTickets()
+    {
+        lock (_gate)
+        {
+            using var cmd = _conn.CreateCommand();
+            cmd.CommandText = """
+                SELECT ticket_id, terminal_id, sale_session_id, total_minor, paid_minor
+                FROM closed_tickets WHERE notified_at IS NULL ORDER BY closed_at
+                """;
+            var liste = new List<ClosedTicketRow>();
+            using var r = cmd.ExecuteReader();
+            while (r.Read())
+                liste.Add(new ClosedTicketRow(r.GetString(0), r.GetString(1),
+                    r.IsDBNull(2) ? null : r.GetString(2),
+                    r.IsDBNull(3) ? null : r.GetInt64(3),
+                    r.IsDBNull(4) ? null : r.GetInt64(4)));
+            return liste;
+        }
+    }
+
+    /// <summary>
+    /// Kapanış gövdesi outbox'a YAZILDI — bu tablonun görevi bitti. Gönderim garantisi artık
+    /// outbox'ta; burada "gönderildi" değil "devredildi" işaretlenir.
+    /// </summary>
+    public void ConfirmTicketClosed(string ticketId, long? now = null)
+    {
+        lock (_gate)
+        {
+            using var cmd = _conn.CreateCommand();
+            cmd.CommandText = "UPDATE closed_tickets SET notified_at = $now WHERE ticket_id = $f";
+            cmd.Parameters.AddWithValue("$f", ticketId);
             cmd.Parameters.AddWithValue("$now", now ?? DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
             cmd.ExecuteNonQuery();
         }

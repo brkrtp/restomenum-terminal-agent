@@ -385,7 +385,9 @@ public sealed class LocalSaleHandler
             // Kısmi tahsilat için: açık fişin sahibi (oturum) ve karşılaştırma toplamı.
             // Oturum kimliği YOKSA (eski platform) devam yolu kapalı kalır — taşıma katmanı
             // açık fişi "başka satış" sayar. Emin olmadan fişe ödeme eklemeyiz.
-            SaleSessionId: req.SaleSessionId, SaleTotalMinor: d.SaleTotalAmountMinor);
+            SaleSessionId: req.SaleSessionId, SaleTotalMinor: d.SaleTotalAmountMinor,
+            // Bankayı KASİYER seçer, biz taşırız. Zarfta yoksa cihaz seçer (bugünkü davranış).
+            BankBkmId: req.BankBkmId);
 
         // Terminal başına TEK işlem (değişmez #4): eşzamanlı iki satış cihaz fişini bozar.
         AgentOutcome outcome;
@@ -435,6 +437,9 @@ public sealed class LocalSaleHandler
 
         var eid = fisId + ":ticket-closed";
         _outbox.Enqueue(eid, req.PaymentId, OutboxKinds.TicketClosed, govde, "");
+        // Gövde artık outbox'ta: gönderim garantisi oraya DEVREDİLDİ. `closed_tickets` yalnız
+        // "bağ silindi ama gövde henüz yazılmadı" aralığını koruyordu, o aralık kapandı.
+        _store.ConfirmTicketClosed(fisId);
         _log("[yerel] fiş KAPANDI", new
         {
             req.PaymentId, fisId, odemeSayisi = sonuc.ClosedTicketPayments?.Count ?? 0,
@@ -460,11 +465,51 @@ public sealed class LocalSaleHandler
     }
 
     /// <summary>
+    /// Fişi kapanmış ama kapanış gövdesi outbox'a HİÇ yazılamamış vakaları kurtarır.
+    ///
+    /// <para><b>Hangi aralık:</b> taşıma katmanı fişi kapatıp bağı sildikten sonra, üst katman
+    /// gövdeyi kurup outbox'a yazana kadar süreç ölürse o fiş hiçbir kuyrukta görünmez —
+    /// tahsilat yapılmış, satır yok, ve bunu keşfedecek başka bir yol da yok. Kalıcı
+    /// <c>closed_tickets</c> kaydı bu boşluğun tek izidir.</para>
+    ///
+    /// <para>Gövde kayıttan YENİDEN kurulur: ödemeler <c>ticket_payments</c>'ta, tutarlar
+    /// kapanış anında okunmuş hâliyle kayıtta. Cihaza tekrar sorulmaz — fiş kapandı, orada
+    /// sorulacak bir şey kalmadı.</para>
+    /// </summary>
+    private void KayipKapanislariTopla()
+    {
+        foreach (var k in _store.PendingClosedTickets())
+        {
+            try
+            {
+                var govde = SaleToPoiResponseBuilder.BuildTicketClosed(
+                    terminalId: k.TerminalId, ticketId: k.TicketId, saleSessionId: k.SaleSessionId,
+                    payments: _store.ReadTicketPayments(k.TicketId),
+                    totalMinor: k.TotalMinor, paidMinor: k.PaidMinor);
+                // paymentId burada YOK (kapanış bir denemeye ait değil) ve replay türe göre
+                // yönleniyor, paymentId'ye bakmıyor.
+                _outbox.Enqueue(k.TicketId + ":ticket-closed", "", OutboxKinds.TicketClosed, govde, "");
+                _store.ConfirmTicketClosed(k.TicketId);
+                _log("[yerel] yarım kalmış fiş kapanışı kurtarıldı", new { k.TicketId, k.TerminalId });
+            }
+            catch (Exception e)
+            {
+                // Kayıt DURUYOR: bir sonraki turda tekrar denenir. Silmek, tahsilatı kalıcı
+                // olarak deftersiz bırakmak olurdu.
+                _log("[yerel] fiş kapanışı kurtarılamadı — kayıt duruyor", new { k.TicketId, error = e.Message });
+            }
+        }
+    }
+
+    /// <summary>
     /// Outbox'ta bekleyen bildirimleri (ağ/429 nedeniyle gönderilememişler) yeniden dener. Worker
     /// açılışta ve periyodik çağırır — WSS'te oturum bağlanınca yapılan drain'in yerini alır.
     /// </summary>
     public async Task DrainOutboxAsync(CancellationToken ct = default)
     {
+        // ÖNCE yarım kalmış kapanışlar: gövdesi hiç kurulamamış fişler outbox'ta görünmez.
+        KayipKapanislariTopla();
+
         foreach (var e in _outbox.Pending())
         {
             if (ct.IsCancellationRequested) return;

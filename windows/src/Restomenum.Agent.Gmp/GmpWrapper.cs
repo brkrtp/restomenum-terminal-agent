@@ -125,6 +125,10 @@ public sealed class GmpWrapper : IGmpWrapper
             subtypeOfPayment      = 0,
             payAmount             = checked((uint)request.AmountMinor),
             payAmountCurrencyCode = CurrencyTl,
+            // 0 = cihaz kendi seçsin (bugünkü davranış). Dolu gelirse kasiyerin seçtiği banka.
+            // Alan `UInt16`; aralık doğrulaması ayrıştırıcıda yapıldı, burada KIRPMA yok —
+            // kırpmak kasiyerin seçtiğinden başka bir bankaya göndermek olurdu.
+            bankBkmId             = request.BankBkmId is int b ? checked((ushort)b) : (ushort)0,
             paymentName           = "",
             transactionFlag       = 0,
         };

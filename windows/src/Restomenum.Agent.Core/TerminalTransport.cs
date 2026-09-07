@@ -45,7 +45,10 @@ public sealed record SaleRequest(
     /// eşit değilse kasiyer kısmi ödemeden sonra kalem eklemiş/silmiş demektir ve devam edilirse
     /// fişe yanlış tutarda ödeme eklenir. <c>null</c> ise doğrulanamaz → devam yolu kapalı.
     /// </summary>
-    long? SaleTotalMinor = null);
+    long? SaleTotalMinor = null,
+
+    /// <summary>Kasiyerin seçtiği bankanın BKM kimliği; <c>null</c> ise cihaz seçer.</summary>
+    int? BankBkmId = null);
 
 /// <summary>
 /// Mali fişe yazılacak tek satır (§20.2). Departman numarası <b>burada yok</b>: o eşleme cihaz
@@ -205,6 +208,16 @@ public sealed record TransportResult(
     /// ödememiz yok — ikisi AYRI beyandır.</para>
     /// </summary>
     IReadOnlyList<TicketPaymentRow>? ClosedTicketPayments = null,
+
+    /// <summary>
+    /// Ödemede GERÇEKTEN kullanılan bankanın BKM kimliği — cihazın yankısından okunur.
+    ///
+    /// <para><b>Ölçülemezse alan KONMAZ</b>: banka bacağı hiç oluşmadıysa (bugünkü 2086 gibi) ya
+    /// da yankıdaki satırın tutarı bizimkiyle tutmuyorsa <c>null</c> kalır. "Banka bilinmiyor" ile
+    /// "banka Garanti" ayrı beyanlardır; 0 ya da tahmini bir değer koymak paneli yanlış bankaya
+    /// inandırırdı.</para>
+    /// </summary>
+    int? UsedBankBkmId = null,
 
     /// <summary>
     /// Fiş kapanırken cihazın gördüğü TAHSİL toplamı. Bizim satırlarımızın toplamı DEĞİL: fark

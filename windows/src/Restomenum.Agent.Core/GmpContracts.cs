@@ -12,6 +12,10 @@ namespace Restomenum.Agent.Core;
 public readonly record struct TicketPaymentRow(
     string PaymentId, long AmountMinor, int MethodType, int? BankBkmId);
 
+/// <summary>Kapanmış ama bildirimi henüz outbox'a devredilmemiş fiş.</summary>
+public readonly record struct ClosedTicketRow(
+    string TicketId, string TerminalId, string? SaleSessionId, long? TotalMinor, long? PaidMinor);
+
 public interface ITicketSnapshotStore
 {
     /// <param name="saleSessionId">
@@ -58,6 +62,23 @@ public interface ITicketSnapshotStore
 
     /// <summary>Bir fişin kaydedilmiş ödemeleri — kaydedilme sırasına göre.</summary>
     IReadOnlyList<TicketPaymentRow> ReadTicketPayments(string ticketId);
+
+    /// <summary>
+    /// Fişin KAPANDIĞINI, bildirimi henüz gitmemiş olarak yazar. <b>Bağ silinmeden ÖNCE.</b>
+    ///
+    /// <para><b>Neden gerekli:</b> fiş kapanınca bağ silinmek zorunda — bırakılırsa aynı oturumun
+    /// bir sonraki satışı kapanmış fişin kimliğini devralır. Ama bildirim gövdesi üst katmanda
+    /// kuruluyor; silme ile outbox'a yazma arasında süreç ölürse geriye replay edecek KİMLİK
+    /// kalmaz ve o fişin ödemeleri deftere hiç yazılmaz. Bu kayıt tam o aralığı kapatır.</para>
+    /// </summary>
+    void MarkTicketClosed(string ticketId, string terminalId, string? saleSessionId,
+        long? totalMinor, long? paidMinor, long? now = null);
+
+    /// <summary>Kapanmış ama bildirimi outbox'a düşmemiş fişler — açılışta kurtarılır.</summary>
+    IReadOnlyList<ClosedTicketRow> PendingClosedTickets();
+
+    /// <summary>Kapanış gövdesi outbox'a yazıldı; gönderim garantisi artık outbox'ta.</summary>
+    void ConfirmTicketClosed(string ticketId, long? now = null);
 
     /// <summary>Bağı siler — fiş kapandığında (tam ödeme) ya da iptal edildiğinde.</summary>
     void ClearOpenTicketBinding(string terminalId);
@@ -324,7 +345,12 @@ public static class GmpTicketTypes
 public readonly record struct GmpItem(string Name, long UnitPriceMinor, int Quantity, int DepartmentNo);
 
 /// <summary>Ödeme isteği.</summary>
-public readonly record struct GmpPaymentRequest(long AmountMinor, int PaymentType);
+/// <param name="BankBkmId">
+/// Bankanın BKM kimliği. <c>null</c> / 0 = <b>cihaz seçsin</b> (DLL alanı 0 kabul ediyor ve
+/// bugünkü davranış bu). Ölçüldü (2026-09-07): 0 geçildiğinde cihaz aynı fişte art arda iki
+/// denemede FARKLI banka seçti (GARANTİ BBVA 62 → AKBANK 46).
+/// </param>
+public readonly record struct GmpPaymentRequest(long AmountMinor, int PaymentType, int? BankBkmId = null);
 
 /// <summary><see cref="IGmpWrapper.OptionFlags"/> bayrakları.</summary>
 [Flags]

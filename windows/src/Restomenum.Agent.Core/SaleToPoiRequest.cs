@@ -33,7 +33,21 @@ public sealed record SaleToPoiRequest(
     /// sayılır ve bayat-fiş mantığı işler. Emin olmadığımızda fişe dokunmamak, yanlış fişe ödeme
     /// eklemekten güvenlidir.</para>
     /// </summary>
-    string? SaleSessionId = null);
+    string? SaleSessionId = null,
+
+    /// <summary>
+    /// Kasiyerin SEÇTİĞİ bankanın BKM kimliği (<c>Restomenum.bankBkmId</c>). Yoksa <c>null</c> ve
+    /// bankayı cihaz kendi seçer — bugünkü davranış.
+    ///
+    /// <para><b>Neden seçimi biz yapmıyoruz:</b> bir ödeme yöntemi birden çok bankaya açık
+    /// olabiliyor (K-27b). Listeden ilkini almak, işletme iki banka açtığında sessizce hep birine
+    /// gitmek olurdu ve kimse fark etmezdi. Seçim kasada yapılır, biz yalnız taşırız.</para>
+    ///
+    /// <para><b>Ölçüm (2026-09-07):</b> geçirmediğimizde cihaz gerçekten kendi seçiyor ve
+    /// <b>aynı fişte art arda iki denemede FARKLI banka seçti</b> (GARANTİ BBVA 62 → AKBANK 46).
+    /// Yani bugün hangi bankadan çekildiği öngörülemez; bu alan o belirsizliği kapatıyor.</para>
+    /// </summary>
+    int? BankBkmId = null);
 
 /// <summary>SaleToPOIRequest reddi sebepleri — her biri farklı <c>SaleToPOIResponse</c> davranışına eşlenir.</summary>
 public enum SaleToPoiRejectReason

@@ -102,6 +102,9 @@ public static class SaleToPoiResponseBuilder
         // kapanabilir (kısmi öde → kapan → aynı masaya yeni sipariş); platform hangi ödemenin
         // hangi fişe ait olduğunu ancak bununla bilir. Bağ yoksa alan KONMAZ — uydurulmaz.
         if (result.TicketId is not null) ek["ticketId"] = result.TicketId;
+        // Kullanılan banka — YALNIZ ölçüldüyse. Alanın YOKLUĞU "banka bilinmiyor" demektir;
+        // 0 ya da tahmini bir değer koymak paneli yanlış bankaya inandırırdı.
+        if (result.UsedBankBkmId is int kb) ek["bankBkmId"] = kb;
         if (result.DeviceTicketTotalMinor is long dt) ek["deviceTicketTotalMinor"] = dt;
         if (result.DeviceRemainingMinor is long dk) ek["deviceRemainingMinor"] = dk;
         govde["Restomenum"] = ek;
