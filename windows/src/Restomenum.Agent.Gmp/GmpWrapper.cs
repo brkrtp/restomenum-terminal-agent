@@ -207,11 +207,17 @@ public sealed class GmpWrapper : IGmpWrapper
     }
 
     /// <summary>
-    /// Kurulu odeme uygulamalari — HAM JSON. Sarmalayici YORUMLAMAZ.
+    /// Kurulu odeme (banka) uygulamalari. Sarmalayici YORUMLAMAZ — alanlar oldugu gibi tasinir.
     ///
-    /// <para>Dusuk seviyeli <c>Json_FP3_GetPaymentApplicationInfo</c> dogrudan cagriliyor;
-    /// ust seviyeli sarmalayici JSON'u nesneye cevirip atiyor ve HAM metni kaybediyor. Alan
-    /// anlamlari belgede tanimsiz oldugu icin once ham metni gormemiz gerek.</para>
+    /// <para><b>Ilk deneme basarisiz oldu ve sebebi ogrenildi (2026-09-07 17:07):</b> dusuk
+    /// seviyeli JSON ucuna girdi olarak <c>"[]"</c> gonderilmisti ve DLL <c>0xF025</c> dondu.
+    /// DLL, cikti dizisini KENDISI olusturmuyor; cagiranin ONCEDEN BOYUTLANDIRILMIS bir dizi
+    /// gondermesini bekliyor (ust seviyeli sarmalayici da tam bunu yapiyor: gelen diziyi
+    /// serilestirip yolluyor). Bu yuzden artik ust seviyeli sarmalayici kullaniliyor — girdi
+    /// bicimini TAHMIN ETMEK yerine DLL'in kendi kodunun urettigi bicimi kullaniyoruz.</para>
+    ///
+    /// <para><c>name</c> <c>byte[20]</c> ve sonu bos bayt dolgulu; HAM baytlar da, kirpilmis
+    /// dize de raporlanir ki karsi taraf kirpma karari bizimkiyle ayni mi gorebilsin.</para>
     /// </summary>
     public GmpResult GetPaymentApplicationsRaw(out string json, out int total, out int received, byte requested = 20)
     {
@@ -222,18 +228,56 @@ public sealed class GmpWrapper : IGmpWrapper
         uint h = AcquireInterface();
         if (h == 0) return GmpCodes.PortNotOpen;
 
+        // ONCEDEN BOYUTLANDIRILMIS dizi: DLL cikti icin yer bekliyor.
+        var apps = new ST_PAYMENT_APPLICATION_INFO[requested];
+        for (int i = 0; i < apps.Length; i++) apps[i] = new ST_PAYMENT_APPLICATION_INFO();
+
         byte toplam = 0, alinan = 0;
-        var girdi = GMP_Tools.GetBytesFromString("[]");
-        var cikti = new byte[Defines.STANDART_BUFFER];
-
-        uint rc = Json_GMPSmartDLL.Json_FP3_GetPaymentApplicationInfo(
-            h, ref toplam, ref alinan, girdi, cikti, cikti.Length, requested);
-
+        uint rc = Json_GMPSmartDLL.FP3_GetPaymentApplicationInfo(h, ref toplam, ref alinan, ref apps, requested);
         total = toplam;
         received = alinan;
-        if (rc == 0) json = GMP_Tools.GetStringFromBytes(cikti) ?? "";
+        if (rc != 0) return rc;
+
+        var kayitlar = new List<object>();
+        for (int i = 0; i < (apps?.Length ?? 0) && i < alinan; i++)
+        {
+            var a = apps![i];
+            if (a is null) continue;
+            var ham = a.name ?? Array.Empty<byte>();
+            kayitlar.Add(new
+            {
+                index = (int)a.index,
+                name = Cp1254(ham),
+                nameRawBytes = string.Join(" ", ham.Select(b => b.ToString("X2"))),
+                bkmId = (int)a.u16BKMId,
+                status = (int)a.Status,
+                priority = (int)a.Priority,
+                appId = (int)a.u16AppId,
+                appType = (int)a.AppType,
+                appFlag = (int)a.AppFlag,
+            });
+        }
+        json = System.Text.Json.JsonSerializer.Serialize(kayitlar);
         return rc;
     }
+
+    /// <summary>
+    /// Cihazın banka uygulaması adları <b>CP1254</b> (Windows-Türkçe) kodlu. ASCII çözmek Türkçe
+    /// harfleri bozuyordu: canlı ölçümde "GARANTİ BANKASI" → "GARANT? BANKASI" çıktı.
+    ///
+    /// <para>CP1254, Latin-1'den yalnız birkaç konumda ayrılıyor; ek paket bağımlılığı
+    /// getirmemek için Latin-1 çözülüp o konumlar düzeltiliyor. Sondaki boş bayt/boşluk dolgusu
+    /// kırpılır — eklenti tarafı da aynı kırpmayı yapıyor, iki taraf aynı adı üretmeli.</para>
+    /// </summary>
+    private static string Cp1254(byte[] ham) =>
+        Encoding.Latin1.GetString(ham)
+            .Replace('\u00D0', '\u011E')   // Ğ
+            .Replace('\u00DD', '\u0130')   // İ
+            .Replace('\u00DE', '\u015E')   // Ş
+            .Replace('\u00F0', '\u011F')   // ğ
+            .Replace('\u00FD', '\u0131')   // ı
+            .Replace('\u00FE', '\u015F')   // ş
+            .TrimEnd('\0', ' ');
 
     public GmpResult Echo()
     {

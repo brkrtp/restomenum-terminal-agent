@@ -135,6 +135,8 @@ public sealed class AgentWorker : BackgroundService
                     return;
                 }
                 var iptalReq = ((ReversalParseResult.Ok)iptal).Request;
+                _log.LogInformation("[istek] Reversal ServiceID={Svc} SaleID={Sale} paymentId={Pay}",
+                    iptalReq.ServiceId, Bos(iptalReq.SaleId), iptalReq.PaymentId);
                 Respond(ctx, 200, await _handler.HandleReversalAsync(iptalReq, ct));
                 return;
             }
@@ -149,6 +151,13 @@ public sealed class AgentWorker : BackgroundService
             }
 
             var req = ((SaleToPoiParseResult.Ok)parse).Request;
+
+            // KOMUT KAYNAĞI (W18). "Bu satışı kim tetikledi" sorusu bugün üç kez çıktı ve her
+            // seferinde cevaplayamadım: istekte KİM olduğuna dair hiçbir şey loglanmıyordu.
+            // Kişisel veri/PAN YOK — yalnız zarfın kimlik alanları.
+            _log.LogInformation("[istek] Payment ServiceID={Svc} SaleID={Sale} saleSessionId={Oturum} paymentId={Pay}",
+                req.ServiceId, Bos(req.SaleId), Bos(req.SaleSessionId), req.PaymentId);
+
             var resp = await _handler.HandleAsync(req, ct);   // GET→terminal→ÖNCE bildir→SONRA dön
             Respond(ctx, 200, resp);
         }
@@ -158,6 +167,9 @@ public sealed class AgentWorker : BackgroundService
             try { Respond(ctx, 500, "{\"error\":\"internal\"}"); } catch { /* bağlantı kopmuş olabilir */ }
         }
     }
+
+    /// <summary>Boş/eksik alanı logda "(yok)" göster — boş dize ile eksik alan ayırt edilsin.</summary>
+    private static string Bos(string? s) => string.IsNullOrWhiteSpace(s) ? "(yok)" : s;
 
     private static void Respond(HttpListenerContext ctx, int status, string json)
     {
