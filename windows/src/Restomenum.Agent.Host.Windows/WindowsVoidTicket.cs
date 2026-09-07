@@ -175,6 +175,12 @@ public static class WindowsVoidTicket
             "sonÖdemeTipi={Tip} bankaBacağı={Banka} → temizlenebilir mi: {Temiz}",
             fis.TotalAmountMinor, fis.PaidAmountMinor, fis.PaymentCount, fis.LastPaymentType,
             fis.HasBankLeg, fis.PaymentCount == 0 ? "EVET (ödeme yok)" : "HAYIR (ödeme var)");
+
+        // Cihazın ödeme kaydına YAZDIĞI hata alanları. Üçü de basılır çünkü hangisinin dolduğu
+        // ölçülmedi: "(bos)" görmek de bir ölçümdür — kanalın hiç dolmadığını söyler.
+        log.LogWarning("FIS HATA ALANLARI: ErrorCode={Kod} ErrorMsg={Metin} AppErrorCode={AppKod} AppErrorMsg={AppMetin}",
+            fis.LastPaymentErrorCode ?? "(bos)", fis.LastPaymentErrorText ?? "(bos)",
+            fis.LastPaymentAppErrorCode ?? "(bos)", fis.LastPaymentAppErrorText ?? "(bos)");
         return true;
     }
 }

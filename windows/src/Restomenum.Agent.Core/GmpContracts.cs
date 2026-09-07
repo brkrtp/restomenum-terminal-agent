@@ -147,7 +147,17 @@ public readonly record struct GmpTicket(
     /// kendi defterinde "istek host'a gitmedi" beyanı. Kasiyere gösterilecek tek doğru cümle budur;
     /// üreticinin tavsiyesi de bu (<i>"Always show return code and corresponding message"</i>).
     /// </summary>
-    string? LastPaymentErrorText = null)
+    string? LastPaymentErrorText = null,
+
+    /// <summary>
+    /// <c>ST_PaymentErrMessage.AppErrorCode</c> — <see cref="LastPaymentErrorCode"/>'dan AYRI
+    /// tutuluyor çünkü cihazın hangi alanı doldurduğu ÖLÇÜLMEDİ. Birleştirseydik "kod boş" ile
+    /// "iki alan da boş" ayırt edilemez ve teşhis kör kalırdı.
+    /// </summary>
+    string? LastPaymentAppErrorCode = null,
+
+    /// <summary><c>ST_PaymentErrMessage.AppErrorMsg</c> — ayrı tutuluyor, birleştirme teşhisi kör eder.</summary>
+    string? LastPaymentAppErrorText = null)
 {
     public bool IsFullyPaid => TotalAmountMinor > 0 && PaidAmountMinor >= TotalAmountMinor;
     public long RemainingMinor => Math.Max(0, TotalAmountMinor - PaidAmountMinor);

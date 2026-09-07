@@ -414,7 +414,9 @@ public sealed class GmpWrapper : IGmpWrapper
         string? rrn = null;
         string? last4 = null;
         string? errCode = null;
+        string? appErrCode = null;
         string? errText = null;
+        string? appErrText = null;
 
         if (count > 0)
         {
@@ -437,17 +439,21 @@ public sealed class GmpWrapper : IGmpWrapper
                     // Ödeme hata kodu/metni. `ErrorCode` boşsa `AppErrorCode`'a düşülür: hangi alanın
                     // dolduğu ÖLÇÜLMEDİ (canlıda fişte "2085" gördük ama hangi alandan geldiği
                     // ayrıştırılmadı), o yüzden ikisi de denenir. Uydurma yok — boşsa null kalır.
+                    // İki kod alanı AYRI taşınır: hangisinin dolduğu ölçülmedi ve birleştirmek
+                    // teşhisi kör bırakırdı ("kod boş" mu, "iki alan da boş" mı?).
                     var em = bank.stPaymentErrMessage;
                     if (em is not null)
                     {
-                        errCode = Bos(em.ErrorCode) ? (Bos(em.AppErrorCode) ? null : em.AppErrorCode) : em.ErrorCode;
-                        errText = Bos(em.ErrorMsg) ? (Bos(em.AppErrorMsg) ? null : em.AppErrorMsg) : em.ErrorMsg;
+                        errCode = Bos(em.ErrorCode) ? null : em.ErrorCode;
+                        appErrCode = Bos(em.AppErrorCode) ? null : em.AppErrorCode;
+                        errText = Bos(em.ErrorMsg) ? null : em.ErrorMsg;
+                        appErrText = Bos(em.AppErrorMsg) ? null : em.AppErrorMsg;
                     }
                 }
             }
         }
 
-        return new GmpTicket(total, paid, count, lastType, rrn, last4, errCode, errText);
+        return new GmpTicket(total, paid, count, lastType, rrn, last4, errCode, errText, appErrCode, appErrText);
     }
 
     private static bool Bos(string? s) => string.IsNullOrWhiteSpace(s);

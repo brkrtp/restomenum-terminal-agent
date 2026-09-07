@@ -231,7 +231,13 @@ public sealed record TicketState(
     string? LastPaymentErrorCode = null,
 
     /// <summary>Son ödeme kaydının cihazdaki hata metni — bkz. <see cref="GmpTicket.LastPaymentErrorText"/>.</summary>
-    string? LastPaymentErrorText = null)
+    string? LastPaymentErrorText = null,
+
+    /// <summary>Cihazın uygulama hata kodu — bkz. <see cref="GmpTicket.LastPaymentAppErrorCode"/>.</summary>
+    string? LastPaymentAppErrorCode = null,
+
+    /// <summary><c>ST_PaymentErrMessage.AppErrorMsg</c> — ayrı tutuluyor, birleştirme teşhisi kör eder.</summary>
+    string? LastPaymentAppErrorText = null)
 {
     /// <summary>Fiş tamamen ödenmiş mi? Sahadaki kurtarma mantığının aynısı.</summary>
     public bool IsFullyPaid => TotalAmountMinor > 0 && PaidAmountMinor >= TotalAmountMinor;
