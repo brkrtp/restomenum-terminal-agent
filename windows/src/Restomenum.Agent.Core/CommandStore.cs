@@ -107,6 +107,23 @@ public sealed class CommandStore : ITicketSnapshotStore, IDisposable
                 )
                 """;
             cmd.ExecuteNonQuery();
+            // ── ŞEMA GEÇİŞİ: `kind` sütunu (genişlet → geçir → daralt) ─────────────────
+            // Sütun sonradan eklendi ve varsayılanı 'sale'. Böylece ESKİ kayıtlar bozulmadan
+            // satış sayılmaya devam eder; yeni türler (void, status) kendi adlarıyla yazılır.
+            //
+            // Neden gerekli: `Pending()` bu tablodaki her kaydı açılışta SATIŞ sanıp terminale
+            // "bu ödeme işlendi mi" diye soruyordu. İptal kayıtları da buraya yazılsaydı, açılış
+            // kurtarması bir iptali yarım kalmış satış sanıp ödeme akıbeti sorardı.
+            var kolonlar = new List<string>();
+            cmd.CommandText = "PRAGMA table_info(commands)";
+            using (var r = cmd.ExecuteReader())
+                while (r.Read()) kolonlar.Add(r.GetString(1));
+            if (!kolonlar.Contains("kind"))
+            {
+                cmd.CommandText = "ALTER TABLE commands ADD COLUMN kind TEXT NOT NULL DEFAULT 'sale'";
+                cmd.ExecuteNonQuery();
+            }
+
             // Yeniden başlatmada tamamlanmamış komutları bulmak için: durum sorgusu indekslenir.
             cmd.CommandText = "CREATE INDEX IF NOT EXISTS ix_commands_state ON commands(state)";
             cmd.ExecuteNonQuery();
@@ -116,7 +133,8 @@ public sealed class CommandStore : ITicketSnapshotStore, IDisposable
 
     /// <summary>Komutu <b>atomik</b> kaydeder.</summary>
     public SaveResult Save(
-        string commandId, string paymentId, string terminalId, long expiresAt, long? now = null)
+        string commandId, string paymentId, string terminalId, long expiresAt, long? now = null,
+        string kind = CommandKinds.Sale)
     {
         lock (_gate)
         {
@@ -127,8 +145,8 @@ public sealed class CommandStore : ITicketSnapshotStore, IDisposable
                 // TEK ifade: oku-sonra-yaz DEĞİL. Çakışmada sessizce 0 satır etkiler.
                 cmd.CommandText = """
                     INSERT OR IGNORE INTO commands
-                        (command_id, payment_id, terminal_id, received_at, expires_at, state, updated_at)
-                    VALUES ($cid, $pid, $tid, $now, $exp, $state, $now)
+                        (command_id, payment_id, terminal_id, received_at, expires_at, state, updated_at, kind)
+                    VALUES ($cid, $pid, $tid, $now, $exp, $state, $now, $kind)
                     """;
                 cmd.Parameters.AddWithValue("$cid", commandId);
                 cmd.Parameters.AddWithValue("$pid", paymentId);
@@ -136,6 +154,7 @@ public sealed class CommandStore : ITicketSnapshotStore, IDisposable
                 cmd.Parameters.AddWithValue("$now", ts);
                 cmd.Parameters.AddWithValue("$exp", expiresAt);
                 cmd.Parameters.AddWithValue("$state", CommandState.RECEIVED.ToString());
+                cmd.Parameters.AddWithValue("$kind", kind);
                 affected = cmd.ExecuteNonQuery();
             }
             var stored = Read(commandId) ?? throw new InvalidOperationException($"kayıt sonrası okunamadı: {commandId}");
@@ -215,6 +234,7 @@ public sealed class CommandStore : ITicketSnapshotStore, IDisposable
             cmd.CommandText = """
                 SELECT * FROM commands
                  WHERE state IN ('RECEIVED','SENT_TO_TERMINAL','UNKNOWN')
+                   AND kind = 'sale'
                  ORDER BY received_at ASC LIMIT $n
                 """;
             cmd.Parameters.AddWithValue("$n", limit);
@@ -277,4 +297,16 @@ public sealed class CommandStore : ITicketSnapshotStore, IDisposable
     }
 
     public void Dispose() => _conn.Dispose();
+}
+
+/// <summary>
+/// Komut türü. <b>Tek tabloda birden çok tür yaşıyor</b> ve açılış kurtarması yalnız satışları
+/// sorgulamalı: bir iptal kaydını "yarım kalmış satış" sanıp terminale ödeme akıbeti sormak,
+/// olmayan bir ödemeyi kovalamak olurdu.
+/// </summary>
+public static class CommandKinds
+{
+    public const string Sale = "sale";
+    public const string Void = "void";
+    public const string Status = "status";
 }

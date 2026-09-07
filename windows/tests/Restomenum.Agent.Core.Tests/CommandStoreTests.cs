@@ -140,4 +140,20 @@ public class CommandStoreTests
         Assert.Equal(0, silinen);
         Assert.NotNull(store.Read("belirsiz"));
     }
+
+    [Fact]
+    public void Kind_varsayilani_sale_ve_eski_kayitlar_kurtarmaya_girer()
+    {
+        // Şema geçişi "genişlet" adımı: sütun sonradan eklendi, varsayılanı 'sale'. Eski kayıtlar
+        // bozulmadan satış sayılmaya devam etmeli — aksi hâlde yeniden başlatmada çözülmemiş
+        // tahsilatlar kurtarma listesinden DÜŞERDİ.
+        using var store = CommandStore.Open(TempDb());
+        store.Save("satis", "pay-s", "t1", Now + 60_000);                              // kind yazılmadı
+        store.Save("iptal", "pay-i", "t1", Now + 60_000, kind: CommandKinds.Void);
+
+        var bekleyen = store.Pending();
+
+        Assert.Contains(bekleyen, k => k.CommandId == "satis");
+        Assert.DoesNotContain(bekleyen, k => k.CommandId == "iptal");
+    }
 }

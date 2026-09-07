@@ -158,6 +158,59 @@ public class ReversalTests : IDisposable
         Assert.False(ek.GetProperty("paymentInvoked").GetBoolean());
     }
 
+    // ── W9: TÜR AYRIMI (kind) ───────────────────────────────────────────────────
+
+    [Fact]
+    public async Task Iptal_kaydi_ACILIS_KURTARMASINA_GIRMEZ()
+    {
+        // ← ÇİVİ: iptal kayıtları satışla aynı tabloda yaşıyor. Tür ayrımı olmasaydı açılış
+        // kurtarması bir iptali "yarım kalmış satış" sanıp terminale "bu ödeme işlendi mi" diye
+        // sorardı — olmayan bir ödemeyi kovalamak.
+        var (h, sim) = Kur();
+        _store.Save("svc-orig", Pay, "term-01", _clock.ServerNow() + 60_000);
+        sim.WithTicket(new TicketState(HasOpenTicket: true, TotalAmountMinor: 990, PaidAmountMinor: 0));
+        var req = ((ReversalParseResult.Ok)ReversalRequestParser.Parse(Zarf())).Request;
+
+        await h.HandleReversalAsync(req);
+
+        var bekleyen = _store.Pending();
+        Assert.DoesNotContain(bekleyen, k => k.CommandId == "void12345");
+    }
+
+    [Fact]
+    public async Task Ayni_iptal_ikinci_kez_gelirse_CIHAZA_GITMEZ()
+    {
+        // Kasa ağ hatasında aynı zarfı yeniden POST edebiliyor. İkinci `VoidAll` ya boşa çalışır
+        // ya da ARAYA GİREN YENİ bir fişi iptal ederdi — ikincisi gerçek zarar.
+        var (h, sim) = Kur();
+        _store.Save("svc-orig", Pay, "term-01", _clock.ServerNow() + 60_000);
+        sim.WithTicket(new TicketState(HasOpenTicket: true, TotalAmountMinor: 990, PaidAmountMinor: 0));
+        var req = ((ReversalParseResult.Ok)ReversalRequestParser.Parse(Zarf())).Request;
+
+        var ilk = await h.HandleReversalAsync(req);
+        var ikinci = await h.HandleReversalAsync(req);
+
+        Assert.Equal(1, sim.VoidCalls);   // ← ÇİVİ
+        Assert.Equal(ilk, ikinci);        // saklanan sonuç birebir replay edildi
+    }
+
+    [Fact]
+    public async Task Yarim_kalan_iptal_UNKNOWNda_BIRAKILIR_tekrar_sorulabilsin()
+    {
+        // Belirsiz sonucu "kesin" diye saklamak, tekrar geldiğinde cihaza sormayı engellerdi.
+        var (h, sim) = Kur();
+        _store.Save("svc-orig", Pay, "term-01", _clock.ServerNow() + 60_000);
+        sim.VoidResult = new TransportResult(TransportOutcome.Unknown,
+            ProviderResultCode: "REVERSAL_FAILED", ErrorCondition: "InProgress",
+            Reason: RestomenumReasons.VoidIncomplete);
+        var req = ((ReversalParseResult.Ok)ReversalRequestParser.Parse(Zarf())).Request;
+
+        await h.HandleReversalAsync(req);
+        await h.HandleReversalAsync(req);
+
+        Assert.Equal(2, sim.VoidCalls);   // belirsizlik sürüyor → yeniden soruldu
+    }
+
     // ── yardımcılar ─────────────────────────────────────────────────────────────
 
     private sealed class FakeAmounts : IPaymentDetailClient

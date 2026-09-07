@@ -116,12 +116,24 @@ public sealed class LocalSaleHandler
         {
             _log("[iptal] referans defterde yok — terminale gidilmedi",
                 new { req.PaymentId, req.OriginalServiceId });
-            var yok = SaleToPoiResponseBuilder.BuildReversalResult(req,
+            return SaleToPoiResponseBuilder.BuildReversalResult(req,
                 new TransportResult(TransportOutcome.Declined,
                     ProviderResultCode: $"UNKNOWN_REFERENCE:{req.OriginalServiceId}",
                     ErrorCondition: "NotFound"),
                 2, _now());
-            return yok;
+        }
+
+        // TEKİLLEME (W5/W9): iptalin KENDİ ServiceID'si var ve kasa ağ hatasında aynı zarfı yeniden
+        // POST edebiliyor. Kayıt `kind='void'` ile yazılır; açılış kurtarması yalnız `kind='sale'`
+        // okuduğu için bir iptal ASLA "yarım kalmış satış" sanılmaz.
+        var kayit = _store.Save(req.ServiceId, req.PaymentId, req.PoiId,
+            _now().ToUnixTimeMilliseconds() + 86_400_000, kind: CommandKinds.Void);
+        if (kayit is SaveResult.Duplicate d && d.Command.State.IsFinal() && d.Command.ResultJson is string saklanan)
+        {
+            // İkinci POST cihaza GİTMEZ: ilk iptalin sonucu replay edilir. Aksi hâlde ikinci
+            // `VoidAll` ya boşa çalışır ya da araya giren yeni bir fişi iptal ederdi.
+            _log("[iptal] tekrar gelen istek — saklanan sonuç replay edildi", new { req.PaymentId, req.ServiceId });
+            return saklanan;
         }
 
         await _islemKilidi.WaitAsync(ct);
@@ -142,6 +154,16 @@ public sealed class LocalSaleHandler
         finally { _islemKilidi.Release(); }
 
         var govde = SaleToPoiResponseBuilder.BuildReversalResult(req, sonuc, 2, _now());
+
+        // Sonucu KAYDET: ikinci POST'un replay edebilmesi için. Belirsiz sonuçta (VOID_INCOMPLETE)
+        // kayıt UNKNOWN'da bırakılır — tekrar gelirse cihaza yeniden sorulabilsin.
+        if (sonuc.Outcome is TransportOutcome.Approved or TransportOutcome.Declined)
+        {
+            _store.Advance(req.ServiceId, CommandState.RECEIVED, CommandState.SENT_TO_TERMINAL);
+            _store.Advance(req.ServiceId, CommandState.SENT_TO_TERMINAL, CommandState.COMPLETED,
+                resultJson: govde);
+        }
+
         _log("[iptal] sonuç", new
         {
             req.PaymentId, outcome = sonuc.Outcome.ToString(),
