@@ -332,6 +332,63 @@ public class ReversalTests : IDisposable
         Assert.Single(_notifier.TicketCancelBodies);   // ← AYRI uç çağrıldı
     }
 
+    [Fact]
+    public void Fis_kapsaminda_SaleData_HIC_OLMAYABILIR()
+    {
+        // Fiş iptali bir DENEMEYE ait değil: cihazda başka kasadan kalmış, bu kasanın hiç
+        // paymentId'si olmayan bir fiş durabilir. Platformun kendi zarfı da SaleData göndermiyor.
+        // ← ÇİVİ: fiş kapsamında SaleData'sız istek KABUL, ödeme kapsamında RET.
+        var zarfsiz = """
+        {
+          "SaleToPOIRequest": {
+            "MessageHeader": {
+              "MessageClass": "Service", "MessageCategory": "Reversal", "MessageType": "Request",
+              "ServiceID": "void12345", "SaleID": "kasa-1", "POIID": "term-01"
+            },
+            "ReversalRequest": { "ReversalReason": "MerchantCancel" },
+            "Restomenum": { "v": 1, "scope": "ticket", "ticketCancelId": "uuid-term-ticketcancel" }
+          }
+        }
+        """;
+
+        var r = Assert.IsType<ReversalParseResult.Ok>(ReversalRequestParser.Parse(zarfsiz));
+        Assert.Null(r.Request.PaymentId);
+        Assert.Equal("ticket", r.Request.Scope);
+        Assert.Equal("uuid-term-ticketcancel", r.Request.TicketCancelId);
+
+        // Ödeme kapsamında aynı zarf (scope yok) REDDEDİLİR.
+        var odeme = zarfsiz.Replace("\"scope\": \"ticket\", ", "");
+        Assert.IsType<ReversalParseResult.Invalid>(ReversalRequestParser.Parse(odeme));
+    }
+
+    [Fact]
+    public async Task PaymentIdsiz_fis_iptali_ucdan_uca_calisir()
+    {
+        var (h, sim) = Kur();
+        sim.TicketVoidResult = new TicketVoidResult(TransportOutcome.Approved, TicketWasOpen: true,
+            VoidedPaymentCount: 1, VoidedAmountMinor: 490, CancelledSaleSessionId: "oturum-B");
+        var zarf = """
+        {
+          "SaleToPOIRequest": {
+            "MessageHeader": {
+              "MessageClass": "Service", "MessageCategory": "Reversal", "MessageType": "Request",
+              "ServiceID": "void98765", "SaleID": "kasa-1", "POIID": "term-01"
+            },
+            "ReversalRequest": { "ReversalReason": "MerchantCancel" },
+            "Restomenum": { "v": 1, "scope": "ticket", "ticketCancelId": "tc-uuid-1" }
+          }
+        }
+        """;
+        var req = ((ReversalParseResult.Ok)ReversalRequestParser.Parse(zarf)).Request;
+
+        var govde = await h.HandleReversalAsync(req);
+
+        Assert.Equal("Success", Yanit(govde).GetProperty("Result").GetString());
+        Assert.Equal("tc-uuid-1", Ek(govde).GetProperty("ticketCancelId").GetString());
+        Assert.Equal("oturum-B", Ek(govde).GetProperty("cancelledSaleSessionId").GetString());
+        Assert.Single(_notifier.TicketCancelBodies);
+    }
+
     // ── yardımcılar ─────────────────────────────────────────────────────────────
 
     private sealed class FakeAmounts : IPaymentDetailClient

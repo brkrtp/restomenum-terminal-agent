@@ -22,8 +22,15 @@ public sealed record ReversalRequest(
     string ServiceId,
     string SaleId,
     string PoiId,
-    /// <summary>Defterin anahtarı — iptal edilecek ödemenin kaydı (<c>pay_</c> + 40 hex).</summary>
-    string PaymentId,
+    /// <summary>
+    /// Defterin anahtarı — iptal edilecek ödemenin kaydı (<c>pay_</c> + 40 hex).
+    ///
+    /// <para><b><c>scope:"ticket"</c>'ta <c>null</c> olabilir.</b> Fiş iptali bir denemeye ait
+    /// değildir: cihazda başka kasadan kalmış, bu kasanın hiç paymentId'si olmayan bir fiş
+    /// durabilir. O yolda eşleştirme anahtarı <c>ticketCancelId</c>'dir. Ödeme kapsamında
+    /// ZORUNLUDUR — orada hangi ödemenin iptal edildiği paymentId ile belirlenir.</para>
+    /// </summary>
+    string? PaymentId,
     /// <summary>Tamamlanmış ödemenin cihaz referansı. <c>null</c> ise vaka "açık fiş iptali".</summary>
     string? OriginalPoiTransactionId,
     /// <summary>Orijinal ödeme çağrısının ServiceID'si (açık fiş dalının referansı).</summary>

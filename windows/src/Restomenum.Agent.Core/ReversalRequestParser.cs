@@ -99,18 +99,27 @@ public static partial class ReversalRequestParser
                 return Red(SaleToPoiRejectReason.Malformed,
                     "referans yok: OriginalPOITransaction.POITransactionID ya da MessageReference.ServiceID gerekli");
 
-            if (!rr.TryGetProperty("SaleData", out var sd) || sd.ValueKind != JsonValueKind.Object)
-                return Red(SaleToPoiRejectReason.Malformed, "SaleData yok");
-            if (!sd.TryGetProperty("SaleTransactionID", out var stx) || stx.ValueKind != JsonValueKind.Object)
-                return Red(SaleToPoiRejectReason.Malformed, "SaleTransactionID yok");
+            // FİŞ kapsamında `SaleData` HİÇ OLMAYABİLİR: iptal bir denemeye ait değil ve cihazda
+            // başka kasadan kalmış, bu kasanın paymentId'si olmayan bir fiş durabilir. Eşleştirme
+            // anahtarı orada `ticketCancelId`. ÖDEME kapsamında ise zorunlu — hangi ödemenin iptal
+            // edildiği başka türlü belirlenemez.
+            var fisKapsami = scopeOn == "ticket";
+            JsonElement stx = default;
+            var stxVar = rr.TryGetProperty("SaleData", out var sd) && sd.ValueKind == JsonValueKind.Object
+                && sd.TryGetProperty("SaleTransactionID", out stx) && stx.ValueKind == JsonValueKind.Object;
 
-            var paymentId = Str(stx, "TransactionID");
-            if (paymentId is null || !PaymentIdRegex().IsMatch(paymentId))
+            if (!fisKapsami && !stxVar)
+                return Red(SaleToPoiRejectReason.Malformed, "SaleData/SaleTransactionID yok");
+
+            var paymentId = stxVar ? Str(stx, "TransactionID") : null;
+            if (paymentId is not null && !PaymentIdRegex().IsMatch(paymentId))
                 return Red(SaleToPoiRejectReason.InvalidPaymentId, "TransactionID pay_+40hex değil");
+            if (!fisKapsami && paymentId is null)
+                return Red(SaleToPoiRejectReason.InvalidPaymentId, "TransactionID yok");
 
             // TimeStamp: iptalde ZORUNLU DEĞİL (kasa göndermeyebiliyor); yoksa "şimdi" sayılır.
             // Ödemede zorunlu, çünkü orada süre penceresi kararı var; iptalde öyle bir karar yok.
-            var tsRaw = Str(stx, "TimeStamp");
+            var tsRaw = stxVar ? Str(stx, "TimeStamp") : null;
             var ts = tsRaw is not null
                 && DateTimeOffset.TryParse(tsRaw, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var p)
                     ? p : DateTimeOffset.UtcNow;

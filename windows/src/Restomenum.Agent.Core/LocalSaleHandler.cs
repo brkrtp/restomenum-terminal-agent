@@ -162,7 +162,9 @@ public sealed class LocalSaleHandler
         // TEKİLLEME (W5/W9): iptalin KENDİ ServiceID'si var ve kasa ağ hatasında aynı zarfı yeniden
         // POST edebiliyor. Kayıt `kind='void'` ile yazılır; açılış kurtarması yalnız `kind='sale'`
         // okuduğu için bir iptal ASLA "yarım kalmış satış" sanılmaz.
-        var kayit = _store.Save(req.ServiceId, req.PaymentId, req.PoiId,
+        // `PaymentId!` güvenli: buraya YALNIZ ödeme kapsamı düşer (fiş kapsamı yukarıda dallandı)
+        // ve ayrıştırıcı ödeme kapsamında paymentId'yi ZORUNLU tutuyor.
+        var kayit = _store.Save(req.ServiceId, req.PaymentId!, req.PoiId,
             _now().ToUnixTimeMilliseconds() + 86_400_000, kind: CommandKinds.Void);
         if (kayit is SaveResult.Duplicate d && d.Command.State.IsFinal() && d.Command.ResultJson is string saklanan)
         {
@@ -206,7 +208,8 @@ public sealed class LocalSaleHandler
             errorCondition = sonuc.ErrorCondition, reason = sonuc.Reason, info = sonuc.Info,
         });
         // Platforma bildir: iptal defterde de görünmeli, yoksa kasa ile defter ıraksar.
-        await NotifyAsync(req.PaymentId, govde, ct);
+        // `PaymentId!` güvenli: ödeme kapsamında ayrıştırıcı onu zorunlu tutuyor.
+        await NotifyAsync(req.PaymentId!, govde, ct);
         return govde;
     }
 
@@ -280,7 +283,9 @@ public sealed class LocalSaleHandler
         // satışın aksine bunu sonradan keşfedecek bir kurtarma yolu YOK. O yüzden önce outbox'a
         // yazılır, sonra gönderilir; başarısızsa arka plan replay eder.
         var eid = (req.TicketCancelId ?? req.PaymentId) + ":ticket-cancel";
-        _outbox.Enqueue(eid, req.PaymentId, OutboxKinds.TicketCancel, govde, "");
+        // Fiş iptalinde paymentId olmayabilir (başka kasadan kalmış fiş). Outbox'ta yalnız
+        // bilgi amaçlı taşınıyor; replay uca göre yönleniyor, paymentId'ye bakmıyor.
+        _outbox.Enqueue(eid, req.PaymentId ?? "", OutboxKinds.TicketCancel, govde, "");
         try
         {
             var bildirim = await _notifier.NotifyTicketCancelAsync(govde, ct);
