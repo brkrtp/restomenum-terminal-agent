@@ -144,10 +144,15 @@ public class GmpTerminalTransportTests
 
         Assert.Equal(TransportOutcome.Approved, r.Outcome);
         Assert.Equal("RRN1", r.Rrn);
+        // ⚠️ Sıraya `Payment` ile baskı arasında bir OptionFlags+GetTicket EKLENDİ (K-26): fiş
+        // kapanınca deftere yazılacak ödeme satırları kapatMADAN ÖNCE okunmalı — `Close` sonrası
+        // fiş erişilemez olur ve o satırların kaynağı kaybolur.
         Assert.Equal(
             new[] { "Start", "TicketHeader", "OptionFlags", "ItemSale", "GetTicket", "Payment",
+                    "OptionFlags", "GetTicket",
                     "PrintTotalsAndPayments", "PrintBeforeMF", "PrintUserMessage", "PrintMF", "Close" },
             g.Calls);
+        Assert.Equal("CLOSED", r.TicketState);
     }
 
     [Fact]
@@ -707,6 +712,38 @@ public class GmpTerminalTransportTests
         Assert.Contains("PrintMF", g.Calls);
         Assert.Contains("Close", g.Calls);
         Assert.Null(snap.ReadOpenTicketBinding("t1"));            // ← CIVI
+    }
+
+    // ── W16: FİŞ DURUMU (K-26) ──────────────────────────────────────────────────
+
+    [Fact]
+    public async Task Kismi_odemede_ticketState_OPEN()
+    {
+        // Platform satırları fiş KAPANINCA yazacak. Kısmi ödemede "OPEN" demezsek kasa o ödemenin
+        // deftere geçtiğini sanır; sonradan fiş iptal edilirse satırı geri almak gerekirdi.
+        var (t, g, _) = Kur();
+        g.AfterPayment = new GmpTicket(990, 500, 1, GmpPaymentTypes.Cash);   // kısmi
+
+        var r = await t.SaleAsync(Req(amount: 500, paymentType: GmpPaymentTypes.Cash,
+            oturum: "oturum-A", satisToplam: 990));
+
+        Assert.Equal("OPEN", r.TicketState);
+        Assert.DoesNotContain("Close", g.Calls);
+    }
+
+    [Fact]
+    public async Task Tam_odemede_ticketState_CLOSED_ve_yalniz_Close_BASARILIYSA()
+    {
+        // ← ÇİVİ: `CLOSED` yalnız `Close` gerçekten başarılıysa. Baskı/kapatma yarım kalmışsa fiş
+        // hâlâ AÇIKTIR ve öyle bildirilmeli; aksi hâlde defter kapanmamış bir fişi kapanmış sanır.
+        var (t, g, _) = Kur();
+        g.AfterPayment = new GmpTicket(990, 990, 1, GmpPaymentTypes.Cash);   // tam
+
+        var r = await t.SaleAsync(Req(amount: 990, paymentType: GmpPaymentTypes.Cash,
+            oturum: "oturum-A", satisToplam: 990));
+
+        Assert.Equal("CLOSED", r.TicketState);
+        Assert.Contains("Close", g.Calls);
     }
 
     [Fact]

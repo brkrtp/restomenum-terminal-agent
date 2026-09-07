@@ -95,6 +95,9 @@ public static class SaleToPoiResponseBuilder
         var ek = Ek(result.PaymentInvoked, result.Reason, result.Info);
         // Cihazın gördüğü tutarlar YALNIZ kalan/toplam ayrışmasında taşınır (aşağıdaki iki sebep).
         // Her gövdeye koymak, alanı "bazen doğru bazen bayat" bir veriye çevirirdi.
+        // Fiş durumu: platform satırları fiş KAPANINCA tek seferde yazacak; kasa da "bu ödeme
+        // deftere geçti mi" sorusunu bununla cevaplıyor.
+        if (result.TicketState is not null) ek["ticketState"] = result.TicketState;
         if (result.DeviceTicketTotalMinor is long dt) ek["deviceTicketTotalMinor"] = dt;
         if (result.DeviceRemainingMinor is long dk) ek["deviceRemainingMinor"] = dk;
         govde["Restomenum"] = ek;

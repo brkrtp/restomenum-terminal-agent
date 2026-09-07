@@ -184,10 +184,21 @@ public sealed class GmpTerminalTransport : ITerminalTransport
 
         // Ödeme işlendi. Fiş tamamlandıysa basılır ve kapatılır; tamamlanmadıysa AÇIK bırakılır —
         // kasiyer kalanı ekleyecek. Fişi burada kapatmak, yarım ödenmiş fiş üretmek olurdu.
+        // Fiş durumu ödemeden SONRA belirlenir; `CLOSED` yalnız `Close` gerçekten başarılıysa.
+        var fisDurumu = "OPEN";
+        IReadOnlyList<GmpPaymentLine>? kapanisOdemeleri = null;
+
         if (tk.IsFullyPaid)
         {
+            // Kapanış ödemelerini kapatMADAN ÖNCE oku: `Close` sonrası fiş erişilemez olur ve
+            // deftere yazılacak satırların kaynağı kaybolur.
+            if (_gmp.OptionFlags(handle, GmpEchoFlags.Reload).Ok
+                && _gmp.GetTicket(handle, out var kapanisFisi).Ok)
+                kapanisOdemeleri = kapanisFisi.Payments;
+
             var kapanis = Kapat(handle);
             if (kapanis is not null) return kapanis;
+            fisDurumu = "CLOSED";
             // Fis kapandi: bag artik yok. Birakilsaydi bir sonraki satis "ayni satisin fisi" sanip
             // KAPANMIS bir fise odeme eklemeye calisirdi.
             _snapshots?.ClearOpenTicketBinding(request.TerminalId);
@@ -205,7 +216,8 @@ public sealed class GmpTerminalTransport : ITerminalTransport
             Rrn: tk.Rrn,
             CardLast4: tk.CardLast4,
             ProviderResultCode: pr.ToString(),
-            Info: bilgi);
+            Info: bilgi,
+            TicketState: fisDurumu);
     }
 
     /// <summary>
@@ -732,7 +744,8 @@ public sealed class GmpTerminalTransport : ITerminalTransport
         Rrn: t.Rrn, CardLast4: t.CardLast4, PaymentCount: t.PaymentCount,
         LastPaymentErrorCode: t.LastPaymentErrorCode, LastPaymentErrorText: t.LastPaymentErrorText,
         LastPaymentAppErrorCode: t.LastPaymentAppErrorCode,
-        LastPaymentAppErrorText: t.LastPaymentAppErrorText);
+        LastPaymentAppErrorText: t.LastPaymentAppErrorText,
+        Payments: t.Payments);
 
     /// <summary>
     /// Terminale <b>hiç gidilmeden</b> üretilen ret. <c>FP3_Payment</c> çağrılmadığı için para

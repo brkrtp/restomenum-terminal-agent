@@ -174,4 +174,10 @@ public static class OutboxKinds
 {
     public const string Result = "result";
     public const string TicketCancel = "ticket-cancel";
+
+    /// <summary>
+    /// Fiş KAPANDI bildirimi (K-26): ödemeler deftere fiş kapanınca TEK seferde yazılıyor.
+    /// Uç adresi P27 ile kesinleşecek; tür şimdiden ayrı çünkü replay doğru uca gitmeli.
+    /// </summary>
+    public const string TicketClosed = "ticket-closed";
 }

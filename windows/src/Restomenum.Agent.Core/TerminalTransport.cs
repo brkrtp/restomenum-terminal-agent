@@ -174,7 +174,20 @@ public sealed record TransportResult(
     long? DeviceTicketTotalMinor = null,
 
     /// <summary>Cihazdaki fişin kalanı (toplam − tahsil). Bkz. <see cref="DeviceTicketTotalMinor"/>.</summary>
-    long? DeviceRemainingMinor = null);
+    long? DeviceRemainingMinor = null,
+
+    /// <summary>
+    /// Ödemeden SONRA fişin durumu: <c>"OPEN"</c> (kısmi — fiş açık kaldı) ya da <c>"CLOSED"</c>
+    /// (tam ödeme → baskı → <c>FP3_Close</c> rc=0).
+    ///
+    /// <para><b>Neden yanıtta:</b> platform satırları fiş KAPANINCA tek seferde yazacak. Kısmi
+    /// ödemede satır yazmak, sonradan iptal edilen bir fişin satırlarını geri almayı gerektirirdi;
+    /// kasa da "bu ödeme deftere geçti mi" sorusunu ancak bu alanla cevaplayabilir.</para>
+    ///
+    /// <para><c>CLOSED</c> YALNIZ <c>Close</c> başarılıysa yazılır — baskı/kapatma yarım kalmışsa
+    /// fiş hâlâ açıktır ve öyle bildirilir.</para>
+    /// </summary>
+    string? TicketState = null);
 
 /// <summary>
 /// Terminalin ödeme modeli — <b>pazara göre değişir ve belirsizlik çözümünü değiştirir.</b>
@@ -260,6 +273,9 @@ public sealed record TicketState(
 
     /// <summary>Cihazın uygulama hata kodu — bkz. <see cref="GmpTicket.LastPaymentAppErrorCode"/>.</summary>
     string? LastPaymentAppErrorCode = null,
+
+    /// <summary>Fişteki TÜM ödemeler — fiş kapanınca deftere yazılacak satırların kaynağı.</summary>
+    IReadOnlyList<GmpPaymentLine>? Payments = null,
 
     /// <summary><c>ST_PaymentErrMessage.AppErrorMsg</c> — ayrı tutuluyor, birleştirme teşhisi kör eder.</summary>
     string? LastPaymentAppErrorText = null)

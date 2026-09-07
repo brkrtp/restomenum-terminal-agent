@@ -483,6 +483,7 @@ public sealed class GmpWrapper : IGmpWrapper
         if (count > 0 && (payments is null || count > payments.Length))
             return new GmpTicket(total, paid, -1, 0, null, null);
 
+        var satirlar = new List<GmpPaymentLine>();
         int lastType = 0;
         string? rrn = null;
         string? last4 = null;
@@ -490,6 +491,15 @@ public sealed class GmpWrapper : IGmpWrapper
         string? appErrCode = null;
         string? errText = null;
         string? appErrText = null;
+
+        // Fişteki TÜM ödemeler: fiş kapanınca deftere yazılacak satırların kaynağı.
+        for (int i = 0; i < count && payments is not null && i < payments.Length; i++)
+        {
+            var pl = payments[i];
+            if (pl is null) continue;
+            int? bkm = pl.stBankPayment is { } bp && bp.bankBkmId != 0 ? bp.bankBkmId : null;
+            satirlar.Add(new GmpPaymentLine((int)pl.typeOfPayment, pl.payAmount, bkm));
+        }
 
         if (count > 0)
         {
@@ -526,7 +536,7 @@ public sealed class GmpWrapper : IGmpWrapper
             }
         }
 
-        return new GmpTicket(total, paid, count, lastType, rrn, last4, errCode, errText, appErrCode, appErrText);
+        return new GmpTicket(total, paid, count, lastType, rrn, last4, errCode, errText, appErrCode, appErrText, satirlar);
     }
 
     private static bool Bos(string? s) => string.IsNullOrWhiteSpace(s);

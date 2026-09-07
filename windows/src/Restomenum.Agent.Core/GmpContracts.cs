@@ -179,7 +179,14 @@ public readonly record struct GmpTicket(
     string? LastPaymentAppErrorCode = null,
 
     /// <summary><c>ST_PaymentErrMessage.AppErrorMsg</c> — ayrı tutuluyor, birleştirme teşhisi kör eder.</summary>
-    string? LastPaymentAppErrorText = null)
+    string? LastPaymentAppErrorText = null,
+
+    /// <summary>
+    /// Fişteki TÜM ödemeler (cihazın kendi tablosu). Şimdiye kadar yalnız SONUNCUSU taşınıyordu;
+    /// belirsizlik çözümü için o yetiyordu ama fiş kapanınca deftere yazılacak satırlar için
+    /// hepsi lazım — iki kısmi ödemeli bir fişte tek satır yazmak defteri cihazdan ayırırdı.
+    /// </summary>
+    IReadOnlyList<GmpPaymentLine>? Payments = null)
 {
     public bool IsFullyPaid => TotalAmountMinor > 0 && PaidAmountMinor >= TotalAmountMinor;
     public long RemainingMinor => Math.Max(0, TotalAmountMinor - PaidAmountMinor);
@@ -194,6 +201,15 @@ public readonly record struct GmpTicket(
     /// </summary>
     public bool HasBankLeg => GmpPaymentTypes.HasBankLeg(LastPaymentType);
 }
+
+/// <summary>Fişteki tek bir ödeme kaydı — cihazın gördüğü hâliyle.</summary>
+public readonly record struct GmpPaymentLine(
+    /// <summary>Ödeme tipi: 1=nakit, 4=kart, 16=mobil/QR.</summary>
+    int Type,
+    /// <summary>Tahsil edilen tutar (kuruş).</summary>
+    long AmountMinor,
+    /// <summary>Kart bacağında bankanın BKM kimliği; yoksa <c>null</c>.</summary>
+    int? BankBkmId = null);
 
 /// <summary>Ödeme tipleri — <b>DLL seviyesi</b>.</summary>
 public static class GmpPaymentTypes
