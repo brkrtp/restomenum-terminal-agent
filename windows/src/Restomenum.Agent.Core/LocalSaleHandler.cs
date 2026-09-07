@@ -273,15 +273,31 @@ public sealed class LocalSaleHandler
             ticketCancelId = req.TicketCancelId ?? "(yok)",
         });
 
-        // Fiş iptali AYRI uca gider: ödeme sonucu ucu paymentId ile adresleniyor, fiş iptali ise
-        // bir denemeye ait değil. Yanlış uca göndermek 409/404 üretir ve defter iptali görmez.
-        var bildirim = await _notifier.NotifyTicketCancelAsync(govde, ct);
-        if (bildirim.Outcome != NotifyOutcome.Recorded)
-            _log("[iptal] fiş iptali bildirimi SORUNU (alarm)", new
-            {
-                req.PaymentId, outcome = bildirim.Outcome.ToString(),
-                bildirim.StatusCode, bildirim.Message,
-            });
+        // ── DAYANIKLI BİLDİRİM ────────────────────────────────────────────────────
+        // Fiş iptali AYRI uca gider (ödeme ucu paymentId ile adresleniyor; iptal bir denemeye ait
+        // değil). Ama asıl mesele dayanıklılık: cihazda fiş GERÇEKTEN iptal edildi. Bildirim o an
+        // gidemezse defter iptali hiç görmez ve kasa ile defter kalıcı olarak ıraksar — üstelik
+        // satışın aksine bunu sonradan keşfedecek bir kurtarma yolu YOK. O yüzden önce outbox'a
+        // yazılır, sonra gönderilir; başarısızsa arka plan replay eder.
+        var eid = (req.TicketCancelId ?? req.PaymentId) + ":ticket-cancel";
+        _outbox.Enqueue(eid, req.PaymentId, OutboxKinds.TicketCancel, govde, "");
+        try
+        {
+            var bildirim = await _notifier.NotifyTicketCancelAsync(govde, ct);
+            if (bildirim.IsFinal) _outbox.Confirm(eid);
+            else _outbox.MarkAttempt(eid);
+            if (bildirim.IsProblem)
+                _log("[iptal] fiş iptali bildirimi SORUNU (alarm)", new
+                {
+                    req.PaymentId, outcome = bildirim.Outcome.ToString(),
+                    bildirim.StatusCode, bildirim.Message,
+                });
+        }
+        catch (Exception e) when (e is not OperationCanceledException)
+        {
+            _log("[iptal] bildirim gönderilemedi — outbox'ta kaldı (replay)",
+                new { req.PaymentId, error = e.Message });
+        }
         return govde;
     }
 
@@ -390,7 +406,11 @@ public sealed class LocalSaleHandler
             if (ct.IsCancellationRequested) return;
             try
             {
-                var res = await _notifier.NotifyAsync(e.PaymentId, e.PayloadJson, ct);
+                // TÜRE GÖRE UÇ: fiş iptali AYRI uca gider (paymentId ile adreslenmiyor).
+                // Hepsini ödeme ucuna göndermek, replay edilen her iptali 404/409'a düşürürdü.
+                var res = e.Status == OutboxKinds.TicketCancel
+                    ? await _notifier.NotifyTicketCancelAsync(e.PayloadJson, ct)
+                    : await _notifier.NotifyAsync(e.PaymentId, e.PayloadJson, ct);
                 if (res.IsFinal) _outbox.Confirm(e.EventId);
                 else _outbox.MarkAttempt(e.EventId);
                 if (res.IsProblem)
@@ -407,7 +427,7 @@ public sealed class LocalSaleHandler
     private async Task NotifyAsync(string paymentId, string body, CancellationToken ct)
     {
         var eid = paymentId + ":result";
-        _outbox.Enqueue(eid, paymentId, "result", body, "");   // dayanıklı yazım ÖNCE (INSERT OR IGNORE)
+        _outbox.Enqueue(eid, paymentId, OutboxKinds.Result, body, "");   // dayanıklı yazım ÖNCE (INSERT OR IGNORE)
         try
         {
             var res = await _notifier.NotifyAsync(paymentId, body, ct);

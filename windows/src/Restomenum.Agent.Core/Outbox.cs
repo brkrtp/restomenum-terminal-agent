@@ -165,3 +165,13 @@ public sealed class Outbox : IDisposable
 
     public void Dispose() => _conn.Dispose();
 }
+
+/// <summary>
+/// Outbox kayıt türü (<c>Status</c> sütunu). Replay hangi uca gideceğini buradan bilir; hepsini
+/// ödeme ucuna göndermek, replay edilen her fiş iptalini 404/409'a düşürürdü.
+/// </summary>
+public static class OutboxKinds
+{
+    public const string Result = "result";
+    public const string TicketCancel = "ticket-cancel";
+}
