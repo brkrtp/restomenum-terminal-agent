@@ -85,7 +85,8 @@ public class LocalSaleHandlerTests : IDisposable
         var orch = new AgentOrchestrator(_store, sim, _clock, RecoveryPolicy.Immediate);
         var notifier = new FakeNotifier();
         var h = new LocalSaleHandler(new FakeAmounts { Result = amounts }, orch, _store,
-            new FakeResolver { Dept = dept, Rate = rate }, new FakePaymentMethods { Type = paymentType }, notifier, _outbox);
+            new FakeResolver { Dept = dept, Rate = rate }, new FakePaymentMethods { Type = paymentType },
+            notifier, _outbox, sim);
         return (h, sim, notifier);
     }
 

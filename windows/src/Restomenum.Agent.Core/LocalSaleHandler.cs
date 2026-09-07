@@ -21,6 +21,13 @@ public sealed class LocalSaleHandler
     private readonly IPaymentMethodResolver _paymentMethods;
     private readonly IResultNotifier _notifier;
     private readonly Outbox _outbox;
+    /// <summary>
+    /// İptal için gereken DOĞRUDAN terminal erişimi. Satış yolu orkestratörden geçer (dedupe,
+    /// durum makinesi, belirsizlik çözümü); iptalin böyle bir komut yaşam döngüsü YOK — cihazdaki
+    /// fişe bakıp karar veren tek adımlık bir iş. Orkestratöre sıkıştırmak, satışın durum
+    /// makinesine ait olmayan bir şeyi oraya sokmak olurdu.
+    /// </summary>
+    private readonly ITerminalTransport _transport;
     private readonly Func<DateTimeOffset> _now;
     private readonly Action<string, object?> _log;
 
@@ -34,9 +41,10 @@ public sealed class LocalSaleHandler
     public LocalSaleHandler(
         IPaymentDetailClient amounts, AgentOrchestrator orch, CommandStore store,
         ILineDepartmentResolver departments, IPaymentMethodResolver paymentMethods,
-        IResultNotifier notifier, Outbox outbox,
+        IResultNotifier notifier, Outbox outbox, ITerminalTransport transport,
         Func<DateTimeOffset>? now = null, Action<string, object?>? log = null)
     {
+        _transport = transport;
         _amounts = amounts;
         _orch = orch;
         _store = store;
@@ -84,6 +92,64 @@ public sealed class LocalSaleHandler
             await NotifyAsync(k.PaymentId, body, ct);
             _log("[yerel] yarım komut çözüldü", new { k.CommandId, decision = outcome.Decision.ToString() });
         }
+    }
+
+    /// <summary>
+    /// <b>Fiş/ödeme iptali.</b> Kasadaki "Fiş İptal" düğmesinin ucu.
+    ///
+    /// <para><b>Satış yolundan ayrı tutuldu.</b> Satışın bir komut yaşam döngüsü var (dedupe →
+    /// durum makinesi → belirsizlik çözümü); iptalin yok. Ama <b>aynı terminal kilidini</b> alır:
+    /// iptal, süren bir satışın fişini altından çekemez.</para>
+    ///
+    /// <para><b>Kararı cihaz verir, biz değil.</b> Hangi referansla geldiğine bakıp "bu ödemesizdir"
+    /// diye varsaymayız; fiş okunur (<c>VoidAsync</c> içinde denetim izi olarak loglanır) ve
+    /// <c>VoidAll</c> cihazın kendi korumasına çarpar (2069 = üzerinde tahsilat var). Yarım kalırsa
+    /// sonuç <c>VOID_INCOMPLETE</c>'tir ve kasiyere "tekrar dene" DENMEZ.</para>
+    /// </summary>
+    public async Task<string> HandleReversalAsync(ReversalRequest req, CancellationToken ct = default)
+    {
+        // Referans DOĞRULAMASI: açık-fiş dalında orijinal ServiceID bizim defterimizde olmalı.
+        // Olmayan bir komut için iptal kabul etmek, "cihazda ne varsa iptal et" demek olurdu —
+        // başka bir kasanın fişini silebilirdik.
+        if (req.OriginalPoiTransactionId is null && req.OriginalServiceId is not null
+            && _store.Read(req.OriginalServiceId) is null)
+        {
+            _log("[iptal] referans defterde yok — terminale gidilmedi",
+                new { req.PaymentId, req.OriginalServiceId });
+            var yok = SaleToPoiResponseBuilder.BuildReversalResult(req,
+                new TransportResult(TransportOutcome.Declined,
+                    ProviderResultCode: $"UNKNOWN_REFERENCE:{req.OriginalServiceId}",
+                    ErrorCondition: "NotFound"),
+                2, _now());
+            return yok;
+        }
+
+        await _islemKilidi.WaitAsync(ct);
+        TransportResult sonuc;
+        try
+        {
+            sonuc = await _transport.VoidAsync(ct);
+        }
+        catch (Exception e)
+        {
+            // Terminale ulaşılamadı: iptalin AKIBETİ BELİRSİZ. "Olmadı" demek yanlış olurdu —
+            // VoidAll cihazda işlemiş ve cevap kaybolmuş olabilir.
+            _log("[iptal] terminale ulaşılamadı", new { req.PaymentId, error = e.Message });
+            sonuc = new TransportResult(TransportOutcome.Unknown,
+                ProviderResultCode: $"VOID_UNREACHABLE:{e.GetType().Name}",
+                ErrorCondition: "InProgress", Reason: RestomenumReasons.VoidIncomplete);
+        }
+        finally { _islemKilidi.Release(); }
+
+        var govde = SaleToPoiResponseBuilder.BuildReversalResult(req, sonuc, 2, _now());
+        _log("[iptal] sonuç", new
+        {
+            req.PaymentId, outcome = sonuc.Outcome.ToString(),
+            errorCondition = sonuc.ErrorCondition, reason = sonuc.Reason, info = sonuc.Info,
+        });
+        // Platforma bildir: iptal defterde de görünmeli, yoksa kasa ile defter ıraksar.
+        await NotifyAsync(req.PaymentId, govde, ct);
+        return govde;
     }
 
     /// <summary>Bir SaleToPOIRequest'i uçtan uca işler; kasaya dönecek <c>SaleToPOIResponse</c> JSON'unu verir.</summary>

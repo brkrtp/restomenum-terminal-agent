@@ -79,6 +79,26 @@ public sealed class SimulatorTransport : ITerminalTransport
 
     public Task<bool> EchoAsync(CancellationToken ct = default) => Task.FromResult(EchoResult);
 
+    /// <summary>Sıradaki iptal çağrısının ne döneceği. Kurulmazsa fişten türetilir.</summary>
+    public TransportResult? VoidResult { get; set; }
+
+    public int VoidCalls { get; private set; }
+
+    public async Task<TransportResult> VoidAsync(CancellationToken ct = default)
+    {
+        VoidCalls++;
+        if (Delay > TimeSpan.Zero) await Task.Delay(Delay, ct);
+        if (VoidResult is not null) return VoidResult;
+
+        // Varsayılan: açık fiş yoksa iptal edilecek bir şey de yok.
+        if (!_ticket.HasOpenTicket)
+            return new TransportResult(TransportOutcome.Declined,
+                ProviderResultCode: "NO_OPEN_TICKET", ErrorCondition: "NotFound");
+
+        _ticket = new TicketState(HasOpenTicket: false, TotalAmountMinor: 0, PaidAmountMinor: 0);
+        return new TransportResult(TransportOutcome.Approved, Info: RestomenumReasons.TicketCancelled);
+    }
+
     /// <summary>
     /// Varsayılan davranış <b>fişten türetilir</b>: açık fiş yoksa ödeme işlenmemiştir; varsa ve
     /// üzerinde en az bir ödeme kayıtlıysa işlenmiştir. <see cref="ProbeResult"/> ile ezilebilir.

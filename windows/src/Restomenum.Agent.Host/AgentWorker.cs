@@ -122,6 +122,23 @@ public sealed class AgentWorker : BackgroundService
             using (var reader = new StreamReader(ctx.Request.InputStream, ctx.Request.ContentEncoding ?? Encoding.UTF8))
                 body = await reader.ReadToEndAsync(ct);
 
+            // KATEGORİYE GÖRE YOL AYRIMI. Zarfın başındaki `MessageCategory` okunur ve iki ayrı
+            // ayrıştırıcıdan biri seçilir. Ödeme yolu paranın geçtiği yol ve çalışıyor; iptali oraya
+            // `if` ile eklemek, tek bir hatanın satışı da bozması demekti.
+            if (ReversalRequestParser.PeekCategory(body) == "Reversal")
+            {
+                var iptal = ReversalRequestParser.Parse(body);
+                if (iptal is ReversalParseResult.Invalid ig)
+                {
+                    _log.LogWarning("geçersiz ReversalRequest: {Reason} — {Detail}", ig.Reason, ig.Detail);
+                    Respond(ctx, 400, $"{{\"error\":\"{ig.Reason}\"}}");
+                    return;
+                }
+                var iptalReq = ((ReversalParseResult.Ok)iptal).Request;
+                Respond(ctx, 200, await _handler.HandleReversalAsync(iptalReq, ct));
+                return;
+            }
+
             var parse = SaleToPoiRequestParser.Parse(body);
             if (parse is SaleToPoiParseResult.Invalid inv)
             {

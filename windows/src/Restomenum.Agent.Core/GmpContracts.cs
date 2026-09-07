@@ -132,7 +132,22 @@ public readonly record struct GmpTicket(
     /// <summary>Son ödemenin tipi. <b>1 = nakit, 4 = kart</b> (canlı terminalde doğrulandı).</summary>
     int LastPaymentType,
     string? Rrn = null,
-    string? CardLast4 = null)
+    string? CardLast4 = null,
+
+    /// <summary>
+    /// Son ödeme kaydına cihazın YAZDIĞI hata kodu (<c>ST_PaymentErrMessage</c>).
+    /// Canlı ölçüm (2026-09-07): banka hattı yokken <c>FP3_Payment</c> <b>2086</b> döndürdü ama
+    /// fişteki kayda <b>"2085"</b> yazıldı — yani dönüş kodu ile fişe yazılan kod AYNI DEĞİL.
+    /// Bu alan issuer yanıt kodu DEĞİLDİR; uygulama kodudur.
+    /// </summary>
+    string? LastPaymentErrorCode = null,
+
+    /// <summary>
+    /// Son ödeme kaydının hata METNİ. Canlı ölçüm: <c>"ÖDEME İSTEĞİ İLETİLMEDİ"</c> — cihazın
+    /// kendi defterinde "istek host'a gitmedi" beyanı. Kasiyere gösterilecek tek doğru cümle budur;
+    /// üreticinin tavsiyesi de bu (<i>"Always show return code and corresponding message"</i>).
+    /// </summary>
+    string? LastPaymentErrorText = null)
 {
     public bool IsFullyPaid => TotalAmountMinor > 0 && PaidAmountMinor >= TotalAmountMinor;
     public long RemainingMinor => Math.Max(0, TotalAmountMinor - PaidAmountMinor);

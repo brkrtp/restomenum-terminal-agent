@@ -413,6 +413,8 @@ public sealed class GmpWrapper : IGmpWrapper
         int lastType = 0;
         string? rrn = null;
         string? last4 = null;
+        string? errCode = null;
+        string? errText = null;
 
         if (count > 0)
         {
@@ -431,10 +433,22 @@ public sealed class GmpWrapper : IGmpWrapper
                         var digits = new string(pan.Where(char.IsDigit).ToArray());
                         if (digits.Length >= 4) last4 = digits[^4..];
                     }
+
+                    // Ödeme hata kodu/metni. `ErrorCode` boşsa `AppErrorCode`'a düşülür: hangi alanın
+                    // dolduğu ÖLÇÜLMEDİ (canlıda fişte "2085" gördük ama hangi alandan geldiği
+                    // ayrıştırılmadı), o yüzden ikisi de denenir. Uydurma yok — boşsa null kalır.
+                    var em = bank.stPaymentErrMessage;
+                    if (em is not null)
+                    {
+                        errCode = Bos(em.ErrorCode) ? (Bos(em.AppErrorCode) ? null : em.AppErrorCode) : em.ErrorCode;
+                        errText = Bos(em.ErrorMsg) ? (Bos(em.AppErrorMsg) ? null : em.AppErrorMsg) : em.ErrorMsg;
+                    }
                 }
             }
         }
 
-        return new GmpTicket(total, paid, count, lastType, rrn, last4);
+        return new GmpTicket(total, paid, count, lastType, rrn, last4, errCode, errText);
     }
+
+    private static bool Bos(string? s) => string.IsNullOrWhiteSpace(s);
 }

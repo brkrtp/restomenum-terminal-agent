@@ -137,6 +137,7 @@ public static class HostComposition
                 sp.GetRequiredService<CommandStore>(), sp.GetRequiredService<ILineDepartmentResolver>(),
                 sp.GetRequiredService<IPaymentMethodResolver>(),
                 sp.GetRequiredService<IResultNotifier>(), sp.GetRequiredService<Outbox>(),
+                sp.GetRequiredService<ITerminalTransport>(),
                 log: (m, d) => log.LogInformation("{Mesaj} {Detay}", m, d));
         });
 

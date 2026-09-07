@@ -388,16 +388,48 @@ public sealed class GmpTerminalTransport : ITerminalTransport
     {
         ulong h;
         lock (_gate) h = _handle;
-        if (h == 0) return new TransportResult(TransportOutcome.Declined, ProviderResultCode: "NO_OPEN_TICKET", ErrorCondition: "NotAllowed");
+
+        // TANITICI KURTARMASI: iptal isteği çoğu zaman satıştan SONRA, hatta ajan yeniden
+        // başladıktan sonra gelir — tanıtıcı bellekte olmaz. Eskiden burada doğrudan
+        // "NO_OPEN_TICKET" dönülüyordu, yani **iptalin en tipik vakası hiç çalışmıyordu.**
+        // `FP3_Start` açık fiş varsa 2080 döner ve hTrx'i AÇIK FİŞİN tanıtıcısıyla doldurur.
+        if (h == 0)
+        {
+            var yok = TanitciyiYenile();
+            if (yok is not null)
+                return new TransportResult(TransportOutcome.Declined,
+                    ProviderResultCode: "NO_OPEN_TICKET", ErrorCondition: "NotFound");
+            lock (_gate) h = _handle;
+        }
+
+        // Denetim izi: neyi iptal ettiğimiz, iptalden ÖNCE yazılır.
+        long iptalTutar = 0;
+        if (_gmp.OptionFlags(h, GmpEchoFlags.Reload).Ok && _gmp.GetTicket(h, out var oncesi).Ok)
+        {
+            iptalTutar = oncesi.PaidAmountMinor;
+            _log("[gmp] iptal öncesi fiş", new
+            {
+                toplam = oncesi.TotalAmountMinor, tahsil = oncesi.PaidAmountMinor,
+                odemeSayisi = oncesi.PaymentCount, bankaBacagi = oncesi.HasBankLeg,
+            });
+        }
 
         var r = _gmp.VoidAll(h, out _);
-        if (r.Ok) { _gmp.Close(h); lock (_gate) _handle = 0; return new TransportResult(TransportOutcome.Approved); }
+        if (r.Ok)
+        {
+            _gmp.Close(h);
+            lock (_gate) _handle = 0;
+            return new TransportResult(TransportOutcome.Approved,
+                ApprovedAmountMinor: iptalTutar > 0 ? iptalTutar : null,
+                Info: RestomenumReasons.TicketCancelled);
+        }
 
         if (r.Code == GmpCodes.CannotVoid)
         {
             // `PrintBeforeMF` geçilmiş; fiş mali hafızada. İptal artık MÜMKÜN DEĞİL.
-            return new TransportResult(TransportOutcome.Declined, ProviderResultCode: "ALREADY_FISCALIZED", ErrorCondition: "PaymentRestriction",
-                PaymentInvoked: false, Reason: RestomenumReasons.AlreadyFiscalized);
+            return new TransportResult(TransportOutcome.Declined, ProviderResultCode: "ALREADY_FISCALIZED",
+                ErrorCondition: "PaymentRestriction", PaymentInvoked: false,
+                Reason: RestomenumReasons.AlreadyFiscalized);
         }
 
         if (r.Code != GmpCodes.PaymentFound)
@@ -407,7 +439,8 @@ public sealed class GmpTerminalTransport : ITerminalTransport
         // `VoidPayment` imzası tahminidir. Başarısız olursa `REVERSAL_FAILED` (§7.6a): para
         // hareket etti, geri alınamadı — **tekrar denenmez**, insana gider.
         if (!_gmp.GetTicket(h, out var tk).Ok)
-            return new TransportResult(TransportOutcome.Unknown, ProviderResultCode: "VOID_READ_FAILED");
+            return new TransportResult(TransportOutcome.Unknown, ProviderResultCode: "VOID_READ_FAILED",
+                ErrorCondition: "InProgress", Reason: RestomenumReasons.VoidIncomplete);
 
         for (var i = tk.PaymentCount - 1; i >= 0; i--)
         {
@@ -415,17 +448,23 @@ public sealed class GmpTerminalTransport : ITerminalTransport
             if (!vp.Ok)
             {
                 _log("[gmp] REVERSAL_FAILED — banka ters işlemi başarısız", new { index = i, code = vp.ToString() });
-                return new TransportResult(TransportOutcome.Unknown, Rrn: tk.Rrn, ProviderResultCode: $"REVERSAL_FAILED:{vp}");
+                return new TransportResult(TransportOutcome.Unknown, Rrn: tk.Rrn,
+                    ProviderResultCode: $"REVERSAL_FAILED:{vp}", ErrorCondition: "InProgress",
+                    Reason: RestomenumReasons.VoidIncomplete);
             }
         }
 
         var son = _gmp.VoidAll(h, out _);
         if (!son.Ok)
-            return new TransportResult(TransportOutcome.Unknown, Rrn: tk.Rrn, ProviderResultCode: $"REVERSAL_FAILED:{son}");
+            return new TransportResult(TransportOutcome.Unknown, Rrn: tk.Rrn,
+                ProviderResultCode: $"REVERSAL_FAILED:{son}", ErrorCondition: "InProgress",
+                Reason: RestomenumReasons.VoidIncomplete);
 
         _gmp.Close(h);
         lock (_gate) _handle = 0;
-        return new TransportResult(TransportOutcome.Approved);
+        return new TransportResult(TransportOutcome.Approved,
+            ApprovedAmountMinor: iptalTutar > 0 ? iptalTutar : null,
+            Rrn: tk.Rrn, Info: RestomenumReasons.TicketCancelled);
     }
 
     // ── yardımcılar ─────────────────────────────────────────────────────────

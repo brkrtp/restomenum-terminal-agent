@@ -182,4 +182,14 @@ public static class RestomenumReasons
     /// devam edildi. Sonuç normal akıştır; bu satır yalnız denetim izidir.
     /// </summary>
     public const string StaleTicketCleared = "STALE_TICKET_CLEARED";
+
+    /// <summary><b>info:</b> fiş iptal edildi (VoidAll → Close tamamlandı).</summary>
+    public const string TicketCancelled = "TICKET_CANCELLED";
+
+    /// <summary>
+    /// İptal YARIM KALDI: ödeme geri alınamadı ya da fiş kapanamadı. Kasiyere söylenmesi gereken
+    /// cümle "iptal olmadı" DEĞİL, <b>"durum belirsiz, fişe dokunmayın, yönetici çağırın"</b>dır —
+    /// tekrar denemek yarım kalmış bir ters işlemin üstüne ikinciyi bindirebilir.
+    /// </summary>
+    public const string VoidIncomplete = "VOID_INCOMPLETE";
 }

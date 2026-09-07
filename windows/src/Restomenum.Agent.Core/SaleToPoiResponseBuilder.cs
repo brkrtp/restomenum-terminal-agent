@@ -186,6 +186,49 @@ public static class SaleToPoiResponseBuilder
     /// <para><c>paymentInvoked</c> ASLA atlanmaz: alanın yokluğu "bilmiyorum" ile "hayır" arasında
     /// yeni bir belirsizlik üretirdi ve W1'de kapattığımız kapı tam da buydu.</para>
     /// </summary>
+    /// <summary>
+    /// İptal sonucu (<c>ReversalResponse</c>). Ayrı üretici, çünkü iptalin cevabı ödemeninkinden
+    /// farklı bir soruya cevap veriyor: "para geri gitti mi / fiş kapandı mı".
+    ///
+    /// <para><b>Yarım kalma en tehlikeli sonuç:</b> `Failure` + <c>VOID_INCOMPLETE</c>. Kasiyere
+    /// "iptal olmadı, tekrar dene" dedirtmek YASAK — yarım kalmış bir ters işlemin üstüne ikincisini
+    /// bindirmek, geri alınmış bir ödemeyi ikinci kez geri almaya çalışmaktır.</para>
+    /// </summary>
+    public static string BuildReversalResult(
+        ReversalRequest req, TransportResult result, int exponent, DateTimeOffset now)
+    {
+        var basarili = result.Outcome == TransportOutcome.Approved;
+        var response = new JsonObject { ["Result"] = basarili ? "Success" : "Failure" };
+        if (!basarili) response["ErrorCondition"] = result.ErrorCondition ?? "InProgress";
+        if (result.ProviderResultCode is not null) response["AdditionalResponse"] = result.ProviderResultCode;
+
+        var govde = new JsonObject { ["Response"] = response };
+        // Tutar YALNIZ gerçekten geri alınan para varsa. Ödemesiz bir fişin iptalinde tutar
+        // bildirmek, olmayan bir iadeyi deftere yazdırırdı.
+        if (basarili && result.ApprovedAmountMinor is long geri && geri > 0)
+            govde["ReversedAmount"] = JsonValue.Create(Money.ToWire(geri, exponent));
+
+        return new JsonObject
+        {
+            ["SaleToPOIResponse"] = new JsonObject
+            {
+                ["MessageHeader"] = new JsonObject
+                {
+                    ["ProtocolVersion"] = "3.0",
+                    ["MessageClass"] = "Service",
+                    ["MessageCategory"] = "Reversal",
+                    ["MessageType"] = "Response",
+                    ["ServiceID"] = req.ServiceId,
+                    ["SaleID"] = req.SaleId,
+                    ["POIID"] = req.PoiId,
+                },
+                ["ReversalResponse"] = govde,
+                // İptalde `FP3_Payment` çağrılmaz; alan yine de ATLANMAZ (sözleşme: hep var).
+                ["Restomenum"] = Ek(paymentInvoked: false, result.Reason, result.Info),
+            },
+        }.ToJsonString();
+    }
+
     private static JsonObject Ek(bool paymentInvoked, string? reason, string? info = null)
     {
         var o = new JsonObject { ["v"] = 1, ["paymentInvoked"] = paymentInvoked };

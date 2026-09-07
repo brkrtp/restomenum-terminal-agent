@@ -360,8 +360,11 @@ public class GmpTerminalTransportTests
         var r = await t.VoidAsync();
 
         Assert.Equal(TransportOutcome.Approved, r.Outcome);
-        Assert.Equal(new[] { "VoidAll", "Close" }, g.Calls);   // canlıda ölçüldü: ~1,5-2 sn
+        // Sıra: önce OKU (denetim izi), sonra iptal et. Fişin ne olduğu, SİLİNMEDEN ÖNCE loglanır;
+        // sonra loglansaydı iptal sırasındaki bir çökmede ne sildiğimizi kimse bilemezdi.
+        Assert.Equal(new[] { "OptionFlags", "GetTicket", "VoidAll", "Close" }, g.Calls);
         Assert.DoesNotContain("VoidPayment", g.Calls);
+        Assert.Equal(RestomenumReasons.TicketCancelled, r.Info);
     }
 
     [Fact]

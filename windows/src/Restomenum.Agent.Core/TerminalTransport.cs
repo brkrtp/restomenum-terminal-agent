@@ -225,7 +225,13 @@ public sealed record TicketState(
     /// Fişteki ödeme adedi. <b>Artımlı modelde belirsizliği çözen asıl alan budur:</b> tutar
     /// karşılaştırması iki eşit ödemeyi ayırt edemez (20 ₺ + 20 ₺), sayaç ayırt eder.
     /// </summary>
-    int PaymentCount = 0)
+    int PaymentCount = 0,
+
+    /// <summary>Son ödeme kaydının cihazdaki hata kodu — bkz. <see cref="GmpTicket.LastPaymentErrorCode"/>.</summary>
+    string? LastPaymentErrorCode = null,
+
+    /// <summary>Son ödeme kaydının cihazdaki hata metni — bkz. <see cref="GmpTicket.LastPaymentErrorText"/>.</summary>
+    string? LastPaymentErrorText = null)
 {
     /// <summary>Fiş tamamen ödenmiş mi? Sahadaki kurtarma mantığının aynısı.</summary>
     public bool IsFullyPaid => TotalAmountMinor > 0 && PaidAmountMinor >= TotalAmountMinor;
@@ -268,4 +274,14 @@ public interface ITerminalTransport
     /// (§8.3c, ölçüldü). Seyrek çağrılmalı: cihaz tek oturumlu.
     /// </summary>
     Task<bool> EchoAsync(CancellationToken ct = default);
+
+    /// <summary>
+    /// Açık fişi/ödemeyi iptal eder. <b>Yol ödeme tipine göre ayrılır</b>: nakit ve mobil doğrudan
+    /// <c>VoidAll</c>; kart bacağı banka ters işlemi ister.
+    ///
+    /// <para>Arayüze taşındı çünkü kasadaki "Fiş İptal" düğmesi buraya bağlanıyor. Uygulamalar
+    /// kendi korumalarını kendileri taşır: <b>tahsil edilmiş parayı kör iptal eden bir uygulama
+    /// sözleşmeyi ihlal eder.</b></para>
+    /// </summary>
+    Task<TransportResult> VoidAsync(CancellationToken ct = default);
 }
