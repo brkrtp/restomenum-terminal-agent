@@ -237,18 +237,34 @@ public sealed class CommandStore : ITicketSnapshotStore, IDisposable
     /// yüzden komutu <b>yeniden teslim etmez</b>. Açılışta bu satırlar taranmazsa para hareket
     /// etmiş olabilir ve <b>kimse bildirmez</b> — ne agent, ne platform. Sessiz kayıp.</para>
     /// </summary>
-    public IReadOnlyList<StoredCommand> Pending(int limit = 100)
+    /// <param name="unknownEsigi">
+    /// Bu zamandan (unix ms) ESKİ <c>UNKNOWN</c> kayıtlar listeye alınmaz. <c>null</c> = sınırsız.
+    /// </param>
+    public IReadOnlyList<StoredCommand> Pending(int limit = 100, long? unknownEsigi = null)
     {
         lock (_gate)
         {
             using var cmd = _conn.CreateCommand();
+            // UNKNOWN kayıtlar için YAŞ SINIRI. Sebebi ölçüldü: çözülmüş ama UNKNOWN'da bırakılan
+            // kayıtlar (kanıtlı "işlenmedi" → aynı ServiceID tekrar gelirse yeniden çözülebilsin
+            // diye bilerek orada tutuluyor) HER açılışta yeniden yoklanıyordu. 4 kayıt açılışı
+            // dakikalarca uzattı ve bu maliyet kalıcıydı: kasa o denemeleri bir daha göndermezse
+            // kayıtlar sonsuza kadar her açılışta terminale sorulacaktı.
+            //
+            // Kayıt SİLİNMEZ ve durumu DEĞİŞMEZ — yalnız açılışta yoklanmaz. Aynı ServiceID
+            // sonradan gelirse tekilleme deposu onu yine bulur ve çözer.
+            //
+            // Sınır YALNIZ UNKNOWN'a uygulanır. `RECEIVED`/`SENT_TO_TERMINAL` bir çökme penceresini
+            // gösterir ve nadirdir; onları yaşına bakmadan yoklamak daha güvenli.
             cmd.CommandText = """
                 SELECT * FROM commands
-                 WHERE state IN ('RECEIVED','SENT_TO_TERMINAL','UNKNOWN')
-                   AND kind = 'sale'
+                 WHERE kind = 'sale'
+                   AND ( state IN ('RECEIVED','SENT_TO_TERMINAL')
+                      OR (state = 'UNKNOWN' AND updated_at >= $esik) )
                  ORDER BY received_at ASC LIMIT $n
                 """;
             cmd.Parameters.AddWithValue("$n", limit);
+            cmd.Parameters.AddWithValue("$esik", unknownEsigi ?? long.MinValue);
             using var r = cmd.ExecuteReader();
             var liste = new List<StoredCommand>();
             while (r.Read()) liste.Add(Oku(r));
@@ -288,6 +304,19 @@ public sealed class CommandStore : ITicketSnapshotStore, IDisposable
             using var r = cmd.ExecuteReader();
             if (!r.Read()) return null;
             return (r.GetInt64(0), r.GetInt64(1), r.GetInt32(2));
+        }
+    }
+
+    /// <summary>Yaş sınırı yüzünden açılışta ATLANAN <c>UNKNOWN</c> kayıt sayısı (yalnız raporlama).</summary>
+    public int CountSkippedUnknown(long unknownEsigi)
+    {
+        lock (_gate)
+        {
+            using var cmd = _conn.CreateCommand();
+            cmd.CommandText =
+                "SELECT COUNT(*) FROM commands WHERE kind='sale' AND state='UNKNOWN' AND updated_at < $esik";
+            cmd.Parameters.AddWithValue("$esik", unknownEsigi);
+            return Convert.ToInt32(cmd.ExecuteScalar());
         }
     }
 

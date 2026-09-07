@@ -156,4 +156,49 @@ public class CommandStoreTests
         Assert.Contains(bekleyen, k => k.CommandId == "satis");
         Assert.DoesNotContain(bekleyen, k => k.CommandId == "iptal");
     }
+
+    // ── W11: KURTARMA YAŞ SINIRI ────────────────────────────────────────────────
+
+    [Fact]
+    public void Kurtarma_24_saatten_ESKI_UNKNOWN_kaydi_YOKLAMAZ()
+    {
+        // Ölçülmüş maliyet: çözülmüş ama UNKNOWN'da bırakılan kayıtlar HER açılışta yeniden
+        // yoklanıyordu; 4 kayıt açılışı dakikalarca uzattı ve kasa o denemeleri bir daha
+        // göndermezse bu maliyet SONSUZA KADAR sürecekti.
+        // ← ÇİVİ: 25 saatlik yoklanmaz, 23 saatlik yoklanır. Kayıt SİLİNMEZ, yalnız atlanır.
+        using var store = CommandStore.Open(TempDb());
+        var yirmiUc = DateTimeOffset.UtcNow.AddHours(-23).ToUnixTimeMilliseconds();
+        var yirmiBes = DateTimeOffset.UtcNow.AddHours(-25).ToUnixTimeMilliseconds();
+
+        foreach (var (id, an) in new[] { ("taze", yirmiUc), ("bayat", yirmiBes) })
+        {
+            store.Save(id, "pay-" + id, "t1", Now + 60_000, an);
+            store.Advance(id, CommandState.RECEIVED, CommandState.SENT_TO_TERMINAL, now: an);
+            store.Advance(id, CommandState.SENT_TO_TERMINAL, CommandState.UNKNOWN, now: an);
+        }
+
+        var esik = DateTimeOffset.UtcNow.AddHours(-24).ToUnixTimeMilliseconds();
+        var bekleyen = store.Pending(unknownEsigi: esik);
+
+        Assert.Contains(bekleyen, k => k.CommandId == "taze");
+        Assert.DoesNotContain(bekleyen, k => k.CommandId == "bayat");
+        Assert.Equal(1, store.CountSkippedUnknown(esik));
+        Assert.NotNull(store.Read("bayat"));   // ← ÇİVİ: kayıt DURUYOR, silinmedi
+    }
+
+    [Fact]
+    public void Yas_siniri_YALNIZ_UNKNOWNa_uygulanir()
+    {
+        // `SENT_TO_TERMINAL` bir çökme penceresini gösterir ve nadirdir; yaşına bakmadan
+        // yoklanması daha güvenli — orada para gerçekten uçuşta olabilir.
+        using var store = CommandStore.Open(TempDb());
+        var cokEski = DateTimeOffset.UtcNow.AddDays(-30).ToUnixTimeMilliseconds();
+
+        store.Save("ucusta", "pay-u", "t1", Now + 60_000, cokEski);
+        store.Advance("ucusta", CommandState.RECEIVED, CommandState.SENT_TO_TERMINAL, now: cokEski);
+
+        var esik = DateTimeOffset.UtcNow.AddHours(-24).ToUnixTimeMilliseconds();
+
+        Assert.Contains(store.Pending(unknownEsigi: esik), k => k.CommandId == "ucusta");
+    }
 }

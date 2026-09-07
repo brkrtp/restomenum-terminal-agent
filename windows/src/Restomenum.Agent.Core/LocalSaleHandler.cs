@@ -38,6 +38,9 @@ public sealed class LocalSaleHandler
     /// </summary>
     private readonly SemaphoreSlim _islemKilidi = new(1, 1);
 
+    /// <summary>Açılışta yoklanacak <c>UNKNOWN</c> kayıtların yaş sınırı (saat).</summary>
+    private const int UnknownKurtarmaSaati = 24;
+
     public LocalSaleHandler(
         IPaymentDetailClient amounts, AgentOrchestrator orch, CommandStore store,
         ILineDepartmentResolver departments, IPaymentMethodResolver paymentMethods,
@@ -66,7 +69,14 @@ public sealed class LocalSaleHandler
     /// </summary>
     public async Task RecoverPendingAsync(CancellationToken ct = default)
     {
-        var pending = _store.Pending();
+        // 24 saat: kasanın deneme TTL'i. Ondan sonra kasa o ServiceID ile geri gelmez ve platform
+        // denemeyi çoktan operatöre düşürmüştür; yoklamaya devam etmek yalnız açılışı geciktirir.
+        var esik = _now().AddHours(-UnknownKurtarmaSaati).ToUnixTimeMilliseconds();
+        var atlanan = _store.CountSkippedUnknown(esik);
+        if (atlanan > 0)
+            _log("[yerel] açılış kurtarması — yaş sınırı", new { atlanan, saat = UnknownKurtarmaSaati });
+
+        var pending = _store.Pending(unknownEsigi: esik);
         if (pending.Count == 0) return;
         _log("[yerel] açılış kurtarması", new { adet = pending.Count });
 
