@@ -753,6 +753,37 @@ public class GmpTerminalTransportTests
     }
 
     [Fact]
+    public async Task BASARISIZ_odeme_de_fisi_sahiplenir_ayni_adisyon_DEVAM_EDEBILIR()
+    {
+        // SAHADA ÖLÇÜLDÜ (2026-09-07): banka hattı yokken kart denemesi 2086 aldı, fiş açık
+        // kaldı ama SAHİPSİZ kaldı (bağ yalnız başarılı ödemeden sonra yazılıyordu). Aynı
+        // adisyonun ikinci denemesi kendi fişini "başka satışın bayat fişi" sanıp reddetti ve
+        // kasa manuel ödemeye düştü.
+        // ← ÇİVİ: bağ ödemeden ÖNCE yazılır; başarısız deneme de fişi sahiplenir.
+        var (t, g, snap) = Kur();
+        g.Codes["Payment"] = GmpCodes.PaymentFailedWithBankCode;   // 2086 — banka hattı yok
+
+        var ilk = await t.SaleAsync(Req(amount: 990, oturum: "oturum-A", satisToplam: 990));
+
+        Assert.Equal(TransportOutcome.Unknown, ilk.Outcome);
+        Assert.Equal("oturum-A", snap.ReadOpenTicketBinding("t1"));   // ← ÇİVİ: fiş sahiplendi
+
+        // İkinci deneme: aynı adisyon, cihazda o fiş duruyor.
+        g.Codes.Remove("Payment");
+        g.StartSequence.Enqueue(GmpCodes.AlreadyDone);
+        g.Ticket = new GmpTicket(990, 0, 1, GmpPaymentTypes.Card);
+        g.AfterPayment = new GmpTicket(990, 990, 2, GmpPaymentTypes.Cash);
+        g.Calls.Clear();
+
+        var ikinci = await t.SaleAsync(Req(amount: 990, paymentType: GmpPaymentTypes.Cash,
+            oturum: "oturum-A", satisToplam: 990, komut: "c2"));
+
+        Assert.Equal(TransportOutcome.Approved, ikinci.Outcome);   // ← devam etti, reddetmedi
+        Assert.DoesNotContain("ItemSale", g.Calls);                // kalemler tekrarlanmadı
+        Assert.DoesNotContain("VoidAll", g.Calls);                 // fiş silinmedi
+    }
+
+    [Fact]
     public async Task Oturum_kimligi_YOKSA_devam_yolu_KAPALI()
     {
         // Eski platform alani gondermiyor. Emin olmadan fise odeme eklemek yerine bayat-fis

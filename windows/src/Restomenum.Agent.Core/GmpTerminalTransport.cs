@@ -141,6 +141,19 @@ public sealed class GmpTerminalTransport : ITerminalTransport
                 r = _gmp.ItemSale(handle, new GmpItem(l.Name, l.UnitPriceMinor, l.Quantity, l.DepartmentNo), out _);
                 if (!r.Ok) return TemizleVeCevir(handle, r, "ItemSale", GmpStep.BeforePayment);
             }
+
+            // ── BAG, ODEMEDEN ONCE YAZILIR ─────────────────────────────────────────────
+            // Fis SU ANDA acik ve BU satisa ait. Bagi odeme BASARILI olduktan sonra yazmak
+            // yetmiyordu: basarisiz bir odeme (orn. banka hatti yokken kart -> 2086) de fisi
+            // acik birakir, ama o fis SAHIPSIZ kalirdi. Sonuc sahada olculdu (2026-09-07):
+            // ayni adisyon icin ikinci deneme kendi fisini "baska satisin bayat fisi" sanip
+            // TICKET_ALREADY_OPEN ile reddediyor, kasa da manuel odemeye dusuyordu.
+            //
+            // Odemeden ONCE yazmak guvenli: bag yalnizca "bu acik fis bu satisin" der. Tam
+            // odemede Close ile, iptalde VoidAll ile silinir; baska satis geldiginde zaten
+            // eslesmez ve bayat-fis mantigi isler.
+            if (request.SaleSessionId is string yeniOturum)
+                _snapshots?.BindOpenTicket(request.TerminalId, yeniOturum);
         }
 
         // ── ANLIK GÖRÜNTÜ: belirsizlik çözümünün tek dayanağı ────────────────────
@@ -181,8 +194,8 @@ public sealed class GmpTerminalTransport : ITerminalTransport
         }
         else if (request.SaleSessionId is string oturum)
         {
-            // Fis ACIK kaldi (kismi odeme - Turkiye'de NORMAL aradurum). Sahibini diske yaz ki
-            // kalan tahsilat, ajan yeniden baslasa bile AYNI fise eklenebilsin.
+            // Fis ACIK kaldi (kismi odeme - Turkiye'de NORMAL aradurum). Bag zaten odemeden once
+            // yazildi; burada tazeleniyor (devam yolunda bag mevcut fisten gelir ve dokunulmaz).
             _snapshots?.BindOpenTicket(request.TerminalId, oturum);
         }
 
