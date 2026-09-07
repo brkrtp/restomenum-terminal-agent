@@ -184,8 +184,22 @@ public sealed class GmpTerminalTransport : ITerminalTransport
 
         // `PaymentCount < 0` = BOZUK okuma (sarmalayıcının sınır koruması). Bunu "ödeme yok" saymak
         // en kötü hata olurdu: okunamayan bir fişi silmek.
-        if (fis.PaymentCount != 0) return Dokunma($"ODEME_VAR:{fis.PaymentCount}");
-        if (fis.HasBankLeg) return Dokunma("BANKA_BACAGI");
+        //
+        // Sayaç 0 değilse normalde dokunulmaz. TEK istisna: cihazın KENDİ kaydı "istek iletilmedi"
+        // diyorsa (tahsilat 0 + ölçülmüş hata kodu). O zaman "ödeme var" görüntüsü bir kayıttan
+        // ibarettir, paradan değil — ve fişi bırakmak kasayı kilitli tutar.
+        var fisState = Cevir(fis, acik: true);
+        if (fis.PaymentCount != 0 && !IletilmemisOdeme(fisState))
+            return Dokunma($"ODEME_VAR:{fis.PaymentCount}");
+        if (fis.HasBankLeg && !IletilmemisOdeme(fisState))
+            return Dokunma("BANKA_BACAGI");
+        if (fis.PaymentCount != 0)
+        {
+            _log("[gmp] bayat fişteki ödeme kaydı İLETİLMEMİŞ (cihaz beyanı) — temizlenebilir", new
+            {
+                commandId, kod = fis.LastPaymentErrorCode, metin = fis.LastPaymentErrorText,
+            });
+        }
 
         var vr = _gmp.VoidAll(handle, out _);
         if (!vr.Ok) return Dokunma($"VOIDALL:{vr}");
@@ -280,6 +294,30 @@ public sealed class GmpTerminalTransport : ITerminalTransport
         return Cevir(tk, acik: true);
     }
 
+    /// <summary>
+    /// Cihazın ödeme kaydında <b>"istek iletilmedi"</b> beyanı var mı?
+    ///
+    /// <para><b>Üç koşul BİRLİKTE aranır</b> (biri eksikse hayır): fiş okunmuş, ödeme kaydı var ama
+    /// TAHSİLAT SIFIR, ve hata kodu belgelenmiş "iletilmedi" listesinde.</para>
+    ///
+    /// <para><b>Liste neden tek elemanlı:</b> canlı ölçümde (2026-09-07, banka hattı yok)
+    /// <c>FP3_Payment</c> <b>2086</b> döndürdü ama cihaz fişteki kayda <b>"2085"</b> + metin
+    /// <c>"ÖDEME İSTEĞİ İLETİLMEDİ"</c> yazdı. Üretici belgesinde bu alanın kod listesi YOK —
+    /// <c>GMP3_ErrorHandling</c> yalnız <c>ST_PaymentErrMessage</c>'a işaret ediyor. Yani listeyi
+    /// belgeden kuramadık; TEK ÖLÇÜMLE başlıyoruz ve her yeni kod ölçüldükçe ekleyeceğiz. Tanınmayan
+    /// kod belirsiz kalır (güvenli taraf) — "bir vaka bir kuralı doğrulamaz".</para>
+    ///
+    /// <para>Metne TEK BAŞINA güvenilmez: dil/kodlama değişebilir, kod değişmez.</para>
+    /// </summary>
+    private static bool IletilmemisOdeme(TicketState fis) =>
+        fis.PaidAmountMinor == 0
+        && fis.PaymentCount > 0
+        && fis.LastPaymentErrorCode is string k
+        && IletilmemisKodlar.Contains(k.Trim());
+
+    /// <summary>Ölçülmüş "istek host'a iletilmedi" kodları. Belgeden değil ÖLÇÜMDEN gelir.</summary>
+    private static readonly HashSet<string> IletilmemisKodlar = new(StringComparer.Ordinal) { "2085" };
+
     private static bool BayatTanitici(uint code) =>
         code == GmpCodes.InvalidHandle || code == GmpCodes.NoHandle;
 
@@ -352,9 +390,26 @@ public sealed class GmpTerminalTransport : ITerminalTransport
             // artmayabiliyor. Böyle bir okuma güvenilmez — belirsiz de, insana çıksın.
             var delta = simdi.PaidAmountMinor - once.Value.PaidMinor;
             if (delta <= 0)
+            {
+                // ÜÇÜNCÜ VERİ: cihaz bu ödeme kaydına kendi hata kodunu da yazıyor. "Sayaç arttı ama
+                // tutar artmadı" tek başına çelişkili bir okumadır; ama cihazın kendi defteri
+                // "istek İLETİLMEDİ" diyorsa çelişki çözülür — kayıt oluşmuş, para hareket etmemiş.
+                // Bu, §31.3'ü GEVŞETMEZ; çelişkiyi kapatacak veriyi ekler.
+                if (IletilmemisOdeme(simdi))
+                {
+                    _log("[gmp] çelişki cihazın hata kaydıyla çözüldü — ödeme iletilmemiş", new
+                    {
+                        request.CommandId, kod = simdi.LastPaymentErrorCode, metin = simdi.LastPaymentErrorText,
+                    });
+                    return new PaymentProbe(ProbeVerdict.NotLanded,
+                        RemainingMinor: simdi.RemainingMinor, CounterRead: true,
+                        Note: $"cihaz kaydı: {simdi.LastPaymentErrorCode} {simdi.LastPaymentErrorText}");
+                }
+
                 return new PaymentProbe(ProbeVerdict.Indeterminate,
                     RemainingMinor: simdi.RemainingMinor,
                     Note: $"ödeme sayacı arttı ama tutar artmadı (delta {delta}) — çelişkili okuma");
+            }
             return new PaymentProbe(ProbeVerdict.Landed,
                 ApprovedAmountMinor: delta,
                 RemainingMinor: simdi.RemainingMinor, Rrn: simdi.Rrn, CardLast4: simdi.CardLast4);
@@ -471,7 +526,8 @@ public sealed class GmpTerminalTransport : ITerminalTransport
 
     private static TicketState Cevir(GmpTicket t, bool acik) => new(
         HasOpenTicket: acik, TotalAmountMinor: t.TotalAmountMinor, PaidAmountMinor: t.PaidAmountMinor,
-        Rrn: t.Rrn, CardLast4: t.CardLast4, PaymentCount: t.PaymentCount);
+        Rrn: t.Rrn, CardLast4: t.CardLast4, PaymentCount: t.PaymentCount,
+        LastPaymentErrorCode: t.LastPaymentErrorCode, LastPaymentErrorText: t.LastPaymentErrorText);
 
     /// <summary>
     /// Terminale <b>hiç gidilmeden</b> üretilen ret. <c>FP3_Payment</c> çağrılmadığı için para
