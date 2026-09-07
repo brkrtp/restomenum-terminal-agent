@@ -24,7 +24,13 @@ public sealed class HttpResultNotifier : IResultNotifier
         _baseUri = baseUri;
     }
 
-    public async Task<NotifyResult> NotifyAsync(string paymentId, string bodyJson, CancellationToken ct = default)
+    public Task<NotifyResult> NotifyTicketCancelAsync(string bodyJson, CancellationToken ct = default) =>
+        GonderAsync("plugin-api/payments/ticket-cancel/result", bodyJson, ct);
+
+    public Task<NotifyResult> NotifyAsync(string paymentId, string bodyJson, CancellationToken ct = default) =>
+        GonderAsync($"plugin-api/payments/{Uri.EscapeDataString(paymentId)}/result", bodyJson, ct);
+
+    private async Task<NotifyResult> GonderAsync(string yol, string bodyJson, CancellationToken ct)
     {
         int status;
         string body;
@@ -32,7 +38,7 @@ public sealed class HttpResultNotifier : IResultNotifier
         {
             // Oturum + POST tek try'da: oturum ucu erişilemezse NetworkError → outbox'ta kalır, replay.
             var token = (await _sessions.AcquireAsync(ct)).Token;
-            var uri = new Uri(_baseUri, $"plugin-api/payments/{Uri.EscapeDataString(paymentId)}/result");
+            var uri = new Uri(_baseUri, yol);
             using var req = new HttpRequestMessage(HttpMethod.Post, uri)
             {
                 Content = new StringContent(bodyJson, Encoding.UTF8, "application/json"),

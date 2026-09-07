@@ -635,6 +635,96 @@ public sealed class GmpTerminalTransport : ITerminalTransport
             Rrn: tk.Rrn, Info: RestomenumReasons.TicketCancelled);
     }
 
+    /// <summary>
+    /// AÇIK FİŞİN TAMAMINI iptal eder (kasiyerin "Fiş İptal" düğmesi).
+    ///
+    /// <para><b>Sıra:</b> tanıtıcıyı kurtar → fişi OKU (denetim izi, silmeden ÖNCE) →
+    /// <c>VoidAll</c> → banka bacağı varsa (2069) <c>VoidPayment</c> → <c>VoidAll</c> →
+    /// <c>Close</c> → bağı sil.</para>
+    ///
+    /// <para><b>Açık fiş yoksa hata DEĞİL:</b> kasiyer düğmeye bastı, iptal edilecek bir şey yoktu.
+    /// Cihaza dokunulmaz ve sonuç başarılıdır (<c>TicketWasOpen=false</c>).</para>
+    /// </summary>
+    public Task<TicketVoidResult> VoidTicketAsync(string terminalId, CancellationToken ct = default) =>
+        Task.Run(() => VoidTicket(terminalId), ct);
+
+    private TicketVoidResult VoidTicket(string terminalId)
+    {
+        ulong h;
+        lock (_gate) h = _handle;
+
+        if (h == 0)
+        {
+            var yok = TanitciyiYenile();
+            if (yok is not null)
+                return new TicketVoidResult(TransportOutcome.Approved, TicketWasOpen: false,
+                    ProviderResultCode: "NO_OPEN_TICKET");
+            lock (_gate) h = _handle;
+        }
+
+        // Denetim izi: neyi iptal ettiğimiz SİLİNMEDEN ÖNCE okunur ve yazılır.
+        var of = _gmp.OptionFlags(h, GmpEchoFlags.Reload);
+        var gt = _gmp.GetTicket(h, out var fis);
+        if (!of.Ok || !gt.Ok)
+            return new TicketVoidResult(TransportOutcome.Unknown, TicketWasOpen: true,
+                ErrorCondition: "InProgress", Reason: RestomenumReasons.VoidIncomplete,
+                ProviderResultCode: $"TICKET_READ_FAILED:{of}/{gt}");
+
+        var sahibi = _snapshots?.ReadOpenTicketBinding(terminalId);
+        var sayi = fis.PaymentCount;
+        var tutar = fis.PaidAmountMinor;
+        _log("[gmp] fiş iptali — iptal öncesi fiş", new
+        {
+            terminalId, toplam = fis.TotalAmountMinor, tahsil = tutar,
+            odemeSayisi = sayi, bankaBacagi = fis.HasBankLeg, sahibi = sahibi ?? "(bağ yok)",
+        });
+
+        var vr = _gmp.VoidAll(h, out _);
+
+        if (vr.Code == GmpCodes.PaymentFound)
+        {
+            // 2069 = fişte BANKA ödemesi var; önce ters işlem gerekiyor.
+            // ⚠️ Bu yol sahada HİÇ ölçülmedi (banka hattı yok) — başarısız olursa YARIM kalır ve
+            // tekrar denenmez; operatöre gider.
+            for (var i = sayi - 1; i >= 0; i--)
+            {
+                var vp = _gmp.VoidPayment(h, i);
+                if (!vp.Ok)
+                {
+                    _log("[gmp] fiş iptali — banka ters işlemi BAŞARISIZ", new { index = i, code = vp.ToString() });
+                    return new TicketVoidResult(TransportOutcome.Unknown, TicketWasOpen: true,
+                        VoidedPaymentCount: sayi, VoidedAmountMinor: tutar, CancelledSaleSessionId: sahibi,
+                        ErrorCondition: "InProgress", Reason: RestomenumReasons.VoidIncomplete,
+                        ProviderResultCode: $"REVERSAL_FAILED:{vp}");
+                }
+            }
+            vr = _gmp.VoidAll(h, out _);
+        }
+
+        if (!vr.Ok)
+            return new TicketVoidResult(TransportOutcome.Unknown, TicketWasOpen: true,
+                VoidedPaymentCount: sayi, VoidedAmountMinor: tutar, CancelledSaleSessionId: sahibi,
+                ErrorCondition: "InProgress", Reason: RestomenumReasons.VoidIncomplete,
+                ProviderResultCode: $"VOIDALL_FAILED:{vr}");
+
+        var kapat = _gmp.Close(h);
+        lock (_gate) _handle = 0;
+        _snapshots?.ClearOpenTicketBinding(terminalId);
+
+        if (!kapat.Ok)
+        {
+            // Fiş iptal edildi ama kapatılamadı: durum BELİRSİZ, "olmadı" değil.
+            return new TicketVoidResult(TransportOutcome.Unknown, TicketWasOpen: true,
+                VoidedPaymentCount: sayi, VoidedAmountMinor: tutar, CancelledSaleSessionId: sahibi,
+                ErrorCondition: "InProgress", Reason: RestomenumReasons.VoidIncomplete,
+                ProviderResultCode: $"CLOSE_FAILED:{kapat}");
+        }
+
+        _log("[gmp] fiş iptal edildi", new { terminalId, odemeSayisi = sayi, tutar, sahibi = sahibi ?? "(bağ yok)" });
+        return new TicketVoidResult(TransportOutcome.Approved, TicketWasOpen: true,
+            VoidedPaymentCount: sayi, VoidedAmountMinor: tutar, CancelledSaleSessionId: sahibi);
+    }
+
     // ── yardımcılar ─────────────────────────────────────────────────────────
 
     private static TicketState Cevir(GmpTicket t, bool acik) => new(

@@ -199,6 +199,12 @@ public static class RestomenumReasons
     public const string TicketCancelled = "TICKET_CANCELLED";
 
     /// <summary>
+    /// <b>info:</b> "Fiş İptal"e basıldı ama cihazda AÇIK FİŞ YOKTU. Başarısızlık DEĞİL —
+    /// iptal edilecek bir şey yoktu ve cihaza dokunulmadı.
+    /// </summary>
+    public const string TicketNotOpen = "TICKET_NOT_OPEN";
+
+    /// <summary>
     /// İptal YARIM KALDI: ödeme geri alınamadı ya da fiş kapanamadı. Kasiyere söylenmesi gereken
     /// cümle "iptal olmadı" DEĞİL, <b>"durum belirsiz, fişe dokunmayın, yönetici çağırın"</b>dır —
     /// tekrar denemek yarım kalmış bir ters işlemin üstüne ikinciyi bindirebilir.

@@ -35,7 +35,8 @@ public class ReversalTests : IDisposable
     private const string Pay = "pay_0123456789abcdef0123456789abcdef01234567";
 
     private static string Zarf(string? origServiceId = "svc-orig", string? poiTxId = null,
-        string category = "Reversal", string paymentId = Pay) =>
+        string category = "Reversal", string paymentId = Pay,
+        string? scope = null, string? oturum = null) =>
         $$"""
         {
           "SaleToPOIRequest": {
@@ -48,7 +49,7 @@ public class ReversalTests : IDisposable
               {{(poiTxId is null ? "" : $"\"OriginalPOITransaction\": {{ \"POITransactionID\": \"{poiTxId}\" }},")}}
               {{(origServiceId is null ? "" : $"\"MessageReference\": {{ \"MessageCategory\": \"Payment\", \"ServiceID\": \"{origServiceId}\" }},")}}
               "SaleData": { "SaleTransactionID": { "TransactionID": "{{paymentId}}" } }
-            }
+            }{{(scope is null && oturum is null ? "" : $",\n    \"Restomenum\": {{ \"v\": 1{(scope is null ? "" : $", \"scope\": \"{scope}\"")}{(oturum is null ? "" : $", \"saleSessionId\": \"{oturum}\"")} }}")}}
           }
         }
         """;
@@ -211,6 +212,126 @@ public class ReversalTests : IDisposable
         Assert.Equal(2, sim.VoidCalls);   // belirsizlik sürüyor → yeniden soruldu
     }
 
+    // ── W15: FİŞ BAZLI İPTAL (scope: ticket) ────────────────────────────────────
+
+    [Fact]
+    public void Fis_kapsaminda_REFERANS_ARANMAZ()
+    {
+        // Kasiyer cihazın başında, ekranda gördüğü fişi iptal ediyor; o fiş başka bir kasadan
+        // kalmış olabilir ve referansı bizde olmayabilir.
+        // ← ÇİVİ: ödeme kapsamında referanssız istek REDDEDİLİR, fiş kapsamında KABUL EDİLİR.
+        var r = Assert.IsType<ReversalParseResult.Ok>(
+            ReversalRequestParser.Parse(Zarf(origServiceId: null, scope: "ticket", oturum: "oturum-A")));
+        Assert.Equal("ticket", r.Request.Scope);
+        Assert.Equal("oturum-A", r.Request.SaleSessionId);
+
+        Assert.IsType<ReversalParseResult.Invalid>(
+            ReversalRequestParser.Parse(Zarf(origServiceId: null)));   // ödeme kapsamı: RET
+    }
+
+    [Fact]
+    public async Task Fis_iptali_BASKA_oturumun_fisini_de_iptal_eder_ve_SAHIBINI_bildirir()
+    {
+        // ← ÇİVİ: platform hangi oturumun satırlarını düşüreceğini İSTEĞE göre değil, GERÇEKTEN
+        // iptal edilen fişe göre bilmeli. İstek oturum-A'dan geliyor, cihazdaki fiş oturum-B'nin.
+        var (h, sim) = Kur();
+        sim.WithTicket(new TicketState(HasOpenTicket: true, TotalAmountMinor: 990, PaidAmountMinor: 490,
+            PaymentCount: 1));
+        sim.TicketVoidResult = new TicketVoidResult(TransportOutcome.Approved, TicketWasOpen: true,
+            VoidedPaymentCount: 1, VoidedAmountMinor: 490, CancelledSaleSessionId: "oturum-B");
+        var req = ((ReversalParseResult.Ok)ReversalRequestParser.Parse(
+            Zarf(scope: "ticket", oturum: "oturum-A"))).Request;
+
+        var govde = await h.HandleReversalAsync(req);
+        var ek = Ek(govde);
+
+        Assert.Equal("Success", Yanit(govde).GetProperty("Result").GetString());
+        Assert.Equal("ticket", ek.GetProperty("scope").GetString());
+        Assert.Equal("oturum-A", ek.GetProperty("saleSessionId").GetString());
+        Assert.Equal("oturum-B", ek.GetProperty("cancelledSaleSessionId").GetString());   // ← ÇİVİ
+        Assert.Equal(1, ek.GetProperty("voidedPaymentCount").GetInt32());
+        Assert.Equal(490, ek.GetProperty("voidedAmountMinor").GetInt64());
+        Assert.Equal(RestomenumReasons.TicketCancelled, ek.GetProperty("info").GetString());
+        Assert.Equal(4.9, Gövde(govde).GetProperty("ReversedAmount").GetDouble(), 3);
+    }
+
+    [Fact]
+    public async Task Acik_fis_YOKSA_basarisizlik_DEGIL_TICKET_NOT_OPEN()
+    {
+        // Kasiyer düğmeye bastı, iptal edilecek bir şey yoktu. Bu bir hata değil.
+        var (h, sim) = Kur();
+        sim.WithTicket(new TicketState(HasOpenTicket: false, TotalAmountMinor: 0, PaidAmountMinor: 0));
+        var req = ((ReversalParseResult.Ok)ReversalRequestParser.Parse(
+            Zarf(scope: "ticket", oturum: "oturum-A"))).Request;
+
+        var govde = await h.HandleReversalAsync(req);
+        var ek = Ek(govde);
+
+        Assert.Equal("Success", Yanit(govde).GetProperty("Result").GetString());
+        Assert.Equal(RestomenumReasons.TicketNotOpen, ek.GetProperty("info").GetString());
+        Assert.Equal(0, ek.GetProperty("voidedPaymentCount").GetInt32());
+        Assert.Equal(0, ek.GetProperty("voidedAmountMinor").GetInt64());
+        // Olmayan bir iade deftere yazılmaz.
+        Assert.False(Gövde(govde).TryGetProperty("ReversedAmount", out _));
+    }
+
+    [Fact]
+    public async Task Fis_iptali_YARIM_kalirsa_VOID_INCOMPLETE()
+    {
+        var (h, sim) = Kur();
+        sim.TicketVoidResult = new TicketVoidResult(TransportOutcome.Unknown, TicketWasOpen: true,
+            VoidedPaymentCount: 1, VoidedAmountMinor: 490, CancelledSaleSessionId: "oturum-B",
+            ErrorCondition: "InProgress", Reason: RestomenumReasons.VoidIncomplete,
+            ProviderResultCode: "REVERSAL_FAILED:0x0826");
+        var req = ((ReversalParseResult.Ok)ReversalRequestParser.Parse(
+            Zarf(scope: "ticket", oturum: "oturum-A"))).Request;
+
+        var govde = await h.HandleReversalAsync(req);
+
+        Assert.Equal("Failure", Yanit(govde).GetProperty("Result").GetString());
+        Assert.Equal("InProgress", Yanit(govde).GetProperty("ErrorCondition").GetString());
+        Assert.Equal(RestomenumReasons.VoidIncomplete, Ek(govde).GetProperty("reason").GetString());
+        // Yarım kalmışta iade tutarı bildirilmez — geri gitmemiş olabilir.
+        Assert.False(Gövde(govde).TryGetProperty("ReversedAmount", out _));
+    }
+
+    [Fact]
+    public async Task Odeme_bazli_iptal_REGRESYONSUZ()
+    {
+        // scope yoksa eski davranış aynen sürer.
+        var (h, sim) = Kur();
+        _store.Save("svc-orig", Pay, "term-01", _clock.ServerNow() + 60_000);
+        sim.WithTicket(new TicketState(HasOpenTicket: true, TotalAmountMinor: 990, PaidAmountMinor: 0));
+        var req = ((ReversalParseResult.Ok)ReversalRequestParser.Parse(Zarf())).Request;
+
+        var govde = await h.HandleReversalAsync(req);
+
+        Assert.Null(req.Scope);
+        Assert.Equal(1, sim.VoidCalls);          // ödeme yolu çağrıldı
+        Assert.Equal(0, sim.TicketVoidCalls);    // fiş yolu ÇAĞRILMADI
+        Assert.Equal("Success", Yanit(govde).GetProperty("Result").GetString());
+    }
+
+    [Fact]
+    public async Task Fis_iptali_AYRI_uca_bildirilir_ve_ticketCancelId_AYNEN_doner()
+    {
+        // Ödeme sonucu ucu paymentId ile adresleniyor; fiş iptali bir denemeye ait DEĞİL. Yanlış
+        // uca göndermek 409/404 üretir ve defter iptali hiç görmez.
+        // ← ÇİVİ: ayrı uç çağrılır ve komut kimliği DEĞİŞTİRİLMEDEN yansıtılır.
+        var (h, sim) = Kur();
+        sim.TicketVoidResult = new TicketVoidResult(TransportOutcome.Approved, TicketWasOpen: true,
+            VoidedPaymentCount: 1, VoidedAmountMinor: 490, CancelledSaleSessionId: "oturum-B");
+        var zarf = Zarf(scope: "ticket", oturum: "oturum-A").Replace(
+            "\"scope\": \"ticket\"", "\"scope\": \"ticket\", \"ticketCancelId\": \"tc-123\"");
+        var req = ((ReversalParseResult.Ok)ReversalRequestParser.Parse(zarf)).Request;
+        Assert.Equal("tc-123", req.TicketCancelId);
+
+        var govde = await h.HandleReversalAsync(req);
+
+        Assert.Equal("tc-123", Ek(govde).GetProperty("ticketCancelId").GetString());
+        Assert.Single(_notifier.TicketCancelBodies);   // ← AYRI uç çağrıldı
+    }
+
     // ── yardımcılar ─────────────────────────────────────────────────────────────
 
     private sealed class FakeAmounts : IPaymentDetailClient
@@ -232,16 +353,22 @@ public class ReversalTests : IDisposable
 
     private sealed class FakeNotifier : IResultNotifier
     {
+        public List<string> TicketCancelBodies { get; } = new();
         public Task<NotifyResult> NotifyAsync(string p, string body, CancellationToken ct = default) =>
             Task.FromResult(new NotifyResult(NotifyOutcome.Recorded, "OK", null, 200, ""));
+        public Task<NotifyResult> NotifyTicketCancelAsync(string body, CancellationToken ct = default)
+        { TicketCancelBodies.Add(body); return Task.FromResult(new NotifyResult(NotifyOutcome.Recorded, "OK", null, 200, "")); }
     }
+
+    private FakeNotifier _notifier = new();
 
     private (LocalSaleHandler, SimulatorTransport) Kur()
     {
         var sim = new SimulatorTransport();
         var orch = new AgentOrchestrator(_store, sim, _clock, RecoveryPolicy.Immediate);
+        _notifier = new FakeNotifier();
         var h = new LocalSaleHandler(new FakeAmounts(), orch, _store, new FakeResolver(),
-            new FakePaymentMethods(), new FakeNotifier(), _outbox, sim);
+            new FakePaymentMethods(), _notifier, _outbox, sim);
         return (h, sim);
     }
 

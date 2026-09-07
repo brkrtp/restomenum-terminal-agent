@@ -41,4 +41,13 @@ public interface IResultNotifier
     /// <param name="paymentId">URL'deki kimlik — gövdedeki <c>SaleTransactionID.TransactionID</c> ile EŞLEŞMELİ.</param>
     /// <param name="bodyJson">Üretilmiş <c>SaleToPOIResponse</c> (sonuç) ya da <c>EventNotification</c> (ilerleme).</param>
     Task<NotifyResult> NotifyAsync(string paymentId, string bodyJson, CancellationToken ct = default);
+
+    /// <summary>
+    /// FİŞ iptali sonucu — <c>POST /plugin-api/payments/ticket-cancel/result</c>.
+    ///
+    /// <para><b>Neden ayrı uç:</b> URL'de <c>paymentId</c> YOK. Fiş iptali bir ödeme denemesine ait
+    /// değil — cihazda deneme olmadan da meşru bir fiş durabilir (başka kasadan kalmış olabilir).
+    /// Komutu gövdedeki <c>ticketCancelId</c> tanımlar.</para>
+    /// </summary>
+    Task<NotifyResult> NotifyTicketCancelAsync(string bodyJson, CancellationToken ct = default);
 }

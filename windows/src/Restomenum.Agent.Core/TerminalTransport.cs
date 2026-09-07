@@ -315,4 +315,16 @@ public interface ITerminalTransport
     /// sözleşmeyi ihlal eder.</b></para>
     /// </summary>
     Task<TransportResult> VoidAsync(CancellationToken ct = default);
+
+    /// <summary>
+    /// Cihazdaki AÇIK FİŞİN TAMAMINI iptal eder — kasiyerin "Fiş İptal" düğmesi.
+    ///
+    /// <para><b>Ödeme bazlı iptalden farkı:</b> referans aranmaz. Kasiyer cihazın başında ve
+    /// ekranda gördüğü fişi iptal ediyor; o fiş başka bir kasadan kalmış olabilir. Gerçekten
+    /// iptal edilen fişin sahibi sonuçta bildirilir ki platform DOĞRU oturumun satırlarını
+    /// düşürsün.</para>
+    ///
+    /// <para>Açık fiş yoksa hiçbir şeye DOKUNULMAZ ve bu bir hata değildir.</para>
+    /// </summary>
+    Task<TicketVoidResult> VoidTicketAsync(string terminalId, CancellationToken ct = default);
 }

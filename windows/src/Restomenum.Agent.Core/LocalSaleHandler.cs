@@ -136,6 +136,14 @@ public sealed class LocalSaleHandler
     /// </summary>
     public async Task<string> HandleReversalAsync(ReversalRequest req, CancellationToken ct = default)
     {
+        // ── FİŞ BAZLI İPTAL (scope: ticket) ────────────────────────────────────────
+        // Kullanıcı kararı: "Fiş İptal" = açık fişin TAMAMI. Referans/bağ eşleşmesi ARANMAZ —
+        // kasiyer cihazın başında ve ekranda gördüğü fişi iptal ediyor; o fiş başka bir kasadan
+        // kalmış olabilir. Ödeme yolundaki sahiplik kapısı burada geçerli DEĞİL: orada risk
+        // "başkasının parasını sahiplenmek", burada gereklilik "kasiyerin cihazı kurtarabilmesi".
+        if (string.Equals(req.Scope, "ticket", StringComparison.Ordinal))
+            return await FisIptalAsync(req, ct);
+
         // Referans DOĞRULAMASI: açık-fiş dalında orijinal ServiceID bizim defterimizde olmalı.
         // Olmayan bir komut için iptal kabul etmek, "cihazda ne varsa iptal et" demek olurdu —
         // başka bir kasanın fişini silebilirdik.
@@ -199,6 +207,47 @@ public sealed class LocalSaleHandler
         });
         // Platforma bildir: iptal defterde de görünmeli, yoksa kasa ile defter ıraksar.
         await NotifyAsync(req.PaymentId, govde, ct);
+        return govde;
+    }
+
+    /// <summary>Açık fişin tamamını iptal eder; sonucu kasaya döner ve platforma bildirir.</summary>
+    private async Task<string> FisIptalAsync(ReversalRequest req, CancellationToken ct)
+    {
+        await _islemKilidi.WaitAsync(ct);
+        TicketVoidResult sonuc;
+        try
+        {
+            sonuc = await _transport.VoidTicketAsync(req.PoiId, ct);
+        }
+        catch (Exception e)
+        {
+            // Terminale ulaşılamadı: iptalin AKIBETİ BELİRSİZ. "Olmadı" demek yanlış olurdu —
+            // VoidAll cihazda işlemiş ve cevap kaybolmuş olabilir.
+            _log("[iptal] fiş iptalinde terminale ulaşılamadı", new { req.PaymentId, error = e.Message });
+            sonuc = new TicketVoidResult(TransportOutcome.Unknown, TicketWasOpen: true,
+                ErrorCondition: "InProgress", Reason: RestomenumReasons.VoidIncomplete,
+                ProviderResultCode: $"VOID_UNREACHABLE:{e.GetType().Name}");
+        }
+        finally { _islemKilidi.Release(); }
+
+        var govde = SaleToPoiResponseBuilder.BuildTicketReversalResult(req, sonuc, 2, _now());
+        _log("[iptal] fiş sonucu", new
+        {
+            req.PaymentId, outcome = sonuc.Outcome.ToString(), acikFisVarMiydi = sonuc.TicketWasOpen,
+            odemeSayisi = sonuc.VoidedPaymentCount, tutar = sonuc.VoidedAmountMinor,
+            iptalEdilenOturum = sonuc.CancelledSaleSessionId ?? "(bağ yok)",
+            ticketCancelId = req.TicketCancelId ?? "(yok)",
+        });
+
+        // Fiş iptali AYRI uca gider: ödeme sonucu ucu paymentId ile adresleniyor, fiş iptali ise
+        // bir denemeye ait değil. Yanlış uca göndermek 409/404 üretir ve defter iptali görmez.
+        var bildirim = await _notifier.NotifyTicketCancelAsync(govde, ct);
+        if (bildirim.Outcome != NotifyOutcome.Recorded)
+            _log("[iptal] fiş iptali bildirimi SORUNU (alarm)", new
+            {
+                req.PaymentId, outcome = bildirim.Outcome.ToString(),
+                bildirim.StatusCode, bildirim.Message,
+            });
         return govde;
     }
 

@@ -234,6 +234,73 @@ public static class SaleToPoiResponseBuilder
         }.ToJsonString();
     }
 
+    /// <summary>
+    /// FİŞ bazlı iptalin sonucu (<c>scope: "ticket"</c>) — kasiyerin "Fiş İptal" düğmesi.
+    ///
+    /// <para><b><c>cancelledSaleSessionId</c> neden şart:</b> kasiyer cihazın başında ve gördüğü
+    /// fişi iptal ediyor; o fiş BAŞKA bir oturuma ait olabilir. Platform hangi oturumun satırlarını
+    /// düşüreceğini isteğe göre değil, GERÇEKTEN iptal edilen fişe göre bilmeli. Bağ yoksa
+    /// <c>null</c> gider — "bilmiyorum" da bir cevaptır ve uydurmaktan iyidir.</para>
+    ///
+    /// <para><b>Açık fiş yoksa başarısızlık DEĞİL:</b> <c>Result: Success</c> + sayaçlar 0 +
+    /// <c>info: TICKET_NOT_OPEN</c>. Kasiyer düğmeye bastı, iptal edilecek bir şey yoktu.</para>
+    /// </summary>
+    public static string BuildTicketReversalResult(
+        ReversalRequest req, TicketVoidResult sonuc, int exponent, DateTimeOffset now)
+    {
+        var basarili = sonuc.Outcome == TransportOutcome.Approved;
+        var response = new JsonObject { ["Result"] = basarili ? "Success" : "Failure" };
+        if (!basarili) response["ErrorCondition"] = sonuc.ErrorCondition ?? "InProgress";
+        if (sonuc.ProviderResultCode is not null) response["AdditionalResponse"] = sonuc.ProviderResultCode;
+
+        var govde = new JsonObject { ["Response"] = response };
+        // Tutar YALNIZ gerçekten geri alınan para varsa — ödemesiz fişin iptalinde olmayan bir
+        // iadeyi deftere yazdırmayalım.
+        if (basarili && sonuc.VoidedAmountMinor > 0)
+            govde["ReversedAmount"] = JsonValue.Create(Money.ToWire(sonuc.VoidedAmountMinor, exponent));
+
+        var ek = new JsonObject
+        {
+            ["v"] = 1,
+            // İptal yolunda `FP3_Payment` çağrılmaz; alan yine de ATLANMAZ.
+            ["paymentInvoked"] = false,
+            ["scope"] = "ticket",
+            ["voidedPaymentCount"] = sonuc.VoidedPaymentCount,
+            ["voidedAmountMinor"] = sonuc.VoidedAmountMinor,
+            // Bağ yoksa AÇIKÇA null: platform "bilinmiyor" ile "yok"u ayırt edebilsin.
+            ["cancelledSaleSessionId"] = sonuc.CancelledSaleSessionId is null
+                ? null : JsonValue.Create(sonuc.CancelledSaleSessionId),
+        };
+        if (req.SaleSessionId is not null) ek["saleSessionId"] = req.SaleSessionId;
+        // Komut kimliği AYNEN döner — platform açtığı iptali bununla eşleştiriyor; uyuşmazsa
+        // 409 `voidNotRequested` üretip alarm veriyor. Üretmiyoruz, yansıtıyoruz.
+        if (req.TicketCancelId is not null) ek["ticketCancelId"] = req.TicketCancelId;
+        if (sonuc.Reason is not null) ek["reason"] = sonuc.Reason;
+        ek["info"] = basarili
+            ? (sonuc.TicketWasOpen ? RestomenumReasons.TicketCancelled : RestomenumReasons.TicketNotOpen)
+            : null;
+        if (ek["info"] is null) ek.Remove("info");
+
+        return new JsonObject
+        {
+            ["SaleToPOIResponse"] = new JsonObject
+            {
+                ["MessageHeader"] = new JsonObject
+                {
+                    ["ProtocolVersion"] = "3.0",
+                    ["MessageClass"] = "Service",
+                    ["MessageCategory"] = "Reversal",
+                    ["MessageType"] = "Response",
+                    ["ServiceID"] = req.ServiceId,
+                    ["SaleID"] = req.SaleId,
+                    ["POIID"] = req.PoiId,
+                },
+                ["ReversalResponse"] = govde,
+                ["Restomenum"] = ek,
+            },
+        }.ToJsonString();
+    }
+
     private static JsonObject Ek(bool paymentInvoked, string? reason, string? info = null)
     {
         var o = new JsonObject { ["v"] = 1, ["paymentInvoked"] = paymentInvoked };

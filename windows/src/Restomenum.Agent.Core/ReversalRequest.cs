@@ -30,7 +30,45 @@ public sealed record ReversalRequest(
     string? OriginalServiceId,
     /// <summary>nexo <c>ReversalReason</c> (ör. <c>MerchantCancel</c>). Bilgi amaçlı.</summary>
     string? ReversalReason,
-    DateTimeOffset TimeStamp);
+    DateTimeOffset TimeStamp,
+
+    /// <summary>
+    /// İptalin KAPSAMI (<c>SaleToPOIRequest.Restomenum.scope</c>).
+    /// <c>"ticket"</c> = kasiyerin "Fiş İptal" düğmesi: cihazdaki AÇIK FİŞİN TAMAMI iptal edilir.
+    /// <c>null</c>/<c>"payment"</c> = eski davranış (tek ödeme referansıyla).
+    ///
+    /// <para><b>Fiş kapsamında bağ eşleşmesi ARANMAZ.</b> Kasiyer cihazın başında ve gördüğü fişi
+    /// iptal ediyor; o fiş başka bir kasadan kalmış olabilir. Sahiplik kapısı ÖDEME yolunun kuralı
+    /// (orada başkasının parasını sahiplenme riski var); burada tam tersi, kasiyerin cihazdaki
+    /// gerçek fişe müdahale edebilmesi gerekiyor. Gerçekten iptal edilen fişin sahibi yanıtta
+    /// <c>cancelledSaleSessionId</c> ile bildirilir ki platform DOĞRU oturumun satırlarını düşürsün.</para>
+    /// </summary>
+    string? Scope = null,
+
+    /// <summary>İsteği yapan satış oturumu (<c>Restomenum.saleSessionId</c>). Yanıtta aynen döner.</summary>
+    string? SaleSessionId = null,
+
+    /// <summary>
+    /// Fiş iptali komutunun kimliği (<c>Restomenum.ticketCancelId</c>) — platform üretir, yanıtta
+    /// AYNEN döner. Sonuç ucunda paymentId YOK: fiş iptali bir denemeye ait değil (deneme yokken de
+    /// meşru), komutu bu alan tanımlar.
+    /// </summary>
+    string? TicketCancelId = null);
+
+/// <summary>Fiş bazlı iptalin sonucu — ödeme sonucundan AYRI tip: farklı soruya cevap veriyor.</summary>
+public sealed record TicketVoidResult(
+    TransportOutcome Outcome,
+    /// <summary>Cihazda AÇIK fiş var mıydı? <c>false</c> ise hiçbir şeye dokunulmadı.</summary>
+    bool TicketWasOpen,
+    /// <summary>İptal edilen fişteki ödeme adedi (iptalden ÖNCE okundu).</summary>
+    int VoidedPaymentCount = 0,
+    /// <summary>İptal edilen fişte TAHSİL EDİLMİŞ toplam (iptalden ÖNCE okundu).</summary>
+    long VoidedAmountMinor = 0,
+    /// <summary>Gerçekten iptal edilen fişin sahibi; bağ yoksa <c>null</c>.</summary>
+    string? CancelledSaleSessionId = null,
+    string? ErrorCondition = null,
+    string? Reason = null,
+    string? ProviderResultCode = null);
 
 /// <summary>İptal isteği ayrıştırma sonucu.</summary>
 public abstract record ReversalParseResult

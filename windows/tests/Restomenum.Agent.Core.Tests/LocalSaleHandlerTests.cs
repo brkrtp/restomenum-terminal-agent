@@ -63,6 +63,8 @@ public class LocalSaleHandlerTests : IDisposable
         public NotifyResult Result = new(NotifyOutcome.Recorded, "APPROVED", null, 200, "");
         public Task<NotifyResult> NotifyAsync(string p, string body, CancellationToken ct = default)
         { Bodies.Add(body); return Task.FromResult(Result); }
+        public Task<NotifyResult> NotifyTicketCancelAsync(string body, CancellationToken ct = default)
+        { Bodies.Add(body); return Task.FromResult(Result); }
     }
 
     private const string Pay = "pay_0123456789abcdef0123456789abcdef01234567";

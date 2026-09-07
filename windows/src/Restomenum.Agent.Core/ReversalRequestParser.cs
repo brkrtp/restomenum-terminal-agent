@@ -86,9 +86,16 @@ public static partial class ReversalRequestParser
                 && hdr.TryGetProperty("MessageReference", out var mrh) && mrh.ValueKind == JsonValueKind.Object)
                 origServiceId = Str(mrh, "ServiceID");
 
-            // FAIL-CLOSED: referanssız iptal, "cihazda ne varsa iptal et" demektir. Yanlış fişi
-            // iptal etmek geri alınamaz; referans yoksa reddedilir.
-            if (string.IsNullOrEmpty(poiTxId) && string.IsNullOrEmpty(origServiceId))
+            // FAIL-CLOSED: ÖDEME bazlı iptalde referanssız istek "cihazda ne varsa iptal et"
+            // demektir ve yanlış fişi iptal etmek geri alınamaz.
+            //
+            // FİŞ bazlı iptalde (scope:ticket) referans ARANMAZ: kasiyer cihazın başında, ekranda
+            // gördüğü fişi iptal ediyor ve o fiş başka bir kasadan kalmış olabilir. Kapsamı zarftaki
+            // `Restomenum.scope` söylüyor; aşağıda okunuyor.
+            var scopeOn = env.TryGetProperty("Restomenum", out var ekOn) && ekOn.ValueKind == JsonValueKind.Object
+                ? Str(ekOn, "scope") : null;
+            if (scopeOn != "ticket"
+                && string.IsNullOrEmpty(poiTxId) && string.IsNullOrEmpty(origServiceId))
                 return Red(SaleToPoiRejectReason.Malformed,
                     "referans yok: OriginalPOITransaction.POITransactionID ya da MessageReference.ServiceID gerekli");
 
@@ -108,12 +115,24 @@ public static partial class ReversalRequestParser
                 && DateTimeOffset.TryParse(tsRaw, CultureInfo.InvariantCulture, DateTimeStyles.RoundtripKind, out var p)
                     ? p : DateTimeOffset.UtcNow;
 
+            // nexo-dışı ad alanı (§22.8) — satış zarfıyla simetrik.
+            string? scope = null, saleSessionId = null, ticketCancelId = null;
+            if (env.TryGetProperty("Restomenum", out var ek) && ek.ValueKind == JsonValueKind.Object)
+            {
+                scope = Str(ek, "scope");
+                saleSessionId = Str(ek, "saleSessionId");
+                ticketCancelId = Str(ek, "ticketCancelId");
+            }
+
             return new ReversalParseResult.Ok(new ReversalRequest(
                 ServiceId: serviceId, SaleId: saleId, PoiId: poiId, PaymentId: paymentId,
                 OriginalPoiTransactionId: string.IsNullOrEmpty(poiTxId) ? null : poiTxId,
                 OriginalServiceId: string.IsNullOrEmpty(origServiceId) ? null : origServiceId,
                 ReversalReason: Str(rr, "ReversalReason"),
-                TimeStamp: ts));
+                TimeStamp: ts,
+                Scope: string.IsNullOrWhiteSpace(scope) ? null : scope,
+                SaleSessionId: string.IsNullOrWhiteSpace(saleSessionId) ? null : saleSessionId,
+                TicketCancelId: string.IsNullOrWhiteSpace(ticketCancelId) ? null : ticketCancelId));
         }
     }
 

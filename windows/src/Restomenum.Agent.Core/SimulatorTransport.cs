@@ -79,6 +79,28 @@ public sealed class SimulatorTransport : ITerminalTransport
 
     public Task<bool> EchoAsync(CancellationToken ct = default) => Task.FromResult(EchoResult);
 
+    /// <summary>Sıradaki FİŞ iptali çağrısının ne döneceği. Kurulmazsa fişten türetilir.</summary>
+    public TicketVoidResult? TicketVoidResult { get; set; }
+
+    public int TicketVoidCalls { get; private set; }
+
+    public async Task<TicketVoidResult> VoidTicketAsync(string terminalId, CancellationToken ct = default)
+    {
+        TicketVoidCalls++;
+        if (Delay > TimeSpan.Zero) await Task.Delay(Delay, ct);
+        if (TicketVoidResult is not null) return TicketVoidResult;
+
+        if (!_ticket.HasOpenTicket)
+            return new TicketVoidResult(TransportOutcome.Approved, TicketWasOpen: false,
+                ProviderResultCode: "NO_OPEN_TICKET");
+
+        var sayi = _ticket.PaymentCount;
+        var tutar = _ticket.PaidAmountMinor;
+        _ticket = new TicketState(HasOpenTicket: false, TotalAmountMinor: 0, PaidAmountMinor: 0);
+        return new TicketVoidResult(TransportOutcome.Approved, TicketWasOpen: true,
+            VoidedPaymentCount: sayi, VoidedAmountMinor: tutar);
+    }
+
     /// <summary>Sıradaki iptal çağrısının ne döneceği. Kurulmazsa fişten türetilir.</summary>
     public TransportResult? VoidResult { get; set; }
 
