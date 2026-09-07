@@ -170,6 +170,14 @@ public static class RestomenumReasons
     public const string AmountFetchFailed = "AMOUNT_FETCH_FAILED";
 
     /// <summary>
+    /// Terminal defterinde bu komut için işlem YOK — <b>kanıtlandı</b> (fiş okundu, ödeme sayacı
+    /// kıpırdamadı). Yalnız gerçek okumayla verilir; çıkarımla değil.
+    /// <b><c>paymentInvoked</c> burada <c>true</c>'dur</b>: `FP3_Payment` çağrılmıştı, cihazda
+    /// oluşmadığı sonradan kanıtlandı. İkisi farklı sorular.
+    /// </summary>
+    public const string NotLanded = "NOT_LANDED";
+
+    /// <summary>
     /// <b>info</b> (sebep DEĞİL): önceki denemeden kalan ÖDEMESİZ fiş, kanıtla temizlendi ve satışa
     /// devam edildi. Sonuç normal akıştır; bu satır yalnız denetim izidir.
     /// </summary>

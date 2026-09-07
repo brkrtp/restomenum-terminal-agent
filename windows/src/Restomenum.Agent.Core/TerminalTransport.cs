@@ -201,7 +201,18 @@ public sealed record PaymentProbe(
     long RemainingMinor = 0,
     string? Rrn = null,
     string? CardLast4 = null,
-    string? Note = null);
+    string? Note = null,
+
+    /// <summary>
+    /// Karar <b>fişin fiilen okunmasına</b> mı dayanıyor? (ödeme sayacı görüldü mü)
+    ///
+    /// <para>Bu ayrım <see cref="ProbeVerdict.NotLanded"/> için kritik: sayaç okunup "bizim ödememiz
+    /// yok" görüldüyse bu bir <b>kanıttır</b> ve kasaya kesin cevap verilebilir. Ama "açık fiş yok +
+    /// elimizde anlık görüntü de yok" gibi bir ÇIKARIMLA aynı sonuca varıldıysa kanıt yoktur —
+    /// fiş ödeme tamamlandığı için de kapanmış olabilir. İkisini aynı saymak, "bilmiyorum"u
+    /// "kesin hayır"a çevirmenin bir başka kılığı olurdu.</para>
+    /// </summary>
+    bool CounterRead = false);
 
 /// <summary>Terminaldeki açık fişin durumu — ham okuma.</summary>
 public sealed record TicketState(

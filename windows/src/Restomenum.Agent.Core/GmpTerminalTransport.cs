@@ -337,6 +337,8 @@ public sealed class GmpTerminalTransport : ITerminalTransport
             // Fiş yok. İki ihtimal var ve **ayırt edemeyiz**: ya ödeme hiç işlenmedi, ya işlendi ve
             // fiş kapandı. Kapanmış olsaydı tutar tamamlanmış demektir — ama bunu kanıtlayamıyoruz.
             // Tahmin yerine belirsiz denir; "işlenmedi" demek çift tahsilat riskidir.
+            // ÇIKARIM, okuma DEĞİL: fiş ödeme tamamlandığı için de kapanmış olabilir. `CounterRead`
+            // bilerek `false` — bu sonuç kasaya "kesin olmadı" diye bildirilmemeli.
             if (once is null || once.Value.PaymentCount == 0)
                 return new PaymentProbe(ProbeVerdict.NotLanded, Note: "açık fiş yok, önceki ödeme de yok");
             return new PaymentProbe(ProbeVerdict.Indeterminate, Note: "fiş kapanmış — akıbet okunamıyor");
@@ -359,7 +361,9 @@ public sealed class GmpTerminalTransport : ITerminalTransport
         }
 
         if (once is not null && simdi.PaymentCount == once.Value.PaymentCount)
-            return new PaymentProbe(ProbeVerdict.NotLanded, RemainingMinor: simdi.RemainingMinor);
+            // KANIT: fiş okundu, sayaç kıpırdamadı → bizim ödememiz cihazda oluşmadı.
+            return new PaymentProbe(ProbeVerdict.NotLanded,
+                RemainingMinor: simdi.RemainingMinor, CounterRead: true);
 
         // Anlık görüntü yok (agent yeniden başlamış). Sayaç varsa ödeme İŞLENMİŞ olabilir ama
         // BİZİM ödememiz olduğunu söyleyemeyiz — bu yüzden belirsiz.
@@ -367,7 +371,9 @@ public sealed class GmpTerminalTransport : ITerminalTransport
             return new PaymentProbe(ProbeVerdict.Indeterminate,
                 RemainingMinor: simdi.RemainingMinor, Note: "anlık görüntü yok, ödeme sahibi belirsiz");
 
-        return new PaymentProbe(ProbeVerdict.NotLanded, RemainingMinor: simdi.RemainingMinor);
+        // KANIT: fiş AÇIK ve üzerinde hiç ödeme yok (sayaç 0) → bizimki de yok.
+        return new PaymentProbe(ProbeVerdict.NotLanded,
+            RemainingMinor: simdi.RemainingMinor, CounterRead: true);
     }
 
     public Task<bool> EchoAsync(CancellationToken ct = default) => Task.Run(() => _gmp.Echo().Ok, ct);

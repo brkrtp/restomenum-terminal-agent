@@ -219,13 +219,29 @@ public sealed class AgentOrchestrator
 
         if (sonuc.Verdict == ProbeVerdict.NotLanded)
         {
-            // Ödeme işlenmedi — **kanıtlandı**, varsayılmadı. Durum `UNKNOWN`'da bırakılır: aynı
-            // `commandId` ile tekrar gelirse burada yeniden çözülür.
+            // Ödeme işlenmedi. Durum `UNKNOWN`'da bırakılır: aynı `commandId` ile tekrar gelirse
+            // burada yeniden çözülür.
+            //
+            // KANIT AYRIMI: "sayaç okundu, kıpırdamadı" ile "açık fiş yok, elimde anlık görüntü de
+            // yok" AYNI ŞEY DEĞİL. Birincisi cihazın defterinden gelen bir kanıt; ikincisi bir
+            // çıkarım — fiş, ödeme TAMAMLANDIĞI için de kapanmış olabilir. Çıkarımı kesin cevap
+            // gibi bildirmek, W1'de kapattığımız kapıyı arka taraftan açmak olurdu.
+            var kanitli = sonuc.CounterRead;
             return new AgentOutcome(AgentDecision.RetryLater, cmd.State,
-                Result: ilk is null ? null : new TransportResult(TransportOutcome.Unknown,
-                    ProviderResultCode: ilk.ProviderResultCode, ErrorCondition: ilk.ErrorCondition,
-                    PaymentInvoked: ilk.PaymentInvoked, Reason: ilk.Reason),
-                Note: $"{note}; ödeme terminalde işlenmemiş — güvenle tekrar denenebilir");
+                Result: kanitli
+                    // Kanıtlı: kesin cevap. `paymentInvoked` YİNE `true` — `FP3_Payment` çağrılmıştı;
+                    // cihazda oluşmadığı SONRADAN kanıtlandı. İki ayrı soru, iki ayrı alan.
+                    ? new TransportResult(TransportOutcome.Unknown,
+                        ProviderResultCode: ilk?.ProviderResultCode,
+                        ErrorCondition: "PaymentRestriction",
+                        PaymentInvoked: true, Reason: RestomenumReasons.NotLanded)
+                    // Kanıtsız: ilk koşul neyse o (2086 → UnreachableHost); yoksa belirsiz.
+                    : ilk is null ? null : new TransportResult(TransportOutcome.Unknown,
+                        ProviderResultCode: ilk.ProviderResultCode, ErrorCondition: ilk.ErrorCondition,
+                        PaymentInvoked: ilk.PaymentInvoked, Reason: ilk.Reason),
+                Note: kanitli
+                    ? $"{note}; ödeme terminalde işlenmemiş (sayaç okundu, KANITLI) — güvenle tekrar denenebilir"
+                    : $"{note}; ödeme terminalde işlenmemiş (çıkarım, kanıt yok)");
         }
 
         return new AgentOutcome(AgentDecision.Unresolved, cmd.State,

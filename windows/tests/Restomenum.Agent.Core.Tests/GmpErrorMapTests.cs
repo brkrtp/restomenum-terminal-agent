@@ -152,7 +152,7 @@ public class GmpErrorMapTests
     // ── KURTARMA YOKLAMASI SONRASI KOŞUL TAŞINIYOR MU ───────────────────────────
 
     [Fact]
-    public async Task Yoklama_islenmemis_derse_2086_kosulu_KORUNUR()
+    public async Task Yoklama_KANITSIZ_islenmemis_derse_2086_kosulu_KORUNUR()
     {
         // Peer kuralı: 2086 → UnreachableHost; yalnız yoklama BELİRSİZ kalırsa InProgress.
         // Yoklama "işlenmedi" diyorsa sebep hâlâ ilk koddur — hattın olmaması.
@@ -164,6 +164,7 @@ public class GmpErrorMapTests
         var sim = new SimulatorTransport()
             .Expect(new TransportResult(TransportOutcome.Unknown,
                 ProviderResultCode: "Payment:0x0826", ErrorCondition: "UnreachableHost"));
+        // CounterRead: false → "açık fiş yok, anlık görüntü de yok" ÇIKARIMI. Kanıt değil.
         sim.ProbeResult = new PaymentProbe(ProbeVerdict.NotLanded);
 
         var orch = new AgentOrchestrator(store, sim, clock, RecoveryPolicy.Immediate);
@@ -246,6 +247,56 @@ public class GmpErrorMapTests
         Assert.Equal("PaymentRestriction", Kosul(govde));
         Assert.False(Ek(govde).GetProperty("paymentInvoked").GetBoolean());
         Assert.Equal("TICKET_ALREADY_OPEN", Ek(govde).GetProperty("reason").GetString());
+    }
+
+    [Fact]
+    public async Task Yoklama_KANITLI_islenmemis_derse_NOT_LANDED_kesin_cevap()
+    {
+        // W7: fiş FİİLEN okundu ve ödeme sayacı kıpırdamadı → cihazın kendi defteri "bu komut için
+        // işlem yok" diyor. Bu bir ÇIKARIM değil KANIT; kasaya kesin cevap verilebilir, deneme
+        // 24 saat çözüm döngüsünde asılı kalmaz.
+        // ← ÇİVİ: `paymentInvoked` YİNE `true` — FP3_Payment çağrılmıştı. "Çağırdık mı" ile
+        // "cihazda oluştu mu" farklı sorular; alanın anlamı kayarsa çift-çekim analizi kör kalır.
+        var db = Path.Combine(Path.GetTempPath(), $"nl_{Guid.NewGuid():N}.db");
+        using var store = CommandStore.Open(db);
+        var clock = new ClockOffset();
+        clock.Sync(DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+
+        var sim = new SimulatorTransport()
+            .Expect(new TransportResult(TransportOutcome.Unknown,
+                ProviderResultCode: "Payment:0x0826", ErrorCondition: "UnreachableHost"));
+        sim.ProbeResult = new PaymentProbe(ProbeVerdict.NotLanded, CounterRead: true);
+
+        var orch = new AgentOrchestrator(store, sim, clock, RecoveryPolicy.Immediate);
+        var sonuc = await orch.HandleAsync(
+            new SaleRequest("c-nl", "p-nl", "t1", 990, "TRY", 2, "prov"),
+            clock.ServerNow() + 60_000);
+
+        Assert.Equal(AgentDecision.RetryLater, sonuc.Decision);
+        Assert.Equal("PaymentRestriction", sonuc.Result?.ErrorCondition);
+        Assert.Equal(RestomenumReasons.NotLanded, sonuc.Result?.Reason);
+        Assert.True(sonuc.Result?.PaymentInvoked);
+    }
+
+    [Fact]
+    public void Odeme_oncesi_sebeplerde_paymentInvoked_MUTLAKA_false()
+    {
+        // Platform tutarlılık kontrolü (P16): ödeme-öncesi bir sebeple birlikte
+        // `paymentInvoked:true` gelirse sonuç REDDEDİLİR + alarm. Bu test o sözleşmeyi bizim
+        // tarafımızda çivileyerek alarmın hiç çalmamasını sağlar.
+        var oncesi = new[]
+        {
+            RestomenumReasons.FiscalLinesRequired, RestomenumReasons.ProductUnmapped,
+            RestomenumReasons.AlreadyFiscalized, RestomenumReasons.TicketAlreadyOpen,
+            RestomenumReasons.PaymentMethodUnmapped, RestomenumReasons.ProviderConfigIncomplete,
+            RestomenumReasons.AmountFetchFailed,
+        };
+        foreach (var sebep in oncesi)
+        {
+            var ek = Ek(SaleToPoiResponseBuilder.BuildFailure(Istek(), "PaymentRestriction", "X", Simdi, sebep));
+            Assert.False(ek.GetProperty("paymentInvoked").GetBoolean());
+            Assert.Equal(sebep, ek.GetProperty("reason").GetString());
+        }
     }
 
     private static JsonElement Ek(string govde) =>
