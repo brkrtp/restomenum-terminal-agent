@@ -52,12 +52,14 @@ public class SaleToPoiResponseBuilderTests
     }
 
     [Fact]
-    public void Declined_kesin_ret_tutarsiz()
+    public void Declined_kosuluyla_bildirilir_tutarsiz()
     {
-        var pr = Build(new TransportResult(TransportOutcome.Declined, ProviderResultCode: "51"))
+        // Koşul artık kaynağında belirlenip gövdeye TAŞINIR; kovadan türetilmez.
+        var pr = Build(new TransportResult(TransportOutcome.Declined,
+                ProviderResultCode: "PRODUCT_UNMAPPED:x", ErrorCondition: "PaymentRestriction"))
             .GetProperty("PaymentResponse");
         Assert.Equal("Failure", pr.GetProperty("Response").GetProperty("Result").GetString());
-        Assert.Equal("Refusal", pr.GetProperty("Response").GetProperty("ErrorCondition").GetString());
+        Assert.Equal("PaymentRestriction", pr.GetProperty("Response").GetProperty("ErrorCondition").GetString());
         Assert.False(pr.GetProperty("PaymentResult").TryGetProperty("AmountsResp", out _));  // tutar bildirilmez
     }
 
@@ -105,7 +107,11 @@ public class SaleToPoiResponseBuilderTests
     public void MapOutcome_yalniz_Declined_kesin_ret()
     {
         Assert.Equal((true, (string?)null), SaleToPoiResponseBuilder.MapOutcome(TransportOutcome.Approved));
-        Assert.Equal((false, "Refusal"), SaleToPoiResponseBuilder.MapOutcome(TransportOutcome.Declined));
+        // ⚠️ Eskiden `Declined => "Refusal"` idi. Kova bazında kesin-ret üretmek, terminale hiç
+        // gidilmemiş bir reddi bile kasiyere "kart reddedildi, başka kart isteyin" diye gösteriyordu
+        // (2026-09-06 21:33 UTC'de ölçüldü). Kesin-ret artık yalnız açık issuer yanıtıyla üretilir;
+        // koşulu `TransportResult.ErrorCondition` taşır, bu kova eşlemesi yalnız güvenli yedektir.
+        Assert.Equal((false, "InProgress"), SaleToPoiResponseBuilder.MapOutcome(TransportOutcome.Declined));
         Assert.Equal((false, "Busy"), SaleToPoiResponseBuilder.MapOutcome(TransportOutcome.Busy));
         Assert.Equal((false, "InProgress"), SaleToPoiResponseBuilder.MapOutcome(TransportOutcome.Unknown));
     }

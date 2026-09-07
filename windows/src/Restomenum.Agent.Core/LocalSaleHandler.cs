@@ -95,7 +95,11 @@ public sealed class LocalSaleHandler
         {
             // GET reddinde deneme ACCEPTED olmadı (platform durumu otorite) → bildirim YOK, yalnız kasaya ret.
             _log("[yerel] GET reddi — terminale gidilmedi", new { req.PaymentId, reason = rej.Reason.ToString(), rej.StatusCode });
-            return SaleToPoiResponseBuilder.BuildFailure(req, ECForReject(rej.Reason), $"GET:{rej.Reason}", _now());
+            // ErrorCondition `PaymentRestriction`: tutar alınamadığında `FP3_Payment` ÇAĞRILMADI, yani
+            // sonuç kesindir. `UnreachableHost` demek (eski hâli) belirsiz sınıfına sokup denemeyi
+            // gereksiz yere çözüm döngüsünde bırakırdı; sebep zaten `Restomenum.reason`'da yazılı.
+            return SaleToPoiResponseBuilder.BuildFailure(req, "PaymentRestriction", $"GET:{rej.Reason}",
+                _now(), RestomenumReasons.AmountFetchFailed);
         }
         var d = ((PaymentDetailResult.Ok)fetch).Detail;
 
@@ -108,7 +112,7 @@ public sealed class LocalSaleHandler
             {
                 // GET başarılıydı (deneme ACCEPTED) → platforma bildir ki takılı kalmasın. Ürünü SÖYLE.
                 var reddi = SaleToPoiResponseBuilder.BuildFailure(req, "PaymentRestriction",
-                    $"PRODUCT_UNMAPPED:{item.ProductCode}", _now());
+                    $"PRODUCT_UNMAPPED:{item.ProductCode}", _now(), RestomenumReasons.ProductUnmapped);
                 await NotifyAsync(req.PaymentId, reddi, ct);
                 _log("[yerel] eşlenmemiş ürün — terminale gidilmedi",
                     new { req.PaymentId, item.ProductCode, item.ProductLabel });
@@ -127,7 +131,8 @@ public sealed class LocalSaleHandler
                 && taxPct * 100 != deptRate)
             {
                 var reddi = SaleToPoiResponseBuilder.BuildFailure(req, "PaymentRestriction",
-                    $"PROVIDER_CONFIG_INCOMPLETE:{item.ProductCode}", _now());
+                    $"PROVIDER_CONFIG_INCOMPLETE:{item.ProductCode}", _now(),
+                    RestomenumReasons.ProviderConfigIncomplete);
                 await NotifyAsync(req.PaymentId, reddi, ct);
                 _log("[yerel] departman KDV'si TaxCode ile çelişiyor — terminale gidilmedi (mali sapma önlendi)",
                     new { req.PaymentId, item.ProductCode, item.TaxCode, deptRate, dept = m.Index });
@@ -144,7 +149,8 @@ public sealed class LocalSaleHandler
         if (gmpPaymentType is null || !GmpPaymentTypes.IsKnown(gmpPaymentType.Value))
         {
             var reddi = SaleToPoiResponseBuilder.BuildFailure(req, "PaymentRestriction",
-                $"PAYMENT_METHOD_UNMAPPED:{d.PaymentMethodId}", _now());
+                $"PAYMENT_METHOD_UNMAPPED:{d.PaymentMethodId}", _now(),
+                RestomenumReasons.PaymentMethodUnmapped);
             await NotifyAsync(req.PaymentId, reddi, ct);
             _log("[yerel] eşlenmemiş/geçersiz ödeme yöntemi — terminale gidilmedi",
                 new { req.PaymentId, d.PaymentMethodId, resolved = gmpPaymentType });
@@ -223,16 +229,13 @@ public sealed class LocalSaleHandler
     {
         AgentDecision.Approved or AgentDecision.Declined or AgentDecision.Replayed
             => o.Result ?? new TransportResult(TransportOutcome.Unknown, ProviderResultCode: o.Decision.ToString()),
-        _ => new TransportResult(TransportOutcome.Unknown, ProviderResultCode: o.Note ?? o.Decision.ToString()),
-    };
-
-    /// <summary>GET reddi → <c>ErrorCondition</c>. Geçersiz/bitmiş ödeme kesin (Aborted); geçici/agent → unknown.</summary>
-    private static string ECForReject(PaymentRejectReason r) => r switch
-    {
-        PaymentRejectReason.NotFound or PaymentRejectReason.Expired
-            or PaymentRejectReason.NotActionable or PaymentRejectReason.AmountWindowClosed
-            or PaymentRejectReason.SaleItemsUnavailable => "Aborted",
-        // Unauthorized / RateLimited / Unknown(ağ) → geçici; unknown'a düşecek bir kod.
-        _ => "UnreachableHost",
+        // Koşul, taşınabildiyse korunur (2086 → UnreachableHost); yoksa belirsiz.
+        _ => new TransportResult(TransportOutcome.Unknown,
+                ProviderResultCode: o.Note ?? o.Decision.ToString(),
+                ErrorCondition: o.Result?.ErrorCondition,
+                // Ödeme çağrılıp çağrılmadığı bilgisi KAYBOLMAZ; taşınamıyorsa güvenli taraf
+                // "çağrıldı" (yanlış bir kesinlik yaymaktansa belirsiz kal).
+                PaymentInvoked: o.Result?.PaymentInvoked ?? true,
+                Reason: o.Result?.Reason),
     };
 }

@@ -41,7 +41,38 @@ public static class WindowsVoidTicket
 
         if (startRc.Code == GmpCodes.AlreadyDone)
         {
-            log.LogWarning("terminalde AÇIK fiş var (handle={Handle}) — VoidAll ile iptal ediliyor.", handle);
+            log.LogWarning("terminalde AÇIK fiş var (handle={Handle}) — önce İÇERİĞİ okunuyor.", handle);
+
+            // ── KANITLA TEMİZLİK: önce OKU, sonra sil ────────────────────────────────────
+            // `VoidAll`'ın 2069 koruması var ama o koruma "iptal edilemez" der, "ne vardı" demez.
+            // Sildiğimiz şeyin ne olduğunu bilmeden silmek, üzerinde tahsilat olan bir fişi yok
+            // etme riskidir. `OptionFlags(Reload)` şart: tek başına `GetTicket` ödeme detayını
+            // eksik döndürebiliyor ve kararı tam o alana dayandırıyoruz.
+            var of = gmp.OptionFlags(handle, GmpEchoFlags.Reload);
+            var gt = gmp.GetTicket(handle, out var fis);
+            if (!of.Ok || !gt.Ok)
+            {
+                log.LogError("fiş OKUNAMADI (OptionFlags={Of}, GetTicket={Gt}) — içeriği bilinmeyen fiş " +
+                    "İPTAL EDİLMEZ. Operatöre bırakıldı.", of.Code, gt.Code);
+                try { gmp.Close(handle); } catch { /* en iyi çaba */ }
+                return false;
+            }
+
+            log.LogInformation("açık fiş içeriği: toplam={Toplam} tahsil={Tahsil} ödemeSayısı={Sayi} " +
+                "sonÖdemeTipi={Tip} bankaBacağı={Banka}",
+                fis.TotalAmountMinor, fis.PaidAmountMinor, fis.PaymentCount, fis.LastPaymentType, fis.HasBankLeg);
+
+            // Üzerinde TAHSİLAT olan fişe dokunulmaz — banka ters işlemi (`VoidPayment`) sahada hiç
+            // ölçülmedi ve bir bakım adımının işi değil.
+            if (fis.PaymentCount != 0)
+            {
+                log.LogError("fişte ÖDEME var (sayı={Sayi}, bankaBacağı={Banka}) — İPTAL EDİLMEDİ. " +
+                    "Banka ters işlemi gerekir; operatöre bırakıldı.", fis.PaymentCount, fis.HasBankLeg);
+                try { gmp.Close(handle); } catch { /* en iyi çaba */ }
+                return false;
+            }
+
+            log.LogWarning("fişte ödeme YOK (kanıtlandı) — VoidAll ile iptal ediliyor.");
             var vr = gmp.VoidAll(handle, out _);
             if (!vr.Ok)
             {
@@ -70,5 +101,55 @@ public static class WindowsVoidTicket
 
         log.LogError("fiş durumu okunamadı (Start rc={Rc}) — terminal meşgul ya da eşleşme yok olabilir.", startRc.Code);
         return false;
+    }
+
+    /// <summary>
+    /// <b>SALT-OKUNUR</b> fiş durumu raporu (<c>--ticket</c>). Hiçbir şeyi iptal etmez, kapatmaz
+    /// (yalnız kendi açtığı yoklama fişini kapatır — açık bırakmak bir sonraki satışı bozardı).
+    ///
+    /// <para>Var olma sebebi: 2026-09-07'de terminal saatlerce açık fiş yüzünden kilitliydi ve
+    /// durumu görmenin tek yolu <c>--void</c> çalıştırmaktı — yani <b>ölçmek için değiştirmek</b>
+    /// gerekiyordu. Bu, para taşıyan bir cihazda kabul edilemez.</para>
+    /// </summary>
+    public static bool Report(IServiceProvider services)
+    {
+        var log = services.GetRequiredService<ILoggerFactory>().CreateLogger("TicketReport");
+        var gmp = services.GetRequiredService<IGmpWrapper>();
+
+        if (!WindowsPairing.Run(services))
+        {
+            log.LogError("eşleşme kurulamadı — fiş durumu okunamadı. (Terminal ulaşılabilir mi?)");
+            return false;
+        }
+
+        var startRc = gmp.Start(out var handle);
+
+        if (startRc.Ok)
+        {
+            gmp.Close(handle);   // yoklama fişi bırakılmaz
+            log.LogInformation("FIS DURUMU: açık fiş YOK — terminal satışa hazır.");
+            return true;
+        }
+
+        if (startRc.Code != GmpCodes.AlreadyDone)
+        {
+            log.LogError("FIS DURUMU OKUNAMADI (Start rc={Rc}).", startRc.Code);
+            return false;
+        }
+
+        var of = gmp.OptionFlags(handle, GmpEchoFlags.Reload);
+        var gt = gmp.GetTicket(handle, out var fis);
+        if (!of.Ok || !gt.Ok)
+        {
+            log.LogError("FIS DURUMU: AÇIK FİŞ VAR ama içeriği OKUNAMADI " +
+                "(OptionFlags={Of}, GetTicket={Gt}).", of.Code, gt.Code);
+            return false;
+        }
+
+        log.LogWarning("FIS DURUMU: AÇIK FİŞ VAR — toplam={Toplam} tahsil={Tahsil} ödemeSayısı={Sayi} " +
+            "sonÖdemeTipi={Tip} bankaBacağı={Banka} → temizlenebilir mi: {Temiz}",
+            fis.TotalAmountMinor, fis.PaidAmountMinor, fis.PaymentCount, fis.LastPaymentType,
+            fis.HasBankLeg, fis.PaymentCount == 0 ? "EVET (ödeme yok)" : "HAYIR (ödeme var)");
+        return true;
     }
 }

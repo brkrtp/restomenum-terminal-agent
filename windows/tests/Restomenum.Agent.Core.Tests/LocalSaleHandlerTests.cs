@@ -110,9 +110,17 @@ public class LocalSaleHandlerTests : IDisposable
         var (h, sim, notifier) = Kur(
             new PaymentDetailResult.Rejected(PaymentRejectReason.AmountWindowClosed, "plugin.payment.amountWindowClosed", 409));
 
-        var resp = Resp(await h.HandleAsync(Req()));
+        var govde = await h.HandleAsync(Req());
+        var resp = Resp(govde);
         Assert.Equal("Failure", resp.GetProperty("Result").GetString());
-        Assert.Equal("Aborted", resp.GetProperty("ErrorCondition").GetString());
+        // ⚠️ Eskiden "Aborted"/"UnreachableHost" idi. Tutar alınamadığında `FP3_Payment` HİÇ
+        // çağrılmaz, yani sonuç KESİNDİR; belirsiz sınıfına sokmak denemeyi gereksiz yere çözüm
+        // döngüsünde bırakıyordu. Sebep artık makine-okunur alanda.
+        Assert.Equal("PaymentRestriction", resp.GetProperty("ErrorCondition").GetString());
+        var ek = JsonDocument.Parse(govde).RootElement
+            .GetProperty("SaleToPOIResponse").GetProperty("Restomenum");
+        Assert.False(ek.GetProperty("paymentInvoked").GetBoolean());
+        Assert.Equal("AMOUNT_FETCH_FAILED", ek.GetProperty("reason").GetString());
         Assert.Empty(sim.SaleCalls);         // terminale GİTMEDİ (tutar bilinmiyor)
         Assert.Empty(notifier.Bodies);       // platform GET reddini zaten biliyor
     }
@@ -183,5 +191,62 @@ public class LocalSaleHandlerTests : IDisposable
         await h.HandleAsync(Req("dup1"));
         await h.HandleAsync(Req("dup1"));    // kasa ağ-hatası retry'ı: AYNI ServiceID
         Assert.Single(sim.SaleCalls);        // ← ÇİVİ: terminal YALNIZ bir kez sürüldü
+    }
+
+    // ── W5: AYNI ServiceID ile İKİNCİ POST (kasa köprüsünün "yeniden dene" düğmesi) ──────
+
+    [Fact]
+    public async Task AyniServiceId_ikinci_POST_ikinci_odeme_BASLATMAZ()
+    {
+        // Kasa köprüsü belirsiz denemede AYNI ServiceID ile zarfı yeniden POST ediyor ve panel bu
+        // düğmeyi kasiyere gösteriyor. Tekilleme olmasaydı ikinci POST ikinci FP3_Payment başlatırdı
+        // → müşteri iki kez öderdi.
+        // ← ÇİVİ: ikinci POST terminale GİTMEZ; saklanan sonuç döner.
+        var (h, sim, _) = Kur(new PaymentDetailResult.Ok(Detail()),
+            terminal: new TransportResult(TransportOutcome.Approved, ApprovedAmountMinor: 24000, Rrn: "RRN1"));
+
+        var ilk = Resp(await h.HandleAsync(Req("svc-tekil")));
+        var ikinci = Resp(await h.HandleAsync(Req("svc-tekil")));
+
+        Assert.Equal("Success", ilk.GetProperty("Result").GetString());
+        Assert.Single(sim.SaleCalls);   // ← ÇİVİ: ikinci satış çağrısı = çift tahsilat
+        Assert.False(ikinci.TryGetProperty("ErrorCondition", out var ec) && ec.GetString() == "Refusal");
+    }
+
+    [Fact]
+    public async Task AyniServiceId_ilk_islem_BELIRSIZKEN_ikinci_POST_yalniz_SORAR()
+    {
+        // En tehlikeli an: ilk işlem UNKNOWN'da asılı (para hareket etmiş OLABİLİR) ve kasiyer
+        // "yeniden dene"ye basıyor. Burada ikinci FP3_Payment ASLA çağrılmaz — yalnız terminale
+        // sorulur. Aksi hâlde çekilmiş bir kart ikinci kez çekilir.
+        var (h, sim, _) = Kur(new PaymentDetailResult.Ok(Detail()),
+            terminal: new TransportResult(TransportOutcome.Unknown, ProviderResultCode: "Payment:0x0826",
+                ErrorCondition: "UnreachableHost"));
+        sim.ProbeResult = new PaymentProbe(ProbeVerdict.Indeterminate, Note: "fiş okunamadı");
+
+        var ilk = Resp(await h.HandleAsync(Req("svc-ucus")));
+        var ikinci = Resp(await h.HandleAsync(Req("svc-ucus")));
+
+        Assert.Equal("Failure", ilk.GetProperty("Result").GetString());
+        Assert.Equal("Failure", ikinci.GetProperty("Result").GetString());
+        Assert.Single(sim.SaleCalls);   // ← ÇİVİ: belirsizlik sürerken TEKRAR GÖNDERİM YOK
+        Assert.True(sim.ProbeCalls >= 2);   // her POST yalnız SORDU
+    }
+
+    [Fact]
+    public async Task Tekilleme_anahtari_ServiceId_FARKLI_ServiceId_yeni_islemdir()
+    {
+        // Anahtar ServiceID'dir (LocalSaleHandler: CommandId = req.ServiceId); SaleID ya da
+        // PaymentID DEĞİL. Bu test o sınırı dürüstçe kayda geçirir: aynı ödeme için FARKLI
+        // ServiceID ile gelen ikinci POST, tekilleme tarafından YAKALANMAZ ve yeni bir satıştır.
+        // ⚠️ Yani çift-tahsilat koruması kasanın aynı ServiceID'yi kullanmasına BAĞLIDIR.
+        var (h, sim, _) = Kur(new PaymentDetailResult.Ok(Detail()),
+            terminal: new TransportResult(TransportOutcome.Approved, ApprovedAmountMinor: 24000, Rrn: "RRN1"));
+        sim.Expect(new TransportResult(TransportOutcome.Approved, ApprovedAmountMinor: 24000, Rrn: "RRN2"));
+
+        await h.HandleAsync(Req("svc-A"));
+        await h.HandleAsync(Req("svc-B"));
+
+        Assert.Equal(2, sim.SaleCalls.Count);
     }
 }

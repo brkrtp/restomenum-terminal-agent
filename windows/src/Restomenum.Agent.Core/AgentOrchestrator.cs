@@ -151,7 +151,7 @@ public sealed class AgentOrchestrator
                 // BELİRSİZ — hepsi AYNI yola girer: terminale sor. Varsayım yok.
                 _store.Advance(req.CommandId, CommandState.SENT_TO_TERMINAL, CommandState.UNKNOWN);
                 var current = _store.Read(req.CommandId)!;
-                return await ResolveAsync(current, req, $"transport={result.Outcome}", ct);
+                return await ResolveAsync(current, req, $"transport={result.Outcome}", ct, result);
         }
     }
 
@@ -162,8 +162,15 @@ public sealed class AgentOrchestrator
     /// 6.5 saniyeyi boşa harcadı; terminal kart işlemini bitirmek için ~25–30 sn daha meşgul
     /// kalıyor. Gecikme <see cref="RecoveryPolicy"/>'dedir ve tahmin değil ölçümdür.</para>
     /// </summary>
+    /// <param name="ilk">
+    /// Belirsizliği doğuran İLK taşıma sonucu. <b>nexo koşulu buradan taşınır:</b> yoklama "ödeme
+    /// işlenmemiş" derse sebep hâlâ ilk koddur (2086 → <c>UnreachableHost</c>) ve onu
+    /// <c>InProgress</c>'e düzleştirmek, ölçülmüş bir gerçeği ("banka hattına ulaşılamadı")
+    /// bilinmezliğe çevirirdi. Yoklama belirsiz kalırsa koşul TAŞINMAZ — o zaman gerçekten
+    /// bilmiyoruz.
+    /// </param>
     private async Task<AgentOutcome> ResolveAsync(
-        StoredCommand cmd, SaleRequest req, string note, CancellationToken ct)
+        StoredCommand cmd, SaleRequest req, string note, CancellationToken ct, TransportResult? ilk = null)
     {
         PaymentProbe? sonuc = null;
         string? sonHata = null;
@@ -215,6 +222,9 @@ public sealed class AgentOrchestrator
             // Ödeme işlenmedi — **kanıtlandı**, varsayılmadı. Durum `UNKNOWN`'da bırakılır: aynı
             // `commandId` ile tekrar gelirse burada yeniden çözülür.
             return new AgentOutcome(AgentDecision.RetryLater, cmd.State,
+                Result: ilk is null ? null : new TransportResult(TransportOutcome.Unknown,
+                    ProviderResultCode: ilk.ProviderResultCode, ErrorCondition: ilk.ErrorCondition,
+                    PaymentInvoked: ilk.PaymentInvoked, Reason: ilk.Reason),
                 Note: $"{note}; ödeme terminalde işlenmemiş — güvenle tekrar denenebilir");
         }
 

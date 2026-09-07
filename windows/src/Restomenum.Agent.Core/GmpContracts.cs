@@ -77,6 +77,42 @@ public static class GmpCodes
     /// </summary>
     public const uint PaymentFailedWithBankCode = 2086;
 
+    // ── Aşağıdakiler yalnız HATA EŞLEMESİNİ (GmpErrorMap) besler; akışı dallandırmazlar.
+    //     Anlamları GMP3_ErrorHandling_EN_v2.docx'ten birebir alındı — tahmin yok.
+
+    /// <summary>Parametre hatalı doldurulmuş (`APP_ERR_FISCAL_INVALID_ENTRY`).</summary>
+    public const uint InvalidEntry = 2009;
+
+    /// <summary>Ödeme bitmeden fiş kapatılmaya çalışıldı (`APP_ERR_APL_COMPLETE_PAYMENT`).</summary>
+    public const uint CompletePaymentRequired = 2021;
+
+    /// <summary>Kasiyer girişi yapılmamış (`APP_ERR_CASHIER_ENTRY_REQUIRED`).</summary>
+    public const uint CashierEntryRequired = 2053;
+
+    /// <summary>TSM izni yok (`APP_ERR_NOT_ALLOWED`).</summary>
+    public const uint NotAllowed = 2064;
+
+    /// <summary>Fiş limiti aşıldı — `ItemSale`'den döner (`APP_ERR_FIS_LIMITI_ASILAMAZ`).</summary>
+    public const uint ReceiptLimitExceeded = 2067;
+
+    /// <summary>Cihazda aktif fiş varken mali olmayan fonksiyon çağrıldı (`..._GMP3_TRANSACTION_IS_PENDING`).</summary>
+    public const uint TransactionPending = 2097;
+
+    /// <summary>Cihaz tarihi dış sistemle uyumsuz (`APP_ERR_GMP3_INVALID_DATE_TIME`).</summary>
+    public const uint InvalidDateTime = 2310;
+
+    /// <summary>Fiş tanıtıcısı geçersiz (`APP_ERR_GMP3_INVALID_HANDLE`). Belge: `FP3_GetTicket` ile duruma bak.</summary>
+    public const uint InvalidHandle = 2317;
+
+    /// <summary>Cihazda aktif işlem yok (`APP_ERR_GMP3_NO_HANDLE`).</summary>
+    public const uint NoHandle = 2341;
+
+    /// <summary>Satış için Z raporu gerekiyor (`APP_ERR_GMP3_Z_REQUIRED`).</summary>
+    public const uint ZRequired = 2417;
+
+    /// <summary>Hat/kablo/GMP.XML yapılandırması eksik (`DLL_RETCODE_ACK_NOT_RECEIVED`).</summary>
+    public const uint AckNotReceived = 0xF01B;
+
     public static bool IsTimeout(uint c) => c == Timeout || c == Timeout2;
 }
 

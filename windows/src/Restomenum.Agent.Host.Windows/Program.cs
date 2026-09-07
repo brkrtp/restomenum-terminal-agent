@@ -12,7 +12,10 @@ using Restomenum.Agent.Host.Windows;
 bool eslesModu = args.Contains("--pair");
 bool voidModu = args.Contains("--void");
 bool configSmoke = args.Contains("--config-smoke");
-var configArgs = args.Where(a => a != "--pair" && a != "--void" && a != "--config-smoke").ToArray();
+bool ticketModu = args.Contains("--ticket");
+var configArgs = args
+    .Where(a => a != "--pair" && a != "--void" && a != "--config-smoke" && a != "--ticket")
+    .ToArray();
 
 var builder = Host.CreateApplicationBuilder(configArgs);
 
@@ -39,6 +42,14 @@ await WindowsEnrollment.EnsureEnrolledAsync(host.Services);
 if (voidModu)
 {
     Environment.ExitCode = WindowsVoidTicket.Run(host.Services) ? 0 : 1;
+    return;
+}
+
+// TEŞHİS (--ticket): fiş durumunu OKUR ve çıkar. Hiçbir şeyi değiştirmez — "önce ölç, sonra
+// müdahale et" için gereken tek okuma. `--void` ile karıştırılmasın diye ayrı bayrak.
+if (ticketModu)
+{
+    Environment.ExitCode = WindowsVoidTicket.Report(host.Services) ? 0 : 1;
     return;
 }
 

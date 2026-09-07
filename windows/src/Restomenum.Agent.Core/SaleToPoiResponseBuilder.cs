@@ -8,11 +8,12 @@ namespace Restomenum.Agent.Core;
 /// <b>TEK gövde:</b> hem kasaya senkron döner hem platforma bildirim olarak gider — iki şekil olsaydı
 /// kasiyerin gördüğü ile deftere yazılan ıraksardı.
 ///
-/// <para><b>Güvenlik değişmezi:</b> para HAREKET ETMİŞ OLABİLECEK bir sonucu ASLA kesin-ret
+/// <para><b>Güvenlik değişmezi (W1):</b> para HAREKET ETMİŞ OLABİLECEK bir sonucu ASLA kesin-ret
 /// (<c>Refusal</c>) diye bildirmeyiz — yoksa kasiyer yeniden dener ve ilk işlem geçmişse ikinci çekim
-/// olur. Yalnız <see cref="TransportOutcome.Declined"/> (para hareket etmedi, kesin) kesin-ret olur;
-/// <see cref="TransportOutcome.Busy"/>/<see cref="TransportOutcome.Unknown"/>/açık-fiş → belirsiz
-/// (<c>ErrorCondition</c> platformda <c>unknown</c>'a düşer).</para>
+/// olur. Bu üretici <b>hiçbir yerde <c>Refusal</c> üretmez</b>: kesin-ret yalnız banka host'unun açık
+/// ret yanıtıyla (issuer yanıt kodu) doğrulanabilir ve agent bugün o kanalı okumuyor
+/// (<c>ST_PaymentErrMessage.ErrorCode</c> sarmalayıcıda yüzeye çıkarılmadı, canlıda da ölçülmedi).
+/// Okunduğu gün <c>Refusal</c>'ın tek doğum yeri orası olacak — kova bazında ASLA.</para>
 ///
 /// <para>Kart verisi: yalnız maskeli (<c>MaskedPan</c> ≤4 hane — <see cref="TransportResult"/> zaten
 /// ham PAN taşımıyor, §12.3). Bahşiş gönderilmez (v1'de kapalı). <c>Currency</c> gönderilmez
@@ -27,7 +28,11 @@ public static class SaleToPoiResponseBuilder
     /// </summary>
     public static string BuildResult(SaleToPoiRequest req, TransportResult result, int exponent, DateTimeOffset now)
     {
-        var (success, errorCondition) = MapOutcome(result.Outcome);
+        var (success, varsayilan) = MapOutcome(result.Outcome);
+        // KAYNAK ÖNCELİĞİ: koşulu, kodu gören yer (`GmpErrorMap`) belirler; kova (`TransportOutcome`)
+        // yalnız yedektir. Tersi olsaydı "host'a ulaşılamadı" ile "sonuç belirsiz" aynı kovada
+        // eriyip aynı şeye dönerdi.
+        var errorCondition = success ? null : (result.ErrorCondition ?? varsayilan);
         var additional = result.ProviderResultCode;
 
         // SÖZLEŞME DEĞİŞMEZİ (§30.5): Result:"Success" = "para HAREKET ETTİ" → AuthorizedAmount ZORUNLU
@@ -70,12 +75,10 @@ public static class SaleToPoiResponseBuilder
             paymentResult["PaymentInstrumentData"] = new JsonObject { ["CardData"] = card };
         }
 
-        var envelope = new JsonObject
+        var govde = new JsonObject
         {
-            ["SaleToPOIResponse"] = new JsonObject
-            {
-                ["MessageHeader"] = Header(req, "Response"),
-                ["PaymentResponse"] = new JsonObject
+            ["MessageHeader"] = Header(req, "Response"),
+            ["PaymentResponse"] = new JsonObject
                 {
                     ["SaleData"] = new JsonObject
                     {
@@ -85,12 +88,12 @@ public static class SaleToPoiResponseBuilder
                             ["TimeStamp"] = Iso(now),
                         },
                     },
-                    ["PaymentResult"] = paymentResult,
-                    ["Response"] = response,
-                },
+                ["PaymentResult"] = paymentResult,
+                ["Response"] = response,
             },
         };
-        return envelope.ToJsonString();
+        govde["Restomenum"] = Ek(result.PaymentInvoked, result.Reason, result.Info);
+        return new JsonObject { ["SaleToPOIResponse"] = govde }.ToJsonString();
     }
 
     /// <summary>
@@ -99,7 +102,8 @@ public static class SaleToPoiResponseBuilder
     /// (kesin-ret listesi → declined, gerisi → unknown). <paramref name="additionalResponse"/> ASCII
     /// makine kodu (Türkçe/serbest metin YASAK — tüm sonucu reddettirir).
     /// </summary>
-    public static string BuildFailure(SaleToPoiRequest req, string errorCondition, string? additionalResponse, DateTimeOffset now)
+    public static string BuildFailure(SaleToPoiRequest req, string errorCondition, string? additionalResponse,
+        DateTimeOffset now, string? reason = null)
     {
         var response = new JsonObject { ["Result"] = "Failure", ["ErrorCondition"] = errorCondition };
         if (additionalResponse is not null) response["AdditionalResponse"] = additionalResponse;
@@ -121,6 +125,9 @@ public static class SaleToPoiResponseBuilder
                     ["PaymentResult"] = new JsonObject(),
                     ["Response"] = response,
                 },
+                // Bu üretici YALNIZ terminale gidilmeden üretilen retlerde çağrılıyor → ödeme
+                // fonksiyonu kesinlikle çalışmadı.
+                ["Restomenum"] = Ek(paymentInvoked: false, reason),
             },
         }.ToJsonString();
     }
@@ -149,14 +156,20 @@ public static class SaleToPoiResponseBuilder
     /// <summary>
     /// Terminal sonucu (<see cref="TransportOutcome"/>) → (Result Success mı, ErrorCondition).
     ///
-    /// <para>Eşleme platformun ayrıştırıcısıyla hizalı: kesin-ret {Refusal,…} → <c>declined</c>;
-    /// gerisi → <c>unknown</c>. Bilinçli olarak SADECE <c>Declined</c>'ı kesin-ret yapıyoruz.</para>
+    /// <para><b>Yalnız yedek.</b> Asıl koşul <see cref="TransportResult.ErrorCondition"/>'dadır
+    /// (kaynağı <see cref="GmpErrorMap"/>). Buradaki değerler, koşulu yazılmamış bir sonuç geldiğinde
+    /// güvenli tarafa düşmek içindir.</para>
     /// </summary>
     public static (bool Success, string? ErrorCondition) MapOutcome(TransportOutcome outcome) => outcome switch
     {
         TransportOutcome.Approved => (true, null),
-        // Para HAREKET ETMEDİ, kesin → platform 'declined'.
-        TransportOutcome.Declined => (false, "Refusal"),
+        // Kova bazında **kesin-ret üretilmez.** `Declined` "para hareket etmedi" der ama NEDEN'ini
+        // bilmez; `Refusal` ise kasiyere "kart reddedildi, başka kart isteyin" dedirtir. İkisi aynı
+        // şey değil: terminale hiç gidilmemiş bir ret (eşlenmemiş ürün, kasiyer girişi yok) bu
+        // mesajla raporlanırsa kasiyer olmayan bir kart sorununu kovalar. Gerçek koşulu
+        // `TransportResult.ErrorCondition` taşır; buraya düşülüyorsa koşul yazılmamıştır ve
+        // GÜVENLİ taraf belirsizdir.
+        TransportOutcome.Declined => (false, "InProgress"),
         // Para HAREKET ETMİŞ OLABİLİR (saha: RECV_BUSY başarılı ödemeden SONRA geldi) → 'unknown'.
         TransportOutcome.Busy => (false, "Busy"),
         // Belirsiz (timeout/kopma) → 'unknown'.
@@ -165,6 +178,21 @@ public static class SaleToPoiResponseBuilder
         TransportOutcome.TicketAlreadyOpen => (false, "InProgress"),
         _ => (false, "InProgress"),
     };
+
+    /// <summary>
+    /// nexo-DIŞI ek blok (§22.8: standart dışı alanlar ayrı ad alanında). Kasaya "kart çekildi mi"
+    /// sorusunun cevabını taşır — <c>ErrorCondition</c> bunu taşıyamaz, çünkü nexo'da adım kavramı yok.
+    ///
+    /// <para><c>paymentInvoked</c> ASLA atlanmaz: alanın yokluğu "bilmiyorum" ile "hayır" arasında
+    /// yeni bir belirsizlik üretirdi ve W1'de kapattığımız kapı tam da buydu.</para>
+    /// </summary>
+    private static JsonObject Ek(bool paymentInvoked, string? reason, string? info = null)
+    {
+        var o = new JsonObject { ["v"] = 1, ["paymentInvoked"] = paymentInvoked };
+        if (reason is not null) o["reason"] = reason;
+        if (info is not null) o["info"] = info;
+        return o;
+    }
 
     private static JsonObject Header(SaleToPoiRequest req, string messageType) => new()
     {

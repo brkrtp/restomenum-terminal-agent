@@ -114,7 +114,42 @@ public sealed record TransportResult(
     string? ApprovalCode = null,
     string? CardLast4 = null,
     string? Scheme = null,
-    string? ProviderResultCode = null);
+    string? ProviderResultCode = null,
+
+    /// <summary>
+    /// nexo <c>ErrorCondition</c> — <b>kaynağında</b> belirlenir (<see cref="GmpErrorMap"/>), sonuç
+    /// sınıfından türetilmez.
+    ///
+    /// <para><b>Neden ayrı alan:</b> <see cref="TransportOutcome"/> dört kovadır; nexo koşulu ondan
+    /// çok daha ince ("host'a ulaşılamadı" ile "sonuç belirsiz" ikisi de <c>Unknown</c> kovasına
+    /// düşer ama kasaya ve deftere FARKLI şey söylerler). Sınıftan türetince bu ayrım kaybolur ve
+    /// 2086 "belirsiz" diye kaydedilir; oysa ölçülen gerçek "banka hattına ulaşılamadı"dır.</para>
+    ///
+    /// <para><c>null</c> ise <see cref="SaleToPoiResponseBuilder.MapOutcome"/> kovaya göre bir
+    /// varsayılan üretir.</para>
+    /// </summary>
+    string? ErrorCondition = null,
+
+    /// <summary>
+    /// <c>FP3_Payment</c> çağrıldı mı? nexo'da bunu taşıyacak alan yok, ama <b>kasiyere ne
+    /// söyleneceğini belirleyen soru bu</b>: çağrılmadıysa "kart çekilmedi" kesindir.
+    ///
+    /// <para><b>Varsayılan <c>true</c> — bilerek.</b> Yanlış tarafa düşmek serbest değil: birisi
+    /// yeni bir dal eklerken bu alanı yazmayı unutursa, "ödeme çağrılmadı" (yani "kart kesinlikle
+    /// çekilmedi") diye YANLIŞ bir kesinlik yaymaktansa "çağrıldı" deyip belirsiz kalmak güvenlidir.</para>
+    /// </summary>
+    bool PaymentInvoked = true,
+
+    /// <summary><see cref="RestomenumReasons"/> sözlüğünden makine-okunur sebep. Serbest metin YASAK.</summary>
+    string? Reason = null,
+
+    /// <summary>
+    /// Sonucu DEĞİŞTİRMEYEN ama denetim izi bırakan bilgi (<c>Restomenum.info</c>).
+    /// <see cref="Reason"/>'dan ayrı tutulur: <c>reason</c> "neden başarısız" der, <c>info</c>
+    /// "yolda ne oldu" der. Karıştırılsaydı başarılı bir satış, temizlik yaptı diye bir "sebep"
+    /// taşır ve platformda hata gibi görünürdü.
+    /// </summary>
+    string? Info = null);
 
 /// <summary>
 /// Terminalin ödeme modeli — <b>pazara göre değişir ve belirsizlik çözümünü değiştirir.</b>

@@ -21,17 +21,35 @@ public class GmpTerminalTransportTests
         public GmpTicket Ticket;
         public GmpTicket AfterPayment;
         public int PrintMfFailures;
+        /// <summary>`Start`'ın döndüreceği tanıtıcı — 2080'de bile dolar (gerçek sarmalayıcı gibi).</summary>
+        public ulong NextStartHandle = 42;
+        /// <summary>Cihaz tarafında GEÇERSİZLEŞMİŞ tanıtıcılar → 2317 (sahada ölçülen bayatlama).</summary>
+        public HashSet<ulong> StaleHandles { get; } = new();
+        /// <summary>`Start`'ın SIRAYLA döndüreceği kodlar (boşsa <see cref="Codes"/> geçerli).</summary>
+        public Queue<uint> StartSequence { get; } = new();
 
         private GmpResult Kod(string ad)
         { Calls.Add(ad); return new GmpResult(Codes.TryGetValue(ad, out var c) ? c : GmpCodes.Ok); }
 
-        public GmpResult Start(out ulong handle) { handle = 42; return Kod("Start"); }
+        public GmpResult Start(out ulong handle)
+        {
+            handle = NextStartHandle;
+            if (StartSequence.Count > 0) { Calls.Add("Start"); return new GmpResult(StartSequence.Dequeue()); }
+            return Kod("Start");
+        }
         public GmpResult TicketHeader(ulong h, int t) { LastTicketType = t; return Kod("TicketHeader"); }
-        public GmpResult OptionFlags(ulong h, GmpEchoFlags f) => Kod("OptionFlags");
+        public GmpResult OptionFlags(ulong h, GmpEchoFlags f)
+        { Calls.Add("OptionFlags"); return new GmpResult(StaleHandles.Contains(h) ? GmpCodes.InvalidHandle
+            : Codes.TryGetValue("OptionFlags", out var c) ? c : GmpCodes.Ok); }
         public GmpResult ItemSale(ulong h, GmpItem i, out GmpTicket tk) { tk = Ticket; return Kod("ItemSale"); }
         public GmpResult Payment(ulong h, GmpPaymentRequest r, out GmpTicket tk)
         { var res = Kod("Payment"); tk = AfterPayment; return res; }
-        public GmpResult GetTicket(ulong h, out GmpTicket tk) { var r = Kod("GetTicket"); tk = Ticket; return r; }
+        public GmpResult GetTicket(ulong h, out GmpTicket tk)
+        {
+            Calls.Add("GetTicket"); tk = Ticket;
+            return new GmpResult(StaleHandles.Contains(h) ? GmpCodes.InvalidHandle
+                : Codes.TryGetValue("GetTicket", out var c) ? c : GmpCodes.Ok);
+        }
         public GmpResult PrintTotalsAndPayments(ulong h) => Kod("PrintTotalsAndPayments");
         public GmpResult PrintBeforeMF(ulong h) => Kod("PrintBeforeMF");
         public GmpResult PrintUserMessage(ulong h) => Kod("PrintUserMessage");
@@ -202,6 +220,9 @@ public class GmpTerminalTransportTests
 
         Assert.Equal(TransportOutcome.Unknown, r.Outcome);
         Assert.NotEqual(TransportOutcome.Declined, r.Outcome);
+        // ← ÇİVİ: kasaya/deftere giden koşul da "reddedildi" DEĞİL "host'a ulaşılamadı" olmalı;
+        // sınıf doğru olup koşul `Refusal` kalsaydı platform yine kesin-ret sayardı.
+        Assert.Equal("UnreachableHost", r.ErrorCondition);
         // ← ÇİVİ: belirsiz kart ret'inde fiş KÖRlemesine iptal/ters işlem EDİLMEZ — para
         // çekilmiş olabilir; akıbet yalnız ProbeAsync ile terminale sorularak çözülür. Otomatik
         // VoidAll, gerçekleşmiş bir ödemeyi geri almaya çalışmak olurdu.
@@ -209,18 +230,27 @@ public class GmpTerminalTransportTests
     }
 
     [Fact]
-    public async Task Kart_2085_okutulmadi_KESIN_RET()
+    public async Task Kart_2085_BELIRSIZ_kesin_ret_DEGIL()
     {
-        // 2085 = kart hiç okutulmadı / ödeme başlamadı: para hareketi YOK, kesin. Burada Declined
-        // GÜVENLİ — kasiyer aynı fişte tekrar deneyebilir, çift çekim riski yok. 2086'nın (Unknown)
-        // aksi kutbu: fark "banka kodu geldi mi"; ikisini karıştırmak ya çift-çekim ya gereksiz
-        // insana-çıkarma üretir.
+        // ⚠️ Bu test daha önce `Declined` (kesin ret) bekliyordu ve **YANLIŞTI**. Varsayım "2085 =
+        // kart hiç okutulmadı, para hareketi yok, kesin" idi; tek dayanağı bir canlı gözlemdi.
+        // Üretici belgesi (GMP3_ErrorHandling_EN_v2) 2085 için yalnız "payment was not a success and
+        // there's no specific error message from Banking application" diyor — "cihazda ödeme
+        // oluşmadı" DEMİYOR. Aynı belge kapsanmayan/iletişim kaynaklı hatalar için "FP3_Payment
+        // cihazda başarılı olmuş olabilir, FP3_GetTicket ile bak" diye uyarıyor.
+        //
+        // 2026-09-06 21:33 UTC'de bunun bedeli ölçüldü: banka hattı olmayan terminalde kart denemesi
+        // 2085 döndü, deneme kasaya `Refusal` = "kart reddedildi" diye kapandı. Kartta sorun yoktu.
+        // ← ÇİVİ: 2085 artık belirsizdir; akıbeti ProbeAsync terminale sorarak çözer.
         var (t, g, _) = Kur();
         g.Codes["Payment"] = GmpCodes.PaymentFailed;   // 2085
         var r = await t.SaleAsync(Req());
 
-        Assert.Equal(TransportOutcome.Declined, r.Outcome);
+        Assert.Equal(TransportOutcome.Unknown, r.Outcome);
+        Assert.NotEqual("Refusal", r.ErrorCondition);
         Assert.Contains("Payment", r.ProviderResultCode);
+        // Belirsiz sonuçta ödeme TEKRAR GÖNDERİLMEZ.
+        Assert.Equal(1, g.Calls.Count(c => c == "Payment"));
     }
 
     [Fact]
@@ -440,5 +470,140 @@ public class GmpTerminalTransportTests
 
         Assert.Equal(TransportOutcome.Declined, r.Outcome);
         Assert.Equal("ALREADY_FISCALIZED", r.ProviderResultCode);
+    }
+
+    // ── W4: BAYAT TANITICI KURTARMASI (canlıda 2 kez ölçüldü) ───────────────────
+
+    [Fact]
+    public async Task BayatTanitici_2317_yenilenir_ve_fis_GERCEKTEN_okunur()
+    {
+        // ÖLÇÜLEN ARIZA: başarısız ödemeden sonra fişin tanıtıcısı cihaz tarafında geçersizleşiyor.
+        // 2026-09-06 01:50 ve 2026-09-07 14:30'daki denemelerde belirsizlik yoklaması 6 turun
+        // 6'sında OptionFlags/GetTicket → 2317 aldı; akıbet ÇÖZÜLEMEDİ, kasiyer "operatöre danışın"
+        // gördü ve deneme defterde asılı kaldı — tam da kurtarmanın en gerekli olduğu anda.
+        // ← ÇİVİ: 2317'de tanıtıcı `FP3_Start` yoklamasıyla YENİLENİR (2080'de bile hTrx dolar) ve
+        // fiş GERÇEKTEN okunur. Yenileme kaldırılırsa bu test kırmızıya döner.
+        var (t, g, _) = Kur();
+        g.Codes["Payment"] = GmpCodes.PaymentFailed;          // 2085 → fiş açık kalır, tanıtıcı bizde
+        await t.SaleAsync(Req());
+
+        g.StaleHandles.Add(42);                                // cihaz tarafında geçersizleşti
+        g.Codes["Start"] = GmpCodes.AlreadyDone;               // açık fiş var
+        g.NextStartHandle = 99;                                // 2080 hTrx'i AÇIK FİŞİN tanıtıcısı
+        g.Ticket = new GmpTicket(3000, 0, 0, GmpPaymentTypes.Card);
+
+        var fis = await t.ReadTicketAsync();
+
+        Assert.True(fis.HasOpenTicket);
+        Assert.Equal(3000, fis.TotalAmountMinor);   // ← içerik OKUNDU (eskiden 0 dönüyordu)
+        Assert.Equal(0, fis.PaymentCount);
+    }
+
+    [Fact]
+    public async Task BayatTanitici_yenilendikten_sonra_da_okunamiyorsa_TAHMIN_YOK()
+    {
+        // Yenileme bir kurtarma denemesidir, garanti değil. Başarısızsa uydurulmaz.
+        var (t, g, _) = Kur();
+        g.Codes["Payment"] = GmpCodes.PaymentFailed;
+        await t.SaleAsync(Req());
+
+        g.StaleHandles.Add(42);
+        g.StaleHandles.Add(99);                    // yenilenen tanıtıcı da geçersiz
+        g.Codes["Start"] = GmpCodes.AlreadyDone;
+        g.NextStartHandle = 99;
+
+        await Assert.ThrowsAsync<TerminalBusyException>(() => t.ReadTicketAsync());
+    }
+
+    [Fact]
+    public async Task AcikFis_YOKSA_yoklama_fisi_ACIK_BIRAKILMAZ()
+    {
+        // Yoklama için açılan fiş bırakılırsa bir sonraki satış 2080 alır — yani teşhis aracı
+        // arızanın kendisini üretir.
+        var (t, g, _) = Kur();
+        g.Codes["Payment"] = GmpCodes.PaymentFailed;
+        await t.SaleAsync(Req());
+
+        g.StaleHandles.Add(42);
+        g.NextStartHandle = 77;                    // Start OK → yeni fiş açıldı
+        var oncekiKapanis = g.Calls.Count(c => c == "Close");
+
+        var fis = await t.ReadTicketAsync();
+
+        Assert.False(fis.HasOpenTicket);
+        Assert.Equal(oncekiKapanis + 1, g.Calls.Count(c => c == "Close"));
+    }
+
+    // ── W4(c): BAYAT FİŞ — KANITLA OTOMATİK TEMİZLİK ────────────────────────────
+
+    [Fact]
+    public async Task BayatFis_ODEME_YOKSA_temizlenir_ve_AYNI_satisa_devam_edilir()
+    {
+        // 2026-09-07: 990 kuruşluk ödemesiz bir fiş 14 saat boyunca HER satışı bloke etti; kasiyer
+        // art arda "operatöre danışın" gördü ve terminal elle temizlenene kadar satış yapılamadı.
+        // ← ÇİVİ: fişte ödeme YOKSA (cihazın kendi defteriyle kanıtlı) temizlenir ve kasiyer hiçbir
+        // şey yapmadan satış sürer. Denetim izi `Restomenum.info` ile taşınır.
+        var (t, g, _) = Kur();
+        g.StartSequence.Enqueue(GmpCodes.AlreadyDone);   // önce: açık fiş var
+        g.StartSequence.Enqueue(GmpCodes.Ok);            // temizlik sonrası: fiş açılır
+        g.Ticket = new GmpTicket(990, 0, 0, 0);          // ödeme YOK
+        g.AfterPayment = new GmpTicket(3000, 3000, 1, GmpPaymentTypes.Card);
+
+        var r = await t.SaleAsync(Req());
+
+        Assert.Equal(TransportOutcome.Approved, r.Outcome);
+        Assert.Equal(RestomenumReasons.StaleTicketCleared, r.Info);
+        Assert.Contains("VoidAll", g.Calls);
+        Assert.Equal(2, g.Calls.Count(c => c == "Start"));   // temizlik sonrası fiş YENİDEN açıldı
+        Assert.Equal(1, g.Calls.Count(c => c == "Payment"));
+    }
+
+    [Fact]
+    public async Task BayatFis_ODEME_VARSA_DOKUNULMAZ()
+    {
+        // ← ÇİVİ: üzerinde tahsilat olan fişi silmek geri alınamaz bir para kaybıdır. Kanıt
+        // kontrolü kaldırılırsa bu test kırmızıya döner.
+        var (t, g, _) = Kur();
+        g.StartSequence.Enqueue(GmpCodes.AlreadyDone);
+        g.Ticket = new GmpTicket(3000, 1000, 1, GmpPaymentTypes.Card);   // ödeme VAR
+
+        var r = await t.SaleAsync(Req());
+
+        Assert.DoesNotContain("VoidAll", g.Calls);        // ← ÇİVİ
+        Assert.Empty(g.Calls.Where(c => c == "Payment")); // satış da başlamadı
+        Assert.Equal(TransportOutcome.Declined, r.Outcome);
+        Assert.Equal("PaymentRestriction", r.ErrorCondition);
+        Assert.Equal(RestomenumReasons.TicketAlreadyOpen, r.Reason);
+        Assert.False(r.PaymentInvoked);
+    }
+
+    [Fact]
+    public async Task BayatFis_OKUNAMIYORSA_DOKUNULMAZ()
+    {
+        // Okunamayan fişi silmek, "ödeme yok" varsaymaktır — tam da yasakladığımız şey.
+        var (t, g, _) = Kur();
+        g.StartSequence.Enqueue(GmpCodes.AlreadyDone);
+        g.Codes["GetTicket"] = GmpCodes.RecvBusy;
+
+        var r = await t.SaleAsync(Req());
+
+        Assert.DoesNotContain("VoidAll", g.Calls);
+        Assert.Equal(TransportOutcome.Declined, r.Outcome);
+        Assert.Equal(RestomenumReasons.TicketAlreadyOpen, r.Reason);
+    }
+
+    [Fact]
+    public async Task BayatFis_BOZUK_SAYAC_okumasi_ODEME_VAR_tarafina_dusier()
+    {
+        // Sarmalayıcı fiş dizisinin sınırını aşan sayaçta `PaymentCount = -1` bildirir. Bunu
+        // "0 değil ama sayı" diye ele almak, okunamayan bir fişi silmek olurdu.
+        var (t, g, _) = Kur();
+        g.StartSequence.Enqueue(GmpCodes.AlreadyDone);
+        g.Ticket = new GmpTicket(3000, 0, -1, 0);
+
+        var r = await t.SaleAsync(Req());
+
+        Assert.DoesNotContain("VoidAll", g.Calls);
+        Assert.Equal(RestomenumReasons.TicketAlreadyOpen, r.Reason);
     }
 }
