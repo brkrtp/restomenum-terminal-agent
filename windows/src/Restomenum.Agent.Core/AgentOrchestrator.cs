@@ -232,15 +232,20 @@ public sealed class AgentOrchestrator
                     // Kanıtlı: kesin cevap. `paymentInvoked` YİNE `true` — `FP3_Payment` çağrılmıştı;
                     // cihazda oluşmadığı SONRADAN kanıtlandı. İki ayrı soru, iki ayrı alan.
                     ? new TransportResult(TransportOutcome.Unknown,
-                        ProviderResultCode: ilk?.ProviderResultCode,
-                        ErrorCondition: "PaymentRestriction",
-                        PaymentInvoked: true, Reason: RestomenumReasons.NotLanded)
+                        ProviderResultCode: sonuc.ProviderResultCode ?? ilk?.ProviderResultCode,
+                        // Koşulu YOKLAMA belirler (W25): "banka açıkça reddetti" (Refusal) ile
+                        // "bankadan cevap gelmedi" (UnreachableHost) ayrımı yalnız cihazın ödeme
+                        // satırında var. Taşıyamadığında eski varsayılan korunur.
+                        ErrorCondition: sonuc.ErrorCondition ?? "PaymentRestriction",
+                        PaymentInvoked: true, Reason: sonuc.Reason ?? RestomenumReasons.NotLanded)
                     // Kanıtsız: ilk koşul neyse o (2086 → UnreachableHost); yoksa belirsiz.
                     : ilk is null ? null : new TransportResult(TransportOutcome.Unknown,
                         ProviderResultCode: ilk.ProviderResultCode, ErrorCondition: ilk.ErrorCondition,
                         PaymentInvoked: ilk.PaymentInvoked, Reason: ilk.Reason),
                 Note: kanitli
-                    ? $"{note}; ödeme terminalde işlenmemiş (sayaç okundu, KANITLI) — güvenle tekrar denenebilir"
+                    // "Güvenle tekrar denenebilir" ARTIK KOŞULLU: yoklama bunu ayırt ediyorsa
+                    // kendi cümlesini yazar (açık ret → güvenli; cevapsızlık → DEĞİL).
+                    ? $"{note}; {sonuc.Note ?? "ödeme terminalde işlenmemiş (sayaç okundu, KANITLI) — güvenle tekrar denenebilir"}"
                     : $"{note}; ödeme terminalde işlenmemiş (çıkarım, kanıt yok)");
         }
 

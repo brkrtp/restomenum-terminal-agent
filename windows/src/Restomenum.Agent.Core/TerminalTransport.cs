@@ -273,7 +273,21 @@ public enum ProbeVerdict
     /// <summary>Ödeme terminalde <b>işlendi</b>. Para hareket etti.</summary>
     Landed,
 
-    /// <summary>Ödeme <b>işlenmedi</b> — kanıtlandı, varsayılmadı. Güvenle tekrarlanabilir.</summary>
+    /// <summary>
+    /// Ödeme <b>cihazın fişine yazılmadı</b> — kanıtlandı, varsayılmadı.
+    ///
+    /// <para>⚠️ <b>"Güvenle tekrarlanabilir" HER ZAMAN doğru değil.</b> Önceden öyle yazıyordu; ölçüm
+    /// bunu daralttı (2026-09-07). İki ayrı durum var ve ayrımı <see cref="PaymentProbe.ErrorCondition"/>
+    /// taşır:</para>
+    /// <list type="bullet">
+    ///   <item><c>Refusal</c> — banka açıkça reddetti (ör. 2202 "İŞLEM ONAYLANMADI"). Para hiç
+    ///   hareket etmedi; tekrar GÜVENLİ.</item>
+    ///   <item><c>UnreachableHost</c> — bankadan cevap gelmedi ("NO RESPONSE"). Fişe yazılmadığı
+    ///   KESİN ama bankada yetim provizyon kalmış olabilir; tekrar güvenli DEĞİL, insan bakmalı.</item>
+    /// </list>
+    /// <para>İkisini "işlenmedi" diye tek torbaya koymak, kasiyere "gönül rahatlığıyla tekrar çek"
+    /// dedirtip çift tahsilat üretebilirdi.</para>
+    /// </summary>
     NotLanded,
 
     /// <summary>Cevap alınamadı ya da yorumlanamadı. <b>Tekrar YASAK</b>, insana gider.</summary>
@@ -304,7 +318,23 @@ public sealed record PaymentProbe(
     /// fiş ödeme tamamlandığı için de kapanmış olabilir. İkisini aynı saymak, "bilmiyorum"u
     /// "kesin hayır"a çevirmenin bir başka kılığı olurdu.</para>
     /// </summary>
-    bool CounterRead = false);
+    bool CounterRead = false,
+
+    /// <summary>
+    /// Yoklamanın ürettiği nexo koşulu — <c>null</c> ise çağıran kendi varsayılanını kullanır.
+    ///
+    /// <para><b>Neden yoklamadan geliyor:</b> "fişe para yazılmadı" sonucunun ARDINDAKİ sebep
+    /// yalnız cihazın ödeme satırında var (banka açıkça mı reddetti, yoksa cevap mı gelmedi) ve o
+    /// satırı okuyan tek yer burası. Çağırana tek bir "işlenmedi" bayrağı verip sebebi düşürmek,
+    /// iki farklı gerçeği tek cümleye sıkıştırmak olurdu.</para>
+    /// </summary>
+    string? ErrorCondition = null,
+
+    /// <summary>Yoklamanın ürettiği <c>Restomenum.reason</c>; <c>null</c> ise çağıran belirler.</summary>
+    string? Reason = null,
+
+    /// <summary>Cihazın ham hata izi (<c>AdditionalResponse</c>) — teşhis metni, dallanma için DEĞİL.</summary>
+    string? ProviderResultCode = null);
 
 /// <summary>Terminaldeki açık fişin durumu — ham okuma.</summary>
 public sealed record TicketState(

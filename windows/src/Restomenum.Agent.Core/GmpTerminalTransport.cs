@@ -592,19 +592,68 @@ public sealed class GmpTerminalTransport : ITerminalTransport
                 // belirsizi kesin saymanın bir başka kılığı olurdu. Kural KALDIRILDI; alanlar
                 // yalnız TEŞHİS için taşınıyor.
                 //
-                // TEŞHİS: çelişki çözülemedi. Cihazın hata alanlarını OLDUĞU GİBİ yaz — hangisinin
-                // boş kaldığı ancak böyle görülür. Boş görünüyorsa kanal hiç dolmuyor demektir.
-                _log("[gmp] çelişki çözülemedi — cihaz hata alanları", new
+                // ── W25: ÇELİŞKİ ARTIK ÇÖZÜLEBİLİYOR ─────────────────────────────────
+                // Yukarıdaki not, TEK bir kanala (fiş düzeyindeki `LastPaymentError*`) dayanan bir
+                // kuralın çürütülmesiydi ve o karar hâlâ geçerli: o kanal kullanılmıyor.
+                //
+                // Değişen şey KANIT: 2026-09-07'de ölçüldü ki başarısız kart denemesi fişte KENDİ
+                // SATIRINI açıyor — tip 4, banka adı + BKM dolu, `payAmount 0`, hata alanları dolu.
+                // Yani "sayaç arttı, tutar artmadı" bir okuma arızası değil, BAŞARISIZ DENEMENİN
+                // İMZASI. Artık satırın kendisini okuyabildiğimiz için tutarı sıfır olan yeni
+                // satırlar "fişe para yazılmadı"nın kanıtıdır.
+                //
+                // ⚠️ Bu "bankadan geçmedi" demek DEĞİL. Ayrımı satırın hata kodu kurar:
+                //   • kullanılabilir uygulama kodu VAR (ör. 2202)  → banka açıkça reddetti → Refusal
+                //   • kod yok / "0000" ("NO RESPONSE")            → cevap gelmedi → UnreachableHost
+                // İkincisinde fişte para yok ama bankada yetim provizyon KALABİLİR; bu yüzden
+                // "güvenle tekrar dene" DENMEZ.
+                var yeniSatirlar = YeniOdemeSatirlari(simdi, once.Value.PaymentCount);
+                if (yeniSatirlar is null)
                 {
-                    request.CommandId, delta,
-                    errorCode = simdi.LastPaymentErrorCode ?? "(bos)",
-                    appErrorCode = simdi.LastPaymentAppErrorCode ?? "(bos)",
-                    errorText = simdi.LastPaymentErrorText ?? "(bos)",
-                });
+                    // Satırlar okunamadı → hiçbir şey iddia etme. Eski davranış aynen.
+                    _log("[gmp] çelişki çözülemedi — ödeme satırları okunamadı", new
+                    {
+                        request.CommandId, delta,
+                        errorCode = simdi.LastPaymentErrorCode ?? "(bos)",
+                        appErrorCode = simdi.LastPaymentAppErrorCode ?? "(bos)",
+                        errorText = simdi.LastPaymentErrorText ?? "(bos)",
+                    });
+                    return new PaymentProbe(ProbeVerdict.Indeterminate,
+                        RemainingMinor: simdi.RemainingMinor,
+                        Note: $"ödeme sayacı arttı ama tutar artmadı (delta {delta}) — satırlar okunamadı");
+                }
 
-                return new PaymentProbe(ProbeVerdict.Indeterminate,
-                    RemainingMinor: simdi.RemainingMinor,
-                    Note: $"ödeme sayacı arttı ama tutar artmadı (delta {delta}) — çelişkili okuma");
+                if (yeniSatirlar.Any(x => x.AmountMinor > 0))
+                {
+                    // Tutarı olan yeni bir satır var ama fişin tahsil toplamı artmamış: iki okuma
+                    // birbirini tutmuyor. Böyle bir çelişkiyi çözmüş gibi yapmak, kanıtsız kesinlik
+                    // üretmek olurdu.
+                    _log("[gmp] çelişki: tutarlı satır var ama fiş toplamı artmamış", new
+                    {
+                        request.CommandId, delta, satir = yeniSatirlar.Count,
+                    });
+                    return new PaymentProbe(ProbeVerdict.Indeterminate,
+                        RemainingMinor: simdi.RemainingMinor,
+                        Note: "yeni ödeme satırında tutar var ama fiş toplamı artmadı — çelişkili okuma");
+                }
+
+                var basarisiz = yeniSatirlar[^1];
+                var acikRet = KullanilabilirKod(basarisiz.AppErrorCode);
+                var kosul = acikRet ? "Refusal" : "UnreachableHost";
+                _log("[gmp] fişe para YAZILMADI — başarısız deneme satırı okundu", new
+                {
+                    request.CommandId, delta, satir = yeniSatirlar.Count,
+                    tip = basarisiz.Type, banka = basarisiz.BankName ?? "(yok)",
+                    bkm = basarisiz.BankBkmId, uygulamaKodu = basarisiz.AppErrorCode ?? "(bos)",
+                    hataMetni = basarisiz.ErrorMessage ?? "(bos)", kosul,
+                });
+                return new PaymentProbe(ProbeVerdict.NotLanded,
+                    RemainingMinor: simdi.RemainingMinor, CounterRead: true,
+                    ErrorCondition: kosul, Reason: RestomenumReasons.NotLanded,
+                    ProviderResultCode: $"NOT_LANDED:{basarisiz.AppErrorCode ?? "-"}:{basarisiz.ErrorMessage ?? "-"}",
+                    Note: acikRet
+                        ? $"banka açıkça reddetti ({basarisiz.AppErrorCode}) — fişe para yazılmadı, tekrar güvenli"
+                        : "bankadan cevap gelmedi — fişe para yazılmadı, ama yetim provizyon olabilir: tekrar GÜVENLİ DEĞİL");
             }
             return new PaymentProbe(ProbeVerdict.Landed,
                 ApprovedAmountMinor: delta,
@@ -815,6 +864,33 @@ public sealed class GmpTerminalTransport : ITerminalTransport
         return new TicketVoidResult(TransportOutcome.Approved, TicketWasOpen: true,
             VoidedPaymentCount: sayi, VoidedAmountMinor: tutar, CancelledSaleSessionId: sahibi);
     }
+
+    /// <summary>
+    /// Anlık görüntüden BU YANA eklenen ödeme satırları. <c>null</c> = okunamadı (liste eksik ya da
+    /// yok) — "satır yok" ile KARIŞTIRILMAMALI, ilki bilgisizlik ikincisi beyandır.
+    /// </summary>
+    private static IReadOnlyList<GmpPaymentLine>? YeniOdemeSatirlari(TicketState simdi, int oncekiSayi)
+    {
+        if (!simdi.PaymentsAreComplete || simdi.Payments is not { } hepsi) return null;
+        // Liste fişin TAMAMI değilse hangi satırın yeni olduğu söylenemez.
+        if (hepsi.Count != simdi.PaymentCount) return null;
+        if (oncekiSayi < 0 || oncekiSayi > hepsi.Count) return null;
+        var yeni = hepsi.Skip(oncekiSayi).ToList();
+        return yeni.Count == 0 ? null : yeni;
+    }
+
+    /// <summary>
+    /// Banka uygulamasının kodu GERÇEK bir sonuç taşıyor mu? Ölçüldü (2026-09-07): açık rette
+    /// <c>"2202"</c> geliyor, cevapsızlıkta <c>"0000"</c> + <c>"(00000000)-DEFAULT"</c>. Yani
+    /// <c>"0000"</c> "hata yok" değil, "kullanılabilir kod yok" demek.
+    ///
+    /// <para><b>Dayanak iki ölçüm.</b> Tanımadığımız bir kod gelirse açık ret sayılır — bu yön
+    /// güvenli olan: açık ret "tekrar güvenli" der ve yanılıyorsak yalnız gereksiz bir tekrar
+    /// olur; tersi yönde yanılmak yetim provizyonu görünmez kılardı.</para>
+    /// </summary>
+    private static bool KullanilabilirKod(string? appErrorCode) =>
+        !string.IsNullOrWhiteSpace(appErrorCode)
+        && appErrorCode.Trim().Trim('0').Length > 0;
 
     // ── yardımcılar ─────────────────────────────────────────────────────────
 

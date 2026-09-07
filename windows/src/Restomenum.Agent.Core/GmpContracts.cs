@@ -283,7 +283,18 @@ public readonly record struct GmpPaymentLine(
     /// <summary>Cihazın yazdığı banka adı (ör. "GARANTİ BBVA"); yoksa <c>null</c>.</summary>
     string? BankName = null,
     /// <summary>Bu bacağın hata metni (ör. "NO RESPONSE", "TERMINAL KAPALI"); yoksa <c>null</c>.</summary>
-    string? ErrorMessage = null);
+    string? ErrorMessage = null,
+
+    /// <summary>
+    /// Banka uygulamasının hata kodu (<c>stPaymentErrMessage.AppErrorCode</c>).
+    ///
+    /// <para><b>Neden ayrı taşınıyor:</b> "banka açıkça reddetti" ile "bankadan cevap gelmedi"
+    /// ayrımı buradan kuruluyor. Ölçüldü (2026-09-07, iki vaka): Akbank bacağında
+    /// <c>"2202"</c> + <c>"İŞLEM ONAYLANMADI"</c> (açık ret), Garanti bacağında <c>"0000"</c> +
+    /// <c>"(00000000)-DEFAULT"</c> + <c>ErrorMsg "NO RESPONSE"</c> (cevap yok). Yani
+    /// <c>"0000"</c> "hata yok" DEĞİL, "kullanılabilir kod yok" demek.</para>
+    /// </summary>
+    string? AppErrorCode = null);
 
 /// <summary>Ödeme tipleri — <b>DLL seviyesi</b>.</summary>
 public static class GmpPaymentTypes

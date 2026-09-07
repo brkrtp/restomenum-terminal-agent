@@ -210,6 +210,114 @@ public class GmpTerminalTransportTests
         Assert.Equal(new[] { "pay-2" }, r2.ClosedTicketPayments!.Select(x => x.PaymentId));
     }
 
+    // ── W25: BAŞARISIZ DENEME SATIRI — "fişe yazılmadı" ile "bankadan geçmedi" AYRI ──
+
+    /// <summary>Yoklama için kur: anlık görüntü + cihazın ŞU ANKİ fişi.</summary>
+    private static (GmpTerminalTransport, FakeGmp, FakeSnapshots) YoklamaKur(
+        GmpTicket simdikiFis, int gorunenSayi = 1, long gorunenTahsil = 200)
+    {
+        var (t, g, snap) = Kur();
+        g.Ticket = simdikiFis;
+        // Yoklama tanıtıcıyı kendi tazeliyor: `Start` 2080 dönerse cihazda AÇIK fiş var demektir.
+        g.Codes["Start"] = GmpCodes.AlreadyDone;
+        snap.SaveSnapshot("c1", 990, gorunenTahsil, gorunenSayi, "oturum-A");
+        snap.BindOpenTicket("t1", "oturum-A");
+        return (t, g, snap);
+    }
+
+    [Fact]
+    public async Task Bankadan_CEVAP_gelmediyse_NotLanded_ama_TEKRAR_GUVENLI_DEGIL()
+    {
+        // Ölçülen vaka (2026-09-07, Garanti 62): sayaç 1→2, tahsil 200'de sabit, yeni satır
+        // payAmount 0, AppErrorCode "0000", ErrorMsg "NO RESPONSE".
+        // ← ÇİVİ: fişe yazılmadığı KESİN ama bankada yetim provizyon olabilir → UnreachableHost.
+        var (t, g, _) = YoklamaKur(new GmpTicket(990, 200, 2, GmpPaymentTypes.Card,
+            Payments: new[]
+            {
+                new GmpPaymentLine(GmpPaymentTypes.Cash, 200),
+                new GmpPaymentLine(GmpPaymentTypes.Card, 0, 62, "GARANTİ BBVA", "NO RESPONSE", "0000"),
+            },
+            PaymentsAreComplete: true));
+
+        var y = await t.ProbeAsync(Req(oturum: "oturum-A", satisToplam: 990));
+
+        Assert.Equal(ProbeVerdict.NotLanded, y.Verdict);
+        Assert.True(y.CounterRead);
+        Assert.Equal("UnreachableHost", y.ErrorCondition);          // ← ÇİVİ
+        Assert.Equal(RestomenumReasons.NotLanded, y.Reason);
+        Assert.Contains("GÜVENLİ DEĞİL", y.Note);                   // ← ÇİVİ: çift tahsilat kapısı
+    }
+
+    [Fact]
+    public async Task Banka_ACIKCA_reddettiyse_Refusal_ve_tekrar_guvenli()
+    {
+        // Ölçülen vaka (Akbank 46): AppErrorCode "2202", AppErrorMsg "İŞLEM ONAYLANMADI".
+        var (t, g, _) = YoklamaKur(new GmpTicket(990, 200, 2, GmpPaymentTypes.Card,
+            Payments: new[]
+            {
+                new GmpPaymentLine(GmpPaymentTypes.Cash, 200),
+                new GmpPaymentLine(GmpPaymentTypes.Card, 0, 46, "AKBANK", "TERMINAL KAPALI ", "2202"),
+            },
+            PaymentsAreComplete: true));
+
+        var y = await t.ProbeAsync(Req(oturum: "oturum-A", satisToplam: 990));
+
+        Assert.Equal(ProbeVerdict.NotLanded, y.Verdict);
+        Assert.Equal("Refusal", y.ErrorCondition);                  // ← ÇİVİ
+        Assert.Contains("tekrar güvenli", y.Note);
+    }
+
+    [Fact]
+    public async Task Satirlar_EKSIKSE_hicbir_sey_iddia_edilmez()
+    {
+        // ← ÇİVİ: "okunamadı" ≠ "boş". Liste tam değilse hangi satırın yeni olduğu söylenemez;
+        // sıfır tutarlı bir satır uydurup "yazılmadı" demek kanıtsız kesinlik olurdu.
+        var (t, g, _) = YoklamaKur(new GmpTicket(990, 200, 2, GmpPaymentTypes.Card,
+            Payments: new[] { new GmpPaymentLine(GmpPaymentTypes.Card, 0, 62, "GARANTİ BBVA", "NO RESPONSE", "0000") },
+            PaymentsAreComplete: false));
+
+        var y = await t.ProbeAsync(Req(oturum: "oturum-A", satisToplam: 990));
+
+        Assert.Equal(ProbeVerdict.Indeterminate, y.Verdict);
+        Assert.Null(y.ErrorCondition);
+    }
+
+    [Fact]
+    public async Task Yeni_satirda_TUTAR_varken_fis_toplami_artmadiysa_BELIRSIZ()
+    {
+        // İki okuma birbirini tutmuyor. Çözmüş gibi yapmak kanıtsız kesinlik üretirdi.
+        var (t, g, _) = YoklamaKur(new GmpTicket(990, 200, 2, GmpPaymentTypes.Card,
+            Payments: new[]
+            {
+                new GmpPaymentLine(GmpPaymentTypes.Cash, 200),
+                new GmpPaymentLine(GmpPaymentTypes.Card, 300, 62, "GARANTİ BBVA"),
+            },
+            PaymentsAreComplete: true));
+
+        var y = await t.ProbeAsync(Req(oturum: "oturum-A", satisToplam: 990));
+
+        Assert.Equal(ProbeVerdict.Indeterminate, y.Verdict);
+    }
+
+    [Fact]
+    public async Task Basarisiz_bacak_SAYACTAN_DUSULMEZ_bayat_fis_korumasi_DURUR()
+    {
+        // ← ÇİVİ: sayaç değişmiyor (W25 kararı). Yalnız başarısız bacağı olan bir fiş bile
+        // "üzerinde ödeme var" sayılır ve otomatik silinmez — silmek mali kaydı yok etmek olurdu.
+        var (t, g, _) = Kur();
+        g.Ticket = new GmpTicket(990, 0, 1, GmpPaymentTypes.Card,
+            Payments: new[] { new GmpPaymentLine(GmpPaymentTypes.Card, 0, 62, "GARANTİ BBVA", "NO RESPONSE", "0000") },
+            PaymentsAreComplete: true);
+        g.Codes["Start"] = GmpCodes.AlreadyDone;
+
+        var r = await t.SaleAsync(Req(oturum: "baska-oturum", satisToplam: 990));
+
+        Assert.Equal(TransportOutcome.Declined, r.Outcome);
+        Assert.Equal(RestomenumReasons.TicketAlreadyOpen, r.Reason);
+        Assert.Contains("ODEME_VAR:1", r.ProviderResultCode);       // ← ÇİVİ: sayaç 1 kaldı
+        Assert.DoesNotContain("VoidAll", g.Calls);                  // fişe DOKUNULMADI
+    }
+
     // ── W17(3): BANKA SEÇİMİ ────────────────────────────────────────────────────
 
     [Fact]

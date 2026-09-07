@@ -512,7 +512,8 @@ public sealed class GmpWrapper : IGmpWrapper
             int? bkm = bp is not null && bp.bankBkmId != 0 ? bp.bankBkmId : null;
             var ad = Bos(bp?.bankName) ? null : bp!.bankName;
             var hata = Bos(bp?.stPaymentErrMessage?.ErrorMsg) ? null : bp!.stPaymentErrMessage!.ErrorMsg;
-            satirlar.Add(new GmpPaymentLine((int)pl.typeOfPayment, pl.payAmount, bkm, ad, hata));
+            var uygKod = Bos(bp?.stPaymentErrMessage?.AppErrorCode) ? null : bp!.stPaymentErrMessage!.AppErrorCode;
+            satirlar.Add(new GmpPaymentLine((int)pl.typeOfPayment, pl.payAmount, bkm, ad, hata, uygKod));
         }
 
         if (count > 0)
