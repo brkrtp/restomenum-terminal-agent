@@ -527,6 +527,12 @@ public sealed class LocalSaleHandler
                 else _outbox.MarkAttempt(e.EventId);
                 if (res.IsProblem)
                     _log("[yerel] outbox bildirim SORUNU (alarm)", new { e.PaymentId, outcome = res.Outcome.ToString(), res.StatusCode });
+                else if (res.IsFinal)
+                    _log("[yerel] outbox bildirimi yazıldı", new
+                    {
+                        e.PaymentId, tur = e.Status, outcome = res.Outcome.ToString(), res.StatusCode,
+                        state = res.State ?? "(yok)",
+                    });
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
@@ -547,6 +553,16 @@ public sealed class LocalSaleHandler
             else _outbox.MarkAttempt(eid);   // NetworkError/RateLimited → kalsın, arka plan replay eder
             if (res.IsProblem)
                 _log("[yerel] bildirim SORUNU (alarm)", new { paymentId, outcome = res.Outcome.ToString(), res.StatusCode, res.Message });
+            else
+                // BAŞARIYI DA YAZ (W22). Yalnız sorunları loglamak, "bildirim gitti mi" sorusunu
+                // sahada cevapsız bırakıyordu: sessizlik hem "her şey yolunda" hem "hiç denenmedi"
+                // demek olabiliyordu. Platformun kendi kararı (`state`) da burada — biz "Approved"
+                // deyip platform "REJECTED" yazdıysa ikisi ancak yan yana görülünce fark edilir.
+                _log("[yerel] bildirim yazıldı", new
+                {
+                    paymentId, outcome = res.Outcome.ToString(), res.StatusCode,
+                    state = res.State ?? "(yok)", reason = res.Reason ?? "(yok)",
+                });
         }
         catch (Exception e) when (e is not OperationCanceledException)
         {
