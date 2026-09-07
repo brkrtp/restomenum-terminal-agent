@@ -117,7 +117,33 @@ public sealed class DeviceConfigClient
             };
             req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
             using var resp = await _http.SendAsync(req, ct);
-            if (resp.IsSuccessStatusCode) { _log("[config] departman tablosu bildirildi", new { adet = departments.Count }); return true; }
+            if (resp.IsSuccessStatusCode)
+            {
+                // Karşı tarafın TEYİDİNİ logla: "gönderdim" ile "kabul edildi" farklı şeyler.
+                // Yalnız iki sayısal alan okunuyor; kişisel veri yok.
+                bool? appOk = null;
+                int? appAdet = null;
+                try
+                {
+                    var govde = await resp.Content.ReadAsStringAsync(ct);
+                    using var doc = JsonDocument.Parse(govde);
+                    if (doc.RootElement.TryGetProperty("paymentApplicationsReported", out var pr)
+                        && (pr.ValueKind == JsonValueKind.True || pr.ValueKind == JsonValueKind.False))
+                        appOk = pr.GetBoolean();
+                    if (doc.RootElement.TryGetProperty("paymentApplicationCount", out var pc)
+                        && pc.ValueKind == JsonValueKind.Number)
+                        appAdet = pc.GetInt32();
+                }
+                catch (Exception) { /* gövde JSON değil ya da alan yok — teyit yok, hata değil */ }
+
+                _log("[config] departman tablosu bildirildi", new
+                {
+                    adet = departments.Count,
+                    uygulamaKabul = appOk?.ToString() ?? "(teyit yok)",
+                    uygulamaAdet = appAdet?.ToString() ?? "(teyit yok)",
+                });
+                return true;
+            }
             _log("[config] departman bildirimi reddedildi", new { status = (int)resp.StatusCode });
             return false;
         }
