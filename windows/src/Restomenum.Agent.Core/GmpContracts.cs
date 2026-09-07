@@ -324,6 +324,15 @@ public interface IGmpWrapper
     GmpResult Close(ulong handle);
     GmpResult Echo();
 
+    /// <summary>
+    /// Cihazda KURULU odeme (banka) uygulamalarini okur — <c>FP3_GetPaymentApplicationInfo</c>.
+    ///
+    /// <para><b>HAM JSON doner.</b> Alanlarin anlami (ozellikle <c>Status</c>/<c>AppType</c>/
+    /// <c>AppFlag</c>) ne uretici belgesinde ne de kodda tanimli; yorumlamak icin once olcmek
+    /// gerekiyor. Bu yuzden sarmalayici cozumlemez, olculen seyi oldugu gibi verir.</para>
+    /// </summary>
+    GmpResult GetPaymentApplicationsRaw(out string json, out int total, out int received, byte requested = 20);
+
     // ── EŞLEŞTİRME (provisioning) ────────────────────────────────────────────
     //
     // ⚠️ Bu iki çağrı **önce sözleşme dışında bırakılmıştı** ("provisioning ayrı bir yaşam

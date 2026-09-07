@@ -14,8 +14,10 @@ bool voidModu = args.Contains("--void");
 bool configSmoke = args.Contains("--config-smoke");
 bool ticketModu = args.Contains("--ticket");
 bool voidOnayi = args.Contains("--onayla");
+bool paymentAppsModu = args.Contains("--payment-apps");
 var configArgs = args
-    .Where(a => a != "--pair" && a != "--void" && a != "--config-smoke" && a != "--ticket" && a != "--onayla")
+    .Where(a => a != "--pair" && a != "--void" && a != "--config-smoke" && a != "--ticket"
+             && a != "--onayla" && a != "--payment-apps")
     .ToArray();
 
 var builder = Host.CreateApplicationBuilder(configArgs);
@@ -51,6 +53,14 @@ if (voidModu)
 if (ticketModu)
 {
     Environment.ExitCode = WindowsVoidTicket.Report(host.Services) ? 0 : 1;
+    return;
+}
+
+// TEŞHİS (--payment-apps): cihazda kurulu ödeme (banka) uygulamalarını HAM okur ve çıkar.
+// Hiçbir şeyi değiştirmez.
+if (paymentAppsModu)
+{
+    Environment.ExitCode = WindowsPaymentApps.Run(host.Services) ? 0 : 1;
     return;
 }
 

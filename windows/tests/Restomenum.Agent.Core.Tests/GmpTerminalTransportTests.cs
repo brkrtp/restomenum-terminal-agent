@@ -59,6 +59,8 @@ public class GmpTerminalTransportTests
         public GmpResult VoidPayment(ulong h, int i) => Kod("VoidPayment");
         public GmpResult Close(ulong h) => Kod("Close");
         public GmpResult Echo() => Kod("Echo");
+        public GmpResult GetPaymentApplicationsRaw(out string json, out int total, out int received, byte requested = 20)
+        { json = "[]"; total = 0; received = 0; return Kod("GetPaymentApplications"); }
         public GmpResult Pair(GmpPairingConfig c, out GmpDeviceInfo i)
         { i = new GmpDeviceInfo("INGENICO", "TEST", "SN1", "1.0"); return Kod("Pair"); }
         public GmpResult CheckPairing(out bool paired) { paired = true; return Kod("CheckPairing"); }

@@ -206,6 +206,35 @@ public sealed class GmpWrapper : IGmpWrapper
         return GMPSmartDLL.FP3_Close(h, handle, TimeoutDefault);
     }
 
+    /// <summary>
+    /// Kurulu odeme uygulamalari — HAM JSON. Sarmalayici YORUMLAMAZ.
+    ///
+    /// <para>Dusuk seviyeli <c>Json_FP3_GetPaymentApplicationInfo</c> dogrudan cagriliyor;
+    /// ust seviyeli sarmalayici JSON'u nesneye cevirip atiyor ve HAM metni kaybediyor. Alan
+    /// anlamlari belgede tanimsiz oldugu icin once ham metni gormemiz gerek.</para>
+    /// </summary>
+    public GmpResult GetPaymentApplicationsRaw(out string json, out int total, out int received, byte requested = 20)
+    {
+        json = "";
+        total = 0;
+        received = 0;
+
+        uint h = AcquireInterface();
+        if (h == 0) return GmpCodes.PortNotOpen;
+
+        byte toplam = 0, alinan = 0;
+        var girdi = GMP_Tools.GetBytesFromString("[]");
+        var cikti = new byte[Defines.STANDART_BUFFER];
+
+        uint rc = Json_GMPSmartDLL.Json_FP3_GetPaymentApplicationInfo(
+            h, ref toplam, ref alinan, girdi, cikti, cikti.Length, requested);
+
+        total = toplam;
+        received = alinan;
+        if (rc == 0) json = GMP_Tools.GetStringFromBytes(cikti) ?? "";
+        return rc;
+    }
+
     public GmpResult Echo()
     {
         uint h = AcquireInterface();
