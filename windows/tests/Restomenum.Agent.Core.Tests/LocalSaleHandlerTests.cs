@@ -114,6 +114,37 @@ public class LocalSaleHandlerTests : IDisposable
     private static JsonElement Resp(string json) =>
         JsonDocument.Parse(json).RootElement.GetProperty("SaleToPOIResponse").GetProperty("PaymentResponse").GetProperty("Response");
 
+    // ── W30: `info` KASAYA VE DEFTERE ULAŞMALI ──────────────────────────────────
+
+    [Fact]
+    public async Task Belirsiz_sonucta_info_ve_reason_BIRLIKTE_gider()
+    {
+        // ← ÇİVİ (saha hatası, 2026-09-07 20:26): W25 doğru çalıştı, yoklama "fişe para
+        // yazılmadı" dedi, ama `ToTransportResult` yeni gövdeyi kurarken `Info`yu KOPYALAMADI.
+        // Platform `info:"NOT_LANDED"` görmediği için P34 dalına hiç girmedi; deneme
+        // `bankReviewNeeded` almadan UNKNOWN'da kaldı ve yoklama sürdü.
+        //
+        // Hata GÖRÜNMÜYORDU çünkü `ErrorCondition` ve `Reason` taşınıyordu — gövde doğru
+        // görünüyor, yalnız bir alan eksikti.
+        // Gerçek yolu izle: terminal 2086 verir (Unknown), orkestratör YOKLAR, yoklama W25
+        // kararını üretir. Hata tam da bu sonucun gövdeye çevrildiği yerdeydi.
+        var (h, sim, _) = Kur(new PaymentDetailResult.Ok(Detail()),
+            terminal: new TransportResult(TransportOutcome.Unknown,
+                ErrorCondition: "UnreachableHost", PaymentInvoked: true, UsedBankBkmId: 62));
+        sim.ProbeResult = new PaymentProbe(ProbeVerdict.NotLanded, CounterRead: true,
+            ErrorCondition: "UnreachableHost", Reason: RestomenumReasons.NoResponse,
+            Info: RestomenumReasons.NotLandedOnTicket);
+
+        var govde = await h.HandleAsync(Req());
+        var ek = JsonDocument.Parse(govde).RootElement
+            .GetProperty("SaleToPOIResponse").GetProperty("Restomenum");
+
+        Assert.Equal("UnreachableHost", Resp(govde).GetProperty("ErrorCondition").GetString());
+        Assert.Equal(RestomenumReasons.NoResponse, ek.GetProperty("reason").GetString());
+        Assert.Equal(RestomenumReasons.NotLandedOnTicket, ek.GetProperty("info").GetString());  // ← ÇİVİ
+        Assert.True(ek.GetProperty("paymentInvoked").GetBoolean());
+    }
+
     // ── W29: SATIŞ ÖNCESİ EŞLEME TAZELİĞİ ───────────────────────────────────────
 
     [Fact]

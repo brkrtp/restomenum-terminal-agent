@@ -178,12 +178,20 @@ public sealed class GmpTerminalTransport : ITerminalTransport
             // `ProbeAsync`'te, terminale sorarak. Sınıf ve nexo koşulu `GmpErrorMap`'ten gelir —
             // burada kod okunup yorumlanmaz (2085'i "kesin ret" yapan hata tam da buydu).
             var cevap = Cevir(pr, "Payment", GmpStep.Payment);
+            // Kullanılan bankayı BAŞARISIZLIKTA da bildir: bacak fişte oluşuyor ve hangi bankaya
+            // gidildiği paneldeki teşhisin yarısı. Ödeme yankısında son dolu satır bu denemedir;
+            // tutarı 0 olsa bile bankası bilinir. Satır okunamazsa alan KONMAZ.
+            var basarisizSatir = tk.Payments is { Count: > 0 } bs ? bs[^1] : (GmpPaymentLine?)null;
+            if (basarisizSatir?.BankBkmId is int kullanilan)
+                cevap = cevap with { UsedBankBkmId = kullanilan };
             _log("[gmp] ödeme başarısız/yanıtsız", new
             {
                 request.CommandId,
                 gmp = pr.ToString(),
                 sinif = cevap.Outcome.ToString(),
                 errorCondition = cevap.ErrorCondition,
+                banka = basarisizSatir?.BankName ?? "(yok)",
+                bkm = basarisizSatir?.BankBkmId,
             });
             return cevap;
         }

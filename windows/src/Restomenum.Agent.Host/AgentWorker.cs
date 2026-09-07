@@ -210,6 +210,8 @@ public sealed class AgentWorker : BackgroundService
 
     private const int RetentionGun = 7;
     private DateTimeOffset _sonTemizlik = DateTimeOffset.MinValue;
+    /// <summary>Son periyodik kurtarma (W31). Açılış kurtarması ayrı koşar, burayı beklemez.</summary>
+    private DateTimeOffset _sonKurtarma = DateTimeOffset.UtcNow;
 
     private async Task DrainLoopAsync(CancellationToken ct)
     {
@@ -222,6 +224,23 @@ public sealed class AgentWorker : BackgroundService
             if (DateTimeOffset.UtcNow - _sonTemizlik >= TimeSpan.FromDays(1)) Temizle();
             try { await _handler.DrainOutboxAsync(ct); }
             catch (Exception e) when (e is not OperationCanceledException) { _log.LogWarning(e, "periyodik drain hata verdi"); }
+
+            // ── W31: ÇÖZÜLMEMİŞ KOMUTLAR PERİYODİK YOKLANIR ──────────────────────────
+            // Kurtarma ŞİMDİYE KADAR YALNIZ AÇILIŞTA koşuyordu. Yani belirsiz kalmış bir deneme,
+            // ajan yeniden başlatılana kadar öyle kalıyordu — kasa da o denemeyi bekleyerek
+            // takılıyordu (7 Eylül'de ölçüldü: iki kart denemesi saatlerce UNKNOWN'da kaldı).
+            //
+            // Sıklık 30 sn DEĞİL, 60 sn: her yoklama cihaza gidiyor ve terminal kilidini alıyor.
+            // Daha sık koşmak, takılı tek bir komut yüzünden terminali sürekli meşgul edip
+            // gerçek satışı geciktirirdi. 60 sn, kasiyerin beklemesi ile cihazın boş kalması
+            // arasındaki dengede: yeniden başlatmayı beklemekten kat kat iyi, cihazı yormaz.
+            if (DateTimeOffset.UtcNow - _sonKurtarma >= TimeSpan.FromSeconds(60))
+            {
+                _sonKurtarma = DateTimeOffset.UtcNow;
+                try { await _handler.RecoverPendingAsync(ct); }
+                catch (Exception e) when (e is not OperationCanceledException)
+                { _log.LogWarning(e, "periyodik kurtarma hata verdi"); }
+            }
         }
     }
 }

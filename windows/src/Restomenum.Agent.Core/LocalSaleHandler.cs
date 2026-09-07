@@ -623,6 +623,14 @@ public sealed class LocalSaleHandler
                 // Ödeme çağrılıp çağrılmadığı bilgisi KAYBOLMAZ; taşınamıyorsa güvenli taraf
                 // "çağrıldı" (yanlış bir kesinlik yaymaktansa belirsiz kal).
                 PaymentInvoked: o.Result?.PaymentInvoked ?? true,
-                Reason: o.Result?.Reason),
+                Reason: o.Result?.Reason,
+                // ⚠️ `Info` BURADA DÜŞÜYORDU (W30). Sahada ölçüldü (2026-09-07 20:26): W25 doğru
+                // çalıştı, yoklama "fişe para yazılmadı" dedi ve `info:NOT_LANDED` üretti — ama bu
+                // dal yeni bir `TransportResult` kurarken `Info`yu KOPYALAMIYORDU. Sonuç: platform
+                // P34 dalına hiç girmedi, deneme `bankReviewNeeded` almadan UNKNOWN'da kaldı ve
+                // yoklama sürdü. `ErrorCondition` ve `Reason` taşındığı için hata GÖRÜNMEDİ:
+                // gövde doğru görünüyor, yalnız bir alan eksik.
+                Info: o.Result?.Info,
+                UsedBankBkmId: o.Result?.UsedBankBkmId),
     };
 }
