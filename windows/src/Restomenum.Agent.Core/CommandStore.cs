@@ -434,6 +434,20 @@ public sealed class CommandStore : ITicketSnapshotStore, IDisposable
         }
     }
 
+    /// <summary>
+    /// Bağlı açık fişi olan terminal; yoksa <c>null</c>. Operatör aracı neyi iptal edeceğini
+    /// cihazdan değil BURADAN öğrenir: cihaz "bir fiş var" der ama kimin olduğunu söylemez.
+    /// </summary>
+    public string? ReadBoundTerminal()
+    {
+        lock (_gate)
+        {
+            using var cmd = _conn.CreateCommand();
+            cmd.CommandText = "SELECT terminal_id FROM open_ticket ORDER BY updated_at DESC LIMIT 1";
+            return cmd.ExecuteScalar() as string;
+        }
+    }
+
     /// <summary>Terminaldeki açık fişin kimliği; bağ yoksa <c>null</c>.</summary>
     public string? ReadOpenTicketId(string terminalId)
     {

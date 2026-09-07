@@ -19,9 +19,19 @@ bool paymentAppsModu = args.Contains("--payment-apps");
 // --retract <commandId>: daha önce onaylı bildirilmiş bir komutun düzeltmesini platforma yollar.
 var retractIdx = Array.IndexOf(args, "--retract");
 string? retractKomut = retractIdx >= 0 && retractIdx + 1 < args.Length ? args[retractIdx + 1] : null;
+// --cancel-ticket [saleSessionId]: operatör fiş iptali — KASANIN YOLUNDAN (bildirim dahil).
+var cancelIdx = Array.IndexOf(args, "--cancel-ticket");
+bool cancelModu = cancelIdx >= 0;
+string? cancelOturum = cancelIdx >= 0 && cancelIdx + 1 < args.Length
+    && !args[cancelIdx + 1].StartsWith("--", StringComparison.Ordinal) ? args[cancelIdx + 1] : null;
+// --check-tax <dosya>: KURU PROVA — cihaza dokunmadan hangi kalemin reddedileceğini söyler.
+var taxIdx = Array.IndexOf(args, "--check-tax");
+string? taxDosya = taxIdx >= 0 && taxIdx + 1 < args.Length ? args[taxIdx + 1] : null;
 var configArgs = args
     .Where(a => a != "--pair" && a != "--void" && a != "--config-smoke" && a != "--ticket"
-             && a != "--onayla" && a != "--payment-apps" && a != "--retract" && a != retractKomut)
+             && a != "--onayla" && a != "--payment-apps" && a != "--retract" && a != retractKomut
+             && a != "--cancel-ticket" && a != cancelOturum
+             && a != "--check-tax" && a != taxDosya)
     .ToArray();
 
 var builder = Host.CreateApplicationBuilder(configArgs);
@@ -75,6 +85,24 @@ if (retractKomut is not null)
 {
     var h = host.Services.GetRequiredService<LocalSaleHandler>();
     Environment.ExitCode = await h.RetractLandedAsync(retractKomut) ? 0 : 1;
+    return;
+}
+
+// KURU PROVA (--check-tax): cihaza HİÇ dokunmaz, eşleştirme YAPMAZ. Satışın çalıştırdığı
+// çözümleyicinin ve oran kuralının AYNISINI kuru kuruya işletir — "prova geçti ama satış
+// reddetti" olamasın diye kural ikinci kez yazılmadı.
+if (taxDosya is not null)
+{
+    Environment.ExitCode = WindowsTaxCheck.Run(host.Services, taxDosya) ? 0 : 1;
+    return;
+}
+
+// OPERATÖR FİŞ İPTALİ (--cancel-ticket): kasanın gönderemediği durumlarda açık fişi KASANIN
+// YOLUNDAN iptal eder — cihaz + DAYANIKLI bildirim. `--void`'dan farkı: defter de düzelir.
+// `--onayla` olmadan yalnız ne iptal edileceğini yazar.
+if (cancelModu)
+{
+    Environment.ExitCode = await WindowsCancelTicket.RunAsync(host.Services, cancelOturum, voidOnayi) ? 0 : 1;
     return;
 }
 

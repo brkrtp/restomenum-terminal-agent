@@ -45,4 +45,35 @@ public class FiscalLineBuilderTests
         var l = Assert.Single(FiscalLineBuilder.Build(Item(3000, 3), 5).ToList());
         Assert.Equal((1000L, 3), (l.UnitPriceMinor, l.Quantity));
     }
+
+    // ── TaxRule: TEK karar noktası (satış + kuru prova aynı çağrıyı yapar) ──────
+
+    [Theory]
+    [InlineData("10", 1000)]   // %10 ürün, %10 departman
+    [InlineData("20", 2000)]
+    [InlineData("1", 100)]
+    [InlineData("24", 2400)]
+    public void Oranlar_UYUSUYORSA_celiski_YOK(string taxCode, int deptRate)
+        => Assert.False(TaxRule.Conflicts(taxCode, deptRate));
+
+    [Theory]
+    [InlineData("7", 2000)]    // canlı vaka: ürün %7, departman %20
+    [InlineData("19", 2000)]
+    [InlineData("10", 2000)]
+    [InlineData("20", 1000)]
+    public void Oranlar_UYUSMUYORSA_celiski_VAR(string taxCode, int deptRate)
+        => Assert.True(TaxRule.Conflicts(taxCode, deptRate));
+
+    [Theory]
+    [InlineData("10", null)]   // departman oranı bilinmiyor
+    [InlineData(null, 2000)]   // TaxCode yok
+    [InlineData("", 2000)]
+    [InlineData("abc", 2000)]  // sayı değil
+    [InlineData("10.5", 2000)] // ondalık — tam sayı değil
+    public void KARSILASTIRILAMIYORSA_reddetmeyiz(string? taxCode, int? deptRate)
+    {
+        // ← ÇİVİ: kanıtsız ret YOK. "Okunamadı"yı "yanlış" saymak her kalemi düşürürdü;
+        // §30.12 koruması yalnız GERÇEK, sayısal çelişkide devreye girer.
+        Assert.False(TaxRule.Conflicts(taxCode, deptRate));
+    }
 }

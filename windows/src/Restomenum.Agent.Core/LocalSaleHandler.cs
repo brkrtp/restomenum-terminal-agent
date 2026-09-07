@@ -347,10 +347,11 @@ public sealed class LocalSaleHandler
             // yakala: TaxCode YÜZDE-string ("10"), departman oranı BAZ-PUAN (1000) — birim dönüşümüyle
             // karşılaştır. Oran bilinmiyorsa (cihaz tablosu yok) ya da TaxCode sayı değilse doğrulama atlanır
             // (naif değil: yalnız gerçek, sayısal çelişkide ret; her kalemi düşürmez).
-            if (m.TaxRateBasisPoints is int deptRate
-                && int.TryParse(item.TaxCode, out var taxPct)
-                && taxPct * 100 != deptRate)
+            // Kural `TaxRule`'da TEK yerde: kuru prova (`--check-tax`) aynı çağrıyı yapıyor.
+            // İki yerde yazsaydık prova "geçer" derken satış reddedebilirdi.
+            if (TaxRule.Conflicts(item.TaxCode, m.TaxRateBasisPoints))
             {
+                var deptRate = m.TaxRateBasisPoints;
                 var reddi = SaleToPoiResponseBuilder.BuildFailure(req, "PaymentRestriction",
                     $"PROVIDER_CONFIG_INCOMPLETE:{item.ProductCode}", _now(),
                     RestomenumReasons.ProviderConfigIncomplete, productCode: item.ProductCode);
