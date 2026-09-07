@@ -92,7 +92,12 @@ public static class SaleToPoiResponseBuilder
                 ["Response"] = response,
             },
         };
-        govde["Restomenum"] = Ek(result.PaymentInvoked, result.Reason, result.Info);
+        var ek = Ek(result.PaymentInvoked, result.Reason, result.Info);
+        // Cihazın gördüğü tutarlar YALNIZ kalan/toplam ayrışmasında taşınır (aşağıdaki iki sebep).
+        // Her gövdeye koymak, alanı "bazen doğru bazen bayat" bir veriye çevirirdi.
+        if (result.DeviceTicketTotalMinor is long dt) ek["deviceTicketTotalMinor"] = dt;
+        if (result.DeviceRemainingMinor is long dk) ek["deviceRemainingMinor"] = dk;
+        govde["Restomenum"] = ek;
         return new JsonObject { ["SaleToPOIResponse"] = govde }.ToJsonString();
     }
 

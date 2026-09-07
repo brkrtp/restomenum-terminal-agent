@@ -698,6 +698,8 @@ public class GmpTerminalTransportTests
         Assert.False(r.PaymentInvoked);
         Assert.DoesNotContain("Payment", g.Calls);                // ← CIVI
         Assert.DoesNotContain("VoidAll", g.Calls);                // yanlis fis SILINMEZ de
+        Assert.Equal(1490, r.DeviceTicketTotalMinor);
+        Assert.Equal(990, r.DeviceRemainingMinor);
     }
 
     [Fact]
@@ -713,6 +715,9 @@ public class GmpTerminalTransportTests
 
         Assert.Equal(RestomenumReasons.AmountExceedsRemaining, r.Reason);
         Assert.DoesNotContain("Payment", g.Calls);
+        // Kasiyer CİHAZIN gördüğü sayıyı görmeli: panel kalanı ile cihaz kalanı ayrışabiliyor.
+        Assert.Equal(990, r.DeviceTicketTotalMinor);
+        Assert.Equal(490, r.DeviceRemainingMinor);
     }
 
     [Fact]
@@ -730,6 +735,21 @@ public class GmpTerminalTransportTests
         Assert.Equal(RestomenumReasons.TicketAlreadyOpen, r.Reason);
         Assert.DoesNotContain("VoidAll", g.Calls);        // ← CIVI: para ustundeki fis silinmez
         Assert.DoesNotContain("Payment", g.Calls);
+    }
+
+    [Fact]
+    public async Task Cihaz_tutarlari_YALNIZ_ayrisma_retlerinde_tasinir()
+    {
+        // Her gövdeye koymak, alanı "bazen doğru bazen bayat" bir veriye çevirirdi.
+        var (t, g, _) = Kur();
+        g.AfterPayment = new GmpTicket(990, 990, 1, GmpPaymentTypes.Cash);
+
+        var r = await t.SaleAsync(Req(amount: 990, paymentType: GmpPaymentTypes.Cash,
+            oturum: "oturum-A", satisToplam: 990));
+
+        Assert.Equal(TransportOutcome.Approved, r.Outcome);
+        Assert.Null(r.DeviceTicketTotalMinor);
+        Assert.Null(r.DeviceRemainingMinor);
     }
 
     [Fact]

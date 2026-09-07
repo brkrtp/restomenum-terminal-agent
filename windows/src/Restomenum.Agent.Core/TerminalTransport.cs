@@ -164,7 +164,17 @@ public sealed record TransportResult(
     /// "yolda ne oldu" der. Karıştırılsaydı başarılı bir satış, temizlik yaptı diye bir "sebep"
     /// taşır ve platformda hata gibi görünürdü.
     /// </summary>
-    string? Info = null);
+    string? Info = null,
+
+    /// <summary>
+    /// Cihazdaki fişin toplamı — YALNIZ <c>TICKET_SALE_MISMATCH</c> / <c>AMOUNT_EXCEEDS_REMAINING</c>
+    /// retlerinde doldurulur. Başka gövdeye sızmaz: bu iki ret, panelin gördüğü kalan ile cihazın
+    /// gördüğü kalan ayrıştığında çıkıyor ve kasiyerin CİHAZIN sayısını görmesi gerekiyor.
+    /// </summary>
+    long? DeviceTicketTotalMinor = null,
+
+    /// <summary>Cihazdaki fişin kalanı (toplam − tahsil). Bkz. <see cref="DeviceTicketTotalMinor"/>.</summary>
+    long? DeviceRemainingMinor = null);
 
 /// <summary>
 /// Terminalin ödeme modeli — <b>pazara göre değişir ve belirsizlik çözümünü değiştirir.</b>

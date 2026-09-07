@@ -222,9 +222,9 @@ public sealed class GmpTerminalTransport : ITerminalTransport
             {
                 request.CommandId, fisToplam = fis.TotalAmountMinor, satisToplam,
             });
-            return Hata(TransportOutcome.Declined,
+            return HataCihazTutarli(
                 $"TICKET_SALE_MISMATCH:fis={fis.TotalAmountMinor},satis={satisToplam}",
-                "PaymentRestriction", RestomenumReasons.TicketSaleMismatch);
+                RestomenumReasons.TicketSaleMismatch, fis);
         }
 
         var kalan = fis.RemainingMinor;
@@ -234,9 +234,9 @@ public sealed class GmpTerminalTransport : ITerminalTransport
             {
                 request.CommandId, istenen = request.AmountMinor, kalan,
             });
-            return Hata(TransportOutcome.Declined,
+            return HataCihazTutarli(
                 $"AMOUNT_EXCEEDS_REMAINING:istenen={request.AmountMinor},kalan={kalan}",
-                "PaymentRestriction", RestomenumReasons.AmountExceedsRemaining);
+                RestomenumReasons.AmountExceedsRemaining, fis);
         }
 
         return null;
@@ -609,6 +609,17 @@ public sealed class GmpTerminalTransport : ITerminalTransport
     /// hareket edemez — ama <c>Refusal</c> DEĞİL: banka hiç devrede olmadığından "kart reddedildi"
     /// mesajı yanlış olurdu (W1 kuralı: kesin-ret yalnız host'un açık reddiyle).
     /// </summary>
+    /// <summary>
+    /// Cihazın gördüğü tutarları da taşıyan ret. YALNIZ kalan/toplam ayrışmasından doğan iki
+    /// sebepte kullanılır — kasiyer panelin değil CİHAZIN sayısını görmeli, çünkü ödemeyi
+    /// kabul edecek olan cihaz.
+    /// </summary>
+    private static TransportResult HataCihazTutarli(string kod, string reason, GmpTicket fis) =>
+        new(TransportOutcome.Declined, ProviderResultCode: kod, ErrorCondition: "PaymentRestriction",
+            PaymentInvoked: false, Reason: reason,
+            DeviceTicketTotalMinor: fis.TotalAmountMinor,
+            DeviceRemainingMinor: fis.RemainingMinor);
+
     private static TransportResult Hata(TransportOutcome o, string kod, string errorCondition, string reason) =>
         new(o, ProviderResultCode: kod, ErrorCondition: errorCondition,
             PaymentInvoked: false, Reason: reason);
