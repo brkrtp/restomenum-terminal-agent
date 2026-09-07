@@ -50,12 +50,6 @@ public sealed class AgentWorker : BackgroundService
         var yarim = _store.Pending().Count;
         if (yarim > 0) _log.LogWarning("{Adet} komut yarım kalmış — açılışta terminale sorulacak", yarim);
 
-        // Açılış: ÖNCE kurtarma (yarım komutları terminale sorup çöz), SONRA outbox drain.
-        try { await _handler.RecoverPendingAsync(ct); }
-        catch (Exception e) when (e is not OperationCanceledException) { _log.LogError(e, "açılış kurtarması hata verdi"); }
-        try { await _handler.DrainOutboxAsync(ct); }
-        catch (Exception e) when (e is not OperationCanceledException) { _log.LogError(e, "açılış drain hata verdi"); }
-
         HttpListener listener;
         try
         {
@@ -72,6 +66,24 @@ public sealed class AgentWorker : BackgroundService
         }
 
         _log.LogInformation("yerel dinleyici ayakta: {Prefix} (yol {Path})", _opt.ListenPrefix, _opt.ListenPath);
+
+        // ── AÇILIŞ KURTARMASI DİNLEYİCİDEN SONRA, ARKA PLANDA ───────────────────────────
+        // ⚠️ Bu ikisi eskiden `listener.Start()`'tan ÖNCE ve BEKLEYEREK çalışıyordu; ölçülen bedeli:
+        // 3 takılı komutla ~4 dk, 4 takılı komutla ~2 dk 20 sn boyunca kasa ajana HİÇ ulaşamadı
+        // (2026-09-07). Süre takılı komut sayısıyla büyüyor, yani "bir şeyler ters gitti, yeniden
+        // başlatalım" anında kasa EN UZUN süre kör kalıyordu — tam da en kötü zamanda.
+        //
+        // Arka planda koşmaları güvenli: terminale erişim `LocalSaleHandler`'ın terminal-başına TEK
+        // işlem kilidinden geçiyor, dolayısıyla araya giren bir satış kurtarmayla ÇAKIŞMAZ, sıraya
+        // girer. Kurtarmanın kendisi zaten hiçbir zaman SALE tekrarlamıyor; yalnız soruyor.
+        var acilisIsleri = Task.Run(async () =>
+        {
+            try { await _handler.RecoverPendingAsync(ct); }
+            catch (Exception e) when (e is not OperationCanceledException) { _log.LogError(e, "açılış kurtarması hata verdi"); }
+            try { await _handler.DrainOutboxAsync(ct); }
+            catch (Exception e) when (e is not OperationCanceledException) { _log.LogError(e, "açılış drain hata verdi"); }
+            Temizle();
+        }, ct);
 
         using var iptalKaydi = ct.Register(() => { try { listener.Stop(); } catch { /* kapanış */ } });
         var drainLoop = DrainLoopAsync(ct);
@@ -92,6 +104,7 @@ public sealed class AgentWorker : BackgroundService
         {
             try { listener.Close(); } catch { /* kapanış */ }
             try { await drainLoop; } catch { /* kapanış */ }
+            try { await acilisIsleri; } catch { /* kapanış */ }
         }
     }
 
@@ -140,12 +153,44 @@ public sealed class AgentWorker : BackgroundService
     }
 
     /// <summary>Periyodik outbox drain — WSS'te oturum bağlanınca yapılan drain'in yerini alır.</summary>
+    /// <summary>
+    /// Kesin sonuca ulaşmış ESKİ komut kayıtlarını siler (§12.3 retention).
+    ///
+    /// <para><b>Pencere neden 7 gün:</b> iki yönlü bir kısıt var. KISA olursa kasanın geç gelen bir
+    /// tekrarı "yeni komut" sanılır ve aynı tahsilat İKİNCİ KEZ yapılır. UZUN (ya da sonsuz) olursa
+    /// — bugüne kadarki hâli, çünkü <c>Purge</c> hiçbir yerden çağrılmıyordu — kasanın 48 saat sonra
+    /// yeniden kullanabileceği bir ServiceID eski kayda çarpar ve satış hiç yapılmadan "saklanan
+    /// sonuç" olarak REPLAY edilir; kasa başarılı sanır, para alınmaz. 7 gün, kasanın 24 saatlik
+    /// tekrar penceresinin üstünde ve nexo'nun 48 saatlik tekillik asgarisinin rahatça ilerisinde.</para>
+    ///
+    /// <para><b>Uçuştaki kayıtlar ASLA silinmez</b> (<see cref="CommandStore.Purge"/> yalnız
+    /// COMPLETED/EXPIRED/REJECTED siler): <c>UNKNOWN</c> bir kaydı atmak, çözülmemiş bir tahsilatı
+    /// kaybetmektir.</para>
+    /// </summary>
+    private void Temizle()
+    {
+        try
+        {
+            var sinir = DateTimeOffset.UtcNow.AddDays(-RetentionGun).ToUnixTimeMilliseconds();
+            var silinen = _store.Purge(sinir);
+            _sonTemizlik = DateTimeOffset.UtcNow;
+            if (silinen > 0) _log.LogInformation("komut kaydı temizliği: {Adet} eski kayıt silindi ({Gun} günden eski)", silinen, RetentionGun);
+        }
+        catch (Exception e) { _log.LogError(e, "komut kaydı temizliği hata verdi"); }
+    }
+
+    private const int RetentionGun = 7;
+    private DateTimeOffset _sonTemizlik = DateTimeOffset.MinValue;
+
     private async Task DrainLoopAsync(CancellationToken ct)
     {
         while (!ct.IsCancellationRequested)
         {
             try { await Task.Delay(TimeSpan.FromSeconds(30), ct); }
             catch (OperationCanceledException) { break; }
+
+            // Günde bir: eski kayıtları temizle. Sürekli açık kalan bir kasada açılış tek başına yetmez.
+            if (DateTimeOffset.UtcNow - _sonTemizlik >= TimeSpan.FromDays(1)) Temizle();
             try { await _handler.DrainOutboxAsync(ct); }
             catch (Exception e) when (e is not OperationCanceledException) { _log.LogWarning(e, "periyodik drain hata verdi"); }
         }

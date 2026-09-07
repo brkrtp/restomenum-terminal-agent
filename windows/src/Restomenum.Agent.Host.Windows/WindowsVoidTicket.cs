@@ -21,7 +21,7 @@ namespace Restomenum.Agent.Host.Windows;
 /// </summary>
 public static class WindowsVoidTicket
 {
-    public static bool Run(IServiceProvider services)
+    public static bool Run(IServiceProvider services, bool operatorOnayi = false)
     {
         var log = services.GetRequiredService<ILoggerFactory>().CreateLogger("VoidTicket");
         var gmp = services.GetRequiredService<IGmpWrapper>();
@@ -62,14 +62,39 @@ public static class WindowsVoidTicket
                 "sonÖdemeTipi={Tip} bankaBacağı={Banka}",
                 fis.TotalAmountMinor, fis.PaidAmountMinor, fis.PaymentCount, fis.LastPaymentType, fis.HasBankLeg);
 
-            // Üzerinde TAHSİLAT olan fişe dokunulmaz — banka ters işlemi (`VoidPayment`) sahada hiç
-            // ölçülmedi ve bir bakım adımının işi değil.
-            if (fis.PaymentCount != 0)
+            // ── SERT TABAN: TAHSİL EDİLMİŞ PARA VARSA ASLA ────────────────────────────────
+            // Bu kural `--onayla` ile DE gevşemez. Üzerinde para toplanmış bir fişi iptal etmek
+            // banka ters işlemi ister (`VoidPayment`) ve o yol sahada hiç ölçülmedi; burada
+            // denemek, geri alınamaz bir kaybı bir bakım adımına yıkmak olurdu.
+            if (fis.PaidAmountMinor > 0)
             {
-                log.LogError("fişte ÖDEME var (sayı={Sayi}, bankaBacağı={Banka}) — İPTAL EDİLMEDİ. " +
-                    "Banka ters işlemi gerekir; operatöre bırakıldı.", fis.PaymentCount, fis.HasBankLeg);
+                log.LogError("fişte TAHSİL EDİLMİŞ PARA var (tahsil={Tahsil}) — İPTAL EDİLMEZ, " +
+                    "onay bayrağı bunu değiştirmez. Banka ters işlemi gerekir.", fis.PaidAmountMinor);
                 try { gmp.Close(handle); } catch { /* en iyi çaba */ }
                 return false;
+            }
+
+            // Ödeme SAYACI var ama TAHSİLAT yok (sayaç 1 / tutar 0). Cihazın kendi defteri "para
+            // toplanmadı" diyor ama sayaç kıpırdadığı için otomatik yol bunu BİLEREK belirsiz sayar
+            // (§31.3): çelişkili okuma, tahminle silinmez.
+            //
+            // `--onayla` tam olarak bu boşluğu insana açar: rapor ekrana basılır, kararı operatör
+            // verir. Otomatik yolu gevşetmeden, sıkışan kasayı da kilitli bırakmadan.
+            if (fis.PaymentCount != 0 && !operatorOnayi)
+            {
+                log.LogError("fişte ödeme SAYACI var (sayı={Sayi}, tahsil={Tahsil}, bankaBacağı={Banka}) — " +
+                    "otomatik İPTAL EDİLMEZ. Tahsilat 0 görünüyorsa ve bu fişi iptal etmek istiyorsanız " +
+                    "komutu `--void --onayla` ile tekrar çalıştırın (kararı siz vermiş olursunuz).",
+                    fis.PaymentCount, fis.PaidAmountMinor, fis.HasBankLeg);
+                try { gmp.Close(handle); } catch { /* en iyi çaba */ }
+                return false;
+            }
+
+            if (fis.PaymentCount != 0)
+            {
+                log.LogWarning("OPERATÖR ONAYI ile iptal ediliyor: ödeme sayacı {Sayi} ama TAHSİLAT 0. " +
+                    "Denetim izi: toplam={Toplam} tahsil={Tahsil} sonÖdemeTipi={Tip} bankaBacağı={Banka}",
+                    fis.PaymentCount, fis.TotalAmountMinor, fis.PaidAmountMinor, fis.LastPaymentType, fis.HasBankLeg);
             }
 
             log.LogWarning("fişte ödeme YOK (kanıtlandı) — VoidAll ile iptal ediliyor.");

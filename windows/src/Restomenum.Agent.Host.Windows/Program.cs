@@ -13,8 +13,9 @@ bool eslesModu = args.Contains("--pair");
 bool voidModu = args.Contains("--void");
 bool configSmoke = args.Contains("--config-smoke");
 bool ticketModu = args.Contains("--ticket");
+bool voidOnayi = args.Contains("--onayla");
 var configArgs = args
-    .Where(a => a != "--pair" && a != "--void" && a != "--config-smoke" && a != "--ticket")
+    .Where(a => a != "--pair" && a != "--void" && a != "--config-smoke" && a != "--ticket" && a != "--onayla")
     .ToArray();
 
 var builder = Host.CreateApplicationBuilder(configArgs);
@@ -41,7 +42,7 @@ await WindowsEnrollment.EnsureEnrolledAsync(host.Services);
 // Başarısız bir satış ödenmemiş açık fiş bırakabilir; sonraki satış üstüne açamaz (2080).
 if (voidModu)
 {
-    Environment.ExitCode = WindowsVoidTicket.Run(host.Services) ? 0 : 1;
+    Environment.ExitCode = WindowsVoidTicket.Run(host.Services, voidOnayi) ? 0 : 1;
     return;
 }
 

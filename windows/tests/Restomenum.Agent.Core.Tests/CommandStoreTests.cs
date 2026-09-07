@@ -93,4 +93,51 @@ public class CommandStoreTests
         // UNKNOWN = sonuç belirsiz. Silmek, çözülmemiş bir tahsilatı kaybetmek olurdu.
         Assert.NotNull(store.Read("cmd-inflight"));
     }
+
+    // ── RETENTION (7 gün) ───────────────────────────────────────────────────────
+
+    [Fact]
+    public void Purge_eski_kesin_kayitlari_siler_yenileri_BIRAKIR()
+    {
+        // Pencere iki yönlü bir kısıt: KISA olursa kasanın geç gelen tekrarı "yeni komut" sanılır ve
+        // aynı tahsilat ikinci kez yapılır; SINIRSIZ olursa (bugüne kadarki hâli — `Purge` hiçbir
+        // yerden çağrılmıyordu) 48 saat sonra yeniden kullanılan bir ServiceID eski kayda çarpar ve
+        // satış hiç yapılmadan "saklanan sonuç" olarak replay edilir; kasa başarılı sanır, para
+        // alınmaz. 7 gün ikisinin arasında.
+        using var store = CommandStore.Open(TempDb());
+        var sekizGunOnce = DateTimeOffset.UtcNow.AddDays(-8).ToUnixTimeMilliseconds();
+        var altiGunOnce  = DateTimeOffset.UtcNow.AddDays(-6).ToUnixTimeMilliseconds();
+
+        foreach (var (id, pay, an) in new[] { ("eski", "pay-e", sekizGunOnce), ("yeni", "pay-y", altiGunOnce) })
+        {
+            store.Save(id, pay, "t1", Now + 60_000, an);
+            Assert.True(store.Advance(id, CommandState.RECEIVED, CommandState.SENT_TO_TERMINAL, now: an));
+            Assert.True(store.Advance(id, CommandState.SENT_TO_TERMINAL, CommandState.COMPLETED, now: an));
+        }
+
+        var sinir = DateTimeOffset.UtcNow.AddDays(-7).ToUnixTimeMilliseconds();
+        var silinen = store.Purge(sinir);
+
+        Assert.Equal(1, silinen);
+        Assert.Null(store.Read("eski"));
+        Assert.NotNull(store.Read("yeni"));   // ← ÇİVİ: 6 günlük kayıt SİLİNMEZ
+    }
+
+    [Fact]
+    public void Purge_UCUSTAKI_kaydi_ASLA_silmez()
+    {
+        // ← ÇİVİ: `UNKNOWN` bir kaydı silmek, çözülmemiş bir tahsilatı kaybetmektir. Kayıt ne kadar
+        // eski olursa olsun, akıbeti belirsizse durur.
+        using var store = CommandStore.Open(TempDb());
+        var cokEski = DateTimeOffset.UtcNow.AddDays(-90).ToUnixTimeMilliseconds();
+
+        store.Save("belirsiz", "pay-b", "t1", Now + 60_000, cokEski);
+        store.Advance("belirsiz", CommandState.RECEIVED, CommandState.SENT_TO_TERMINAL, now: cokEski);
+        store.Advance("belirsiz", CommandState.SENT_TO_TERMINAL, CommandState.UNKNOWN, now: cokEski);
+
+        var silinen = store.Purge(DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+
+        Assert.Equal(0, silinen);
+        Assert.NotNull(store.Read("belirsiz"));
+    }
 }
