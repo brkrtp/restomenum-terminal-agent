@@ -41,12 +41,20 @@ public sealed class LocalSaleHandler
     /// <summary>Açılışta yoklanacak <c>UNKNOWN</c> kayıtların yaş sınırı (saat).</summary>
     private const int UnknownKurtarmaSaati = 24;
 
+    /// <summary>
+    /// Satış öncesi eşleme tazeleyici (W29). <c>null</c> = kapalı (test/eski davranış): satış
+    /// diskteki eşlemeyle yapılır.
+    /// </summary>
+    private readonly IMappingRefresher? _mappingRefresher;
+
     public LocalSaleHandler(
         IPaymentDetailClient amounts, AgentOrchestrator orch, CommandStore store,
         ILineDepartmentResolver departments, IPaymentMethodResolver paymentMethods,
         IResultNotifier notifier, Outbox outbox, ITerminalTransport transport,
-        Func<DateTimeOffset>? now = null, Action<string, object?>? log = null)
+        Func<DateTimeOffset>? now = null, Action<string, object?>? log = null,
+        IMappingRefresher? mappingRefresher = null)
     {
+        _mappingRefresher = mappingRefresher;
         _transport = transport;
         _amounts = amounts;
         _orch = orch;
@@ -324,6 +332,32 @@ public sealed class LocalSaleHandler
         var d = ((PaymentDetailResult.Ok)fetch).Detail;
 
         // 2. Kalemleri departmana çöz + kuruş dağıtımıyla fiş satırlarına dök.
+        // ── W29: EŞLEMEYİ SATIŞTAN HEMEN ÖNCE TAZELE ────────────────────────────────
+        // K-21'in ("satış anında çekme yok") bilinçli geri alınması. Sahada ölçüldü: operatör bir
+        // eşleme hatasını düzeltti, hemen denedi, ~30 dakikalık yoklama aralığı yüzünden ajan hâlâ
+        // eski sürümdeydi ve aynı reddi aldı — yani düzeltme DOĞRULANAMIYORDU.
+        //
+        // K-21'in koruduğu şey duruyor: bu çağrı satışı ASLA düşürmez ve beklemez (sert zaman
+        // aşımı, hata yutulur, diskteki eşlemeyle devam). Bağımlılık gerekli değil FIRSATÇI.
+        if (_mappingRefresher is not null)
+        {
+            // Sözleşme "istisna fırlatmaz" diyor ama BURADA DA YAKALIYORUZ. Sebebi ilkesel:
+            // satışın hayatta kalması, yapılandırma kanalının uslu davranmasına bağlı OLMAMALI.
+            // Test bunu yakaladı — sarmalayıcı yutuyordu ama arayüzün başka bir uygulaması
+            // yutmayabilir ve o gün ödeme düşerdi.
+            try
+            {
+                var yeniSurum = await _mappingRefresher.EnsureFreshAsync(ct);
+                if (yeniSurum is int v)
+                    _log("[yerel] satış öncesi eşleme tazelendi", new { req.PaymentId, surum = v });
+            }
+            catch (Exception e) when (e is not OperationCanceledException)
+            {
+                _log("[yerel] satış öncesi eşleme tazelenemedi — diskteki sürümle DEVAM",
+                    new { req.PaymentId, error = e.Message });
+            }
+        }
+
         var lines = new List<FiscalLine>();
         foreach (var item in d.Items)
         {

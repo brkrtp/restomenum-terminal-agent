@@ -81,9 +81,25 @@ public class LocalSaleHandlerTests : IDisposable
             new List<SaleLine> { new(0, "p1", "Adana", 2, amount, "10", "c1", "l1") },
             pmId);
 
+    /// <summary>Satış öncesi eşleme tazeleyicisi — gerçekte HTTP, testte kontrollü.</summary>
+    private sealed class FakeRefresher : IMappingRefresher
+    {
+        public int Calls;
+        public int? YeniSurum;
+        public Exception? Patlat;
+        public TimeSpan Gecikme = TimeSpan.Zero;
+        public async Task<int?> EnsureFreshAsync(CancellationToken ct = default)
+        {
+            Calls++;
+            if (Gecikme > TimeSpan.Zero) await Task.Delay(Gecikme, ct);
+            if (Patlat is not null) throw Patlat;
+            return YeniSurum;
+        }
+    }
+
     private (LocalSaleHandler, SimulatorTransport, FakeNotifier) Kur(
         PaymentDetailResult amounts, int? dept = 3, TransportResult? terminal = null, int? rate = null,
-        int? paymentType = GmpPaymentTypes.Card)
+        int? paymentType = GmpPaymentTypes.Card, IMappingRefresher? refresher = null)
     {
         var sim = new SimulatorTransport();
         if (terminal is not null) sim.Expect(terminal);
@@ -91,12 +107,58 @@ public class LocalSaleHandlerTests : IDisposable
         var notifier = new FakeNotifier();
         var h = new LocalSaleHandler(new FakeAmounts { Result = amounts }, orch, _store,
             new FakeResolver { Dept = dept, Rate = rate }, new FakePaymentMethods { Type = paymentType },
-            notifier, _outbox, sim);
+            notifier, _outbox, sim, mappingRefresher: refresher);
         return (h, sim, notifier);
     }
 
     private static JsonElement Resp(string json) =>
         JsonDocument.Parse(json).RootElement.GetProperty("SaleToPOIResponse").GetProperty("PaymentResponse").GetProperty("Response");
+
+    // ── W29: SATIŞ ÖNCESİ EŞLEME TAZELİĞİ ───────────────────────────────────────
+
+    [Fact]
+    public async Task Satis_oncesi_esleme_TAZELENIR()
+    {
+        // K-21 ("satış anında çekme yok") bilinçli olarak geri alındı: operatör bir eşleme
+        // hatasını düzeltip hemen denediğinde ~30 dakika eski sürümle çalışıyordu ve düzeltmenin
+        // işe yarayıp yaramadığını göremiyordu.
+        var r = new FakeRefresher { YeniSurum = 45 };
+        var (h, sim, _) = Kur(new PaymentDetailResult.Ok(Detail()),
+            terminal: new TransportResult(TransportOutcome.Approved, ApprovedAmountMinor: 24000),
+            refresher: r);
+
+        await h.HandleAsync(Req());
+
+        Assert.Equal(1, r.Calls);
+        Assert.Single(sim.SaleCalls);
+    }
+
+    [Fact]
+    public async Task Tazeleme_PATLARSA_satis_yine_yapilir()
+    {
+        // ← ÇİVİ: K-21'in koruduğu şey. Yapılandırma kanalı satışı DÜŞÜREMEZ; "taze veriyi
+        // alamadım" ödemeyi reddetmek için bir sebep değil.
+        var r = new FakeRefresher { Patlat = new HttpRequestException("config ucu kapalı") };
+        var (h, sim, _) = Kur(new PaymentDetailResult.Ok(Detail()),
+            terminal: new TransportResult(TransportOutcome.Approved, ApprovedAmountMinor: 24000),
+            refresher: r);
+
+        var govde = await h.HandleAsync(Req());
+
+        Assert.Equal("Success", Resp(govde).GetProperty("Result").GetString());   // ← ÇİVİ
+        Assert.Single(sim.SaleCalls);                                             // terminale GİTTİ
+    }
+
+    [Fact]
+    public async Task Tazeleyici_YOKSA_eski_davranis_aynen_surer()
+    {
+        var (h, sim, _) = Kur(new PaymentDetailResult.Ok(Detail()),
+            terminal: new TransportResult(TransportOutcome.Approved, ApprovedAmountMinor: 24000));
+
+        var govde = await h.HandleAsync(Req());
+
+        Assert.Equal("Success", Resp(govde).GetProperty("Result").GetString());
+    }
 
     // ── W27: RET GÖVDESİNDE ÜRÜN ADRESİ ─────────────────────────────────────────
 

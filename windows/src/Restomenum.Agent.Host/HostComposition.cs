@@ -157,7 +157,14 @@ public static class HostComposition
                 sp.GetRequiredService<IPaymentMethodResolver>(),
                 sp.GetRequiredService<IResultNotifier>(), sp.GetRequiredService<Outbox>(),
                 sp.GetRequiredService<ITerminalTransport>(),
-                log: (m, d) => log.LogInformation("{Mesaj} {Detay}", m, d));
+                log: (m, d) => log.LogInformation("{Mesaj} {Detay}", m, d),
+                // W29: satıştan hemen önce eşleme tazeliği. Yoklayıcı (30 dk) YERİNE değil,
+                // ONUNLA BİRLİKTE: yoklayıcı arka planı taze tutar, bu da düzeltmenin hemen
+                // görünmesini sağlar. İkisi de aynı depoyu güncelliyor, çakışmıyor.
+                mappingRefresher: new HttpMappingRefresher(
+                    sp.GetRequiredService<DeviceConfigClient>(),
+                    sp.GetRequiredService<IDeviceMappingStore>(),
+                    sp.GetRequiredService<ILoggerFactory>().CreateLogger("MappingFresh")));
         });
 
         builder.Services.AddSingleton<IDeviceKey>(sp =>
