@@ -34,6 +34,25 @@ public static class HostComposition
             // hatayı kasiyerin kart okuttuğu ana taşımak olurdu.
             .ValidateOnStart();
 
+        // ── KAYITLAR DİSKE ─────────────────────────────────────────────────────────────
+        // Ajan üretimde bir konsol penceresinde çalışıyor ve şimdiye kadar YALNIZ oraya yazıyordu.
+        // Bu, saha teşhisini iki kez fiilen engelledi (2026-09-07): bir ödeme reddinin sebebini
+        // gösteren satır pencere kapanınca kayboldu; cihazın kendi izi ve `agent.db` ne YAPTIĞIMIZI
+        // gösteriyor ama NEDEN karar verdiğimizi göstermiyor. Dosya, `agent.db` ile aynı dizinde.
+        // Kapatmak için: `Agent:FileLog=false` (varsayılan AÇIK — teşhis, sessizlikten üstün).
+        {
+            var ayar = builder.Configuration.GetSection(AgentOptions.Section)["FileLog"];
+            if (!string.Equals(ayar, "false", StringComparison.OrdinalIgnoreCase))
+            {
+                var db = new AgentOptions().ResolveStorePath();
+                var yapilandirilmis = builder.Configuration.GetSection(AgentOptions.Section)["StorePath"];
+                if (!string.IsNullOrWhiteSpace(yapilandirilmis)) db = yapilandirilmis;
+                var dizin = Path.GetDirectoryName(db);
+                if (!string.IsNullOrWhiteSpace(dizin))
+                    builder.Logging.AddProvider(new FileLoggerProvider(dizin));
+            }
+        }
+
         builder.Services.Configure<HostOptions>(o =>
         {
             // KRİTİK: varsayılan 5 saniyedir. Kartlı ödeme 20–32 sn, belirsizlik kurtarması ~100 sn

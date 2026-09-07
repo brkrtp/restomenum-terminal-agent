@@ -64,6 +64,20 @@ public sealed class AgentOptions
     /// </summary>
     public string? StorePath { get; set; }
 
+    /// <summary>
+    /// Ajan kayıtları <see cref="StorePath"/> ile aynı dizine <c>agent-YYYYMMDD.log</c> olarak da
+    /// yazılsın mı? <b>Varsayılan: evet.</b> Kapatmak için <c>false</c>.
+    ///
+    /// <para><b>Neden varsayılan açık:</b> ajan üretimde bir konsol penceresinde çalışıyor ve
+    /// yalnız oraya yazmak saha teşhisini iki kez fiilen engelledi (2026-09-07) — bir reddin
+    /// sebebini gösteren satır pencereyle birlikte kayboldu. Teşhis, sessizlikten üstün.</para>
+    ///
+    /// <para>Kayıt sağlayıcısı DI'dan ÖNCE kuruluyor (loglama host inşasının bir parçası), bu
+    /// yüzden değer <c>HostComposition</c>'da doğrudan yapılandırmadan okunur; bu özellik
+    /// belgelenmiş adı ve doğrulanan sözleşmeyi taşır.</para>
+    /// </summary>
+    public bool FileLog { get; set; } = true;
+
     /// <summary>Agent sürümü — gateway'e bildirilir, saha teşhisinde tek ayırt edici.</summary>
     public string Version { get; set; } = "1.0.3";
 
