@@ -521,6 +521,18 @@ public sealed class LocalSaleHandler
                     req.PaymentId, fisId, outcome = bildirim.Outcome.ToString(),
                     bildirim.StatusCode, bildirim.Message,
                 });
+            else
+                // BAŞARIYI DA YAZ. Bu yol W22'de atlanmıştı ve bedeli ölçüldü (2026-09-07 23:51):
+                // ilk gerçek fiş kapanışında bildirimin gittiği görülüyordu ama platformun NE
+                // dediği görünmüyordu — sessizlik hem "yazıldı" hem "tekrar sayıldı" olabilirdi.
+                // Kapanış bildirimi fişin BÜTÜN ödemelerini taşıyor; en çok görünürlük gereken yer.
+                _log("[yerel] fiş kapandı bildirimi yazıldı", new
+                {
+                    req.PaymentId, fisId, outcome = bildirim.Outcome.ToString(),
+                    bildirim.StatusCode, state = bildirim.State ?? "(yok)",
+                    replayed = bildirim.Replayed?.ToString() ?? "(yok)",
+                    zatenYazilan = bildirim.AlreadyPosted?.ToString() ?? "(yok)",
+                });
         }
         catch (Exception e) when (e is not OperationCanceledException)
         {
