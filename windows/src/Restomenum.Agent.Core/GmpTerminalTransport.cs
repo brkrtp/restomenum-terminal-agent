@@ -647,9 +647,14 @@ public sealed class GmpTerminalTransport : ITerminalTransport
                     bkm = basarisiz.BankBkmId, uygulamaKodu = basarisiz.AppErrorCode ?? "(bos)",
                     hataMetni = basarisiz.ErrorMessage ?? "(bos)", kosul,
                 });
+                // `reason` CİHAZIN SEBEBİ, `info` DURUM. `reason:NOT_LANDED` yazmak yasak:
+                // platform onu "kart hiç çekilmedi, tekrar dene" diye okuyor ve burada
+                // `FP3_Payment` ÇAĞRILMIŞTI — cevapsızlık hâlinde çift tahsilat üretirdi.
                 return new PaymentProbe(ProbeVerdict.NotLanded,
                     RemainingMinor: simdi.RemainingMinor, CounterRead: true,
-                    ErrorCondition: kosul, Reason: RestomenumReasons.NotLanded,
+                    ErrorCondition: kosul,
+                    Reason: acikRet ? RestomenumReasons.BankDeclined : RestomenumReasons.NoResponse,
+                    Info: RestomenumReasons.NotLandedOnTicket,
                     ProviderResultCode: $"NOT_LANDED:{basarisiz.AppErrorCode ?? "-"}:{basarisiz.ErrorMessage ?? "-"}",
                     Note: acikRet
                         ? $"banka açıkça reddetti ({basarisiz.AppErrorCode}) — fişe para yazılmadı, tekrar güvenli"

@@ -244,7 +244,11 @@ public class GmpTerminalTransportTests
         Assert.Equal(ProbeVerdict.NotLanded, y.Verdict);
         Assert.True(y.CounterRead);
         Assert.Equal("UnreachableHost", y.ErrorCondition);          // ← ÇİVİ
-        Assert.Equal(RestomenumReasons.NotLanded, y.Reason);
+        // ← ÇİVİ: `reason` CİHAZIN sebebi; `NOT_LANDED` yalnız `info`'da. Ters olsaydı platform
+        // bunu "kart hiç çekilmedi, tekrar dene" diye okur ve çift tahsilat üretirdi.
+        Assert.Equal(RestomenumReasons.NoResponse, y.Reason);
+        Assert.Equal(RestomenumReasons.NotLandedOnTicket, y.Info);
+        Assert.NotEqual(RestomenumReasons.NotLanded, y.Reason);
         Assert.Contains("GÜVENLİ DEĞİL", y.Note);                   // ← ÇİVİ: çift tahsilat kapısı
     }
 
@@ -264,6 +268,8 @@ public class GmpTerminalTransportTests
 
         Assert.Equal(ProbeVerdict.NotLanded, y.Verdict);
         Assert.Equal("Refusal", y.ErrorCondition);                  // ← ÇİVİ
+        Assert.Equal(RestomenumReasons.BankDeclined, y.Reason);
+        Assert.Equal(RestomenumReasons.NotLandedOnTicket, y.Info);
         Assert.Contains("tekrar güvenli", y.Note);
     }
 

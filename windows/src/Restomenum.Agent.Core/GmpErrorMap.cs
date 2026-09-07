@@ -218,6 +218,30 @@ public static class RestomenumReasons
     public const string LandedRetracted = "LANDED_RETRACTED";
 
     /// <summary>
+    /// <b>info:</b> ödeme cihazın FİŞİNE yazılmadı — deneme satırı okundu, tutarı 0.
+    ///
+    /// <para>⚠️ <b><c>reason</c> alanına YAZILMAZ, yalnız <c>info</c>'ya.</b> <c>reason:NOT_LANDED</c>
+    /// kurtarma yoklamasının cevabıdır ve platformda <c>notStarted</c> ("kart hiç çekilmedi, gönül
+    /// rahatlığıyla tekrar dene") üretir. Burada ise <c>FP3_Payment</c> ÇAĞRILDI ve bankadan cevap
+    /// gelmemiş olabilir; aynı kutuya koymak çift tahsilat üretirdi. Sebep ayrı alanda:
+    /// <see cref="NoResponse"/> / <see cref="BankDeclined"/>.</para>
+    /// </summary>
+    public const string NotLandedOnTicket = "NOT_LANDED";
+
+    /// <summary>
+    /// <b>reason:</b> bankadan cevap gelmedi (cihaz satırında <c>ErrorMsg "NO RESPONSE"</c>,
+    /// kullanılabilir uygulama kodu yok). Fişte para YOK ama bankada yetim provizyon KALABİLİR —
+    /// bu yüzden "tekrar dene" DENMEZ; nexo koşulu <c>UnreachableHost</c>.
+    /// </summary>
+    public const string NoResponse = "NO_RESPONSE";
+
+    /// <summary>
+    /// <b>reason:</b> banka açıkça reddetti (uygulama kodu var, ör. 2202 "İŞLEM ONAYLANMADI").
+    /// Para hiç hareket etmedi; nexo koşulu <c>Refusal</c>, tekrar güvenli.
+    /// </summary>
+    public const string BankDeclined = "BANK_DECLINED";
+
+    /// <summary>
     /// İptal YARIM KALDI: ödeme geri alınamadı ya da fiş kapanamadı. Kasiyere söylenmesi gereken
     /// cümle "iptal olmadı" DEĞİL, <b>"durum belirsiz, fişe dokunmayın, yönetici çağırın"</b>dır —
     /// tekrar denemek yarım kalmış bir ters işlemin üstüne ikinciyi bindirebilir.

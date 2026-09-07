@@ -330,8 +330,21 @@ public sealed record PaymentProbe(
     /// </summary>
     string? ErrorCondition = null,
 
-    /// <summary>Yoklamanın ürettiği <c>Restomenum.reason</c>; <c>null</c> ise çağıran belirler.</summary>
+    /// <summary>
+    /// Yoklamanın ürettiği <c>Restomenum.reason</c> — <b>cihazın hata sözlüğünden</b>
+    /// (<c>NO_RESPONSE</c> / <c>BANK_DECLINED</c>). <c>null</c> ise çağıran belirler.
+    /// </summary>
     string? Reason = null,
+
+    /// <summary>
+    /// Yoklamanın ürettiği <c>Restomenum.info</c> — durum etiketi (<c>NOT_LANDED</c>).
+    ///
+    /// <para><b>Neden <c>reason</c>'dan AYRI:</b> platform <c>reason:NOT_LANDED</c>'i
+    /// <c>notStarted</c> ("kart hiç çekilmedi, tekrar dene") diye okuyor. Fişe yazılmamış ama
+    /// bankadan cevap da gelmemiş bir denemeyi o kutuya koymak çift tahsilat üretirdi. Durum
+    /// <c>info</c>'da, SEBEP <c>reason</c>'da.</para>
+    /// </summary>
+    string? Info = null,
 
     /// <summary>Cihazın ham hata izi (<c>AdditionalResponse</c>) — teşhis metni, dallanma için DEĞİL.</summary>
     string? ProviderResultCode = null);

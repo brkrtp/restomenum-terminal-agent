@@ -237,7 +237,13 @@ public sealed class AgentOrchestrator
                         // "bankadan cevap gelmedi" (UnreachableHost) ayrımı yalnız cihazın ödeme
                         // satırında var. Taşıyamadığında eski varsayılan korunur.
                         ErrorCondition: sonuc.ErrorCondition ?? "PaymentRestriction",
-                        PaymentInvoked: true, Reason: sonuc.Reason ?? RestomenumReasons.NotLanded)
+                        PaymentInvoked: true,
+                        // `reason` yoklamadan gelirse CİHAZIN sebebidir (NO_RESPONSE/BANK_DECLINED);
+                        // gelmezse klasik "cihazda hiç oluşmadı" cevabı (`NOT_LANDED` = notStarted).
+                        Reason: sonuc.Reason ?? RestomenumReasons.NotLanded,
+                        // Durum etiketi ayrı alanda — `reason` ile karışırsa platform "tekrar dene"
+                        // der ve cevapsız kalmış bir deneme ikinci kez çekilir.
+                        Info: sonuc.Info)
                     // Kanıtsız: ilk koşul neyse o (2086 → UnreachableHost); yoksa belirsiz.
                     : ilk is null ? null : new TransportResult(TransportOutcome.Unknown,
                         ProviderResultCode: ilk.ProviderResultCode, ErrorCondition: ilk.ErrorCondition,
