@@ -26,7 +26,12 @@ public static class SaleToPoiResponseBuilder
     /// <paramref name="exponent"/> AuthorizedAmount'ı tel ondalığına çevirmek için (para biriminin
     /// minor basamağı, GET yanıtından; sabit değil).
     /// </summary>
-    public static string BuildResult(SaleToPoiRequest req, TransportResult result, int exponent, DateTimeOffset now)
+    /// <param name="taxMismatches">
+    /// Fişe BÖLÜMÜN oranıyla basılan ama ürünün beyan ettiği oran farklı olan kalemler (K-30).
+    /// <c>null</c> ya da boşsa alan hiç konmaz — "çelişki yok" ile "boş liste" ayrı beyanlar.
+    /// </param>
+    public static string BuildResult(SaleToPoiRequest req, TransportResult result, int exponent,
+        DateTimeOffset now, IReadOnlyList<TaxMismatch>? taxMismatches = null)
     {
         var (success, varsayilan) = MapOutcome(result.Outcome);
         // KAYNAK ÖNCELİĞİ: koşulu, kodu gören yer (`GmpErrorMap`) belirler; kova (`TransportOutcome`)
@@ -105,6 +110,21 @@ public static class SaleToPoiResponseBuilder
         // Kullanılan banka — YALNIZ ölçüldüyse. Alanın YOKLUĞU "banka bilinmiyor" demektir;
         // 0 ya da tahmini bir değer koymak paneli yanlış bankaya inandırırdı.
         if (result.UsedBankBkmId is int kb) ek["bankBkmId"] = kb;
+        // K-30: fişe bölümün oranı basıldı ama ürün başka oran beyan ediyor. Satış GEÇTİ;
+        // burası sapmanın sessiz kalmaması için. Birim alan adında: baz puan (2000 = %20).
+        if (taxMismatches is { Count: > 0 })
+        {
+            var dizi = new JsonArray();
+            foreach (var t in taxMismatches)
+                dizi.Add(new JsonObject
+                {
+                    ["productCode"] = t.ProductCode,
+                    ["productRateBasisPoints"] = t.ProductRateBasisPoints,
+                    ["departmentRateBasisPoints"] = t.DepartmentRateBasisPoints,
+                    ["departmentIndex"] = t.DepartmentIndex,
+                });
+            ek["taxMismatches"] = dizi;
+        }
         if (result.DeviceTicketTotalMinor is long dt) ek["deviceTicketTotalMinor"] = dt;
         if (result.DeviceRemainingMinor is long dk) ek["deviceRemainingMinor"] = dk;
         govde["Restomenum"] = ek;

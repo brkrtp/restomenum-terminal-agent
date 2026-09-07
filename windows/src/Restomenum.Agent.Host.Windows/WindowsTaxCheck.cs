@@ -86,11 +86,13 @@ public static class WindowsTaxCheck
             }
 
             // ⚠️ Kural BURADA YENİDEN YAZILMIYOR — satışın çağırdığı `TaxRule`'un aynısı.
+            // K-30'dan sonra sonucu değişti: bu artık RET değil UYARI. Satış geçer, fişe BÖLÜMÜN
+            // oranı basılır, ayrışma yanıtta `taxMismatches` ile bildirilir.
             if (TaxRule.Conflicts(k.TaxCode, deptRate))
             {
                 oran_celiskisi++;
-                log.LogWarning("RET  PROVIDER_CONFIG_INCOMPLETE  {Ad} — ürün %{U}, departman {D} %{DO}",
-                    ad, taxPct, m.Value.Index, deptRate / 100.0);
+                log.LogWarning("UYARI  {Ad} — satış GEÇER, fişe %{DO} basılır; ürün beyanı %{U}",
+                    ad, deptRate / 100.0, taxPct);
                 continue;
             }
 
@@ -98,10 +100,11 @@ public static class WindowsTaxCheck
             log.LogInformation("OK   {Ad} — departman {D}, iki taraf da %{U}", ad, m.Value.Index, taxPct);
         }
 
-        log.LogInformation("── ÖZET ── toplam={T} geçer={G} eşleme-yok={E} oran-çelişkisi={O} kontrol-edilemedi={A}",
+        log.LogInformation("── ÖZET ── toplam={T} geçer={G} eşleme-yok(RET)={E} oran-uyarısı={O} kontrol-edilemedi={A}",
             kalemler.Count, gecer, esleme_yok, oran_celiskisi, atlanan);
 
-        // Çıkış kodu: reddedilecek kalem varsa 1. Betikten koşulabilsin.
-        return esleme_yok == 0 && oran_celiskisi == 0;
+        // Çıkış kodu YALNIZ gerçek retlerde 1 (K-30). Oran çelişkisi artık satışı düşürmüyor;
+        // uyarıyı hata sayarsak betikler çalışan bir kurulumu "bozuk" diye raporlar.
+        return esleme_yok == 0;
     }
 }

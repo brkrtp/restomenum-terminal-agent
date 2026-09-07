@@ -7,6 +7,25 @@ namespace Restomenum.Agent.Core;
 /// başlatmada "benim ödemem işlendi mi" sorusu cevaplanamaz — çözülebilir bir vaka gereksiz yere
 /// insana çıkar. <see cref="CommandStore"/> bunu uygular.</para>
 /// </summary>
+/// <summary>
+/// Ürünün beyan edilen KDV oranı ile fişe basılan bölüm oranının AYRIŞTIĞI bir kalem (K-30).
+///
+/// <para><b>Bu bir ret değil, BEYAN.</b> Kullanıcı kararı (2026-09-07): <i>"Eklenti ürünlerin kdv
+/// oranını değiştirmesin zaten, terminal uygulaması bizim beyanımıza göre işlesin."</i> Mali belge
+/// ÖKC fişidir ve fişin oranını bölüm belirler; katalogdaki oran menü verisidir. İşletme "bu bölüm
+/// %20" diyorsa fiş %20 basılır.</para>
+///
+/// <para><b>Ama sapma SESSİZ kalmaz:</b> ayrışan her kalem burada sayılır ve yanıtla birlikte
+/// platforma gider. Önceki davranış (satışı reddetmek) fişle defteri hizada tutuyordu ama
+/// işletmeyi çalıştırmıyordu; sessizce geçirmek ise hizasızlığı görünmez kılardı. Üçüncü yol:
+/// geçir ve BİLDİR.</para>
+///
+/// <para>İki oran da <b>baz puan</b> (2000 = %20). Birim alan adında yazılı — bugün üç ayrı yerde
+/// birim karışıklığı yaşandı, adın kendisi belge olsun.</para>
+/// </summary>
+public readonly record struct TaxMismatch(
+    string ProductCode, int ProductRateBasisPoints, int DepartmentRateBasisPoints, int DepartmentIndex);
+
 /// <summary>Bir fişe düşmüş ödeme kaydı — cihazın tablosu değil, BİZİM defterimiz.</summary>
 /// <param name="MethodType">DLL ödeme tipi: 1=nakit, 4=kart, 16=mobil/QR.</param>
 public readonly record struct TicketPaymentRow(

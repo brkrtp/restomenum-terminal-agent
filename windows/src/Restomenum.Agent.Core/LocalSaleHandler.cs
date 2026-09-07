@@ -377,6 +377,9 @@ public sealed class LocalSaleHandler
         }
 
         var lines = new List<FiscalLine>();
+        // Ayrışan kalemler — YOKSA null kalır ve yanıta alan KONMAZ ("çelişki yok" ile
+        // "boş liste" ayrı beyanlar olmasın diye).
+        List<TaxMismatch>? taxMismatches = null;
         foreach (var item in d.Items)
         {
             var match = _departments.Resolve(item.ProductCode, item.CategoryId);
@@ -399,18 +402,26 @@ public sealed class LocalSaleHandler
             // yakala: TaxCode YÜZDE-string ("10"), departman oranı BAZ-PUAN (1000) — birim dönüşümüyle
             // karşılaştır. Oran bilinmiyorsa (cihaz tablosu yok) ya da TaxCode sayı değilse doğrulama atlanır
             // (naif değil: yalnız gerçek, sayısal çelişkide ret; her kalemi düşürmez).
-            // Kural `TaxRule`'da TEK yerde: kuru prova (`--check-tax`) aynı çağrıyı yapıyor.
-            // İki yerde yazsaydık prova "geçer" derken satış reddedebilirdi.
-            if (TaxRule.Conflicts(item.TaxCode, m.TaxRateBasisPoints))
+            // ── K-30: ÇELİŞKİ ARTIK REDDETMİYOR, BİLDİRİYOR ─────────────────────────
+            // Kullanıcı kararı: "Eklenti ürünlerin kdv oranını değiştirmesin zaten, terminal
+            // uygulaması bizim beyanımıza göre işlesin." Yani ESAS olan cihaz eşlemesi; fişe
+            // bölümün oranı basılır ve bu istenen davranıştır — mali belge ÖKC fişidir.
+            //
+            // Önceki hâl (ret) fişle defteri hizada tutuyordu ama işletmeyi çalıştırmıyordu:
+            // 88 üründen 87'si satılamıyordu. Sessizce geçirmek de olmazdı — hizasızlık
+            // görünmez kalırdı. Üçüncü yol: GEÇİR ve HER SATIRI BİLDİR.
+            //
+            // Kural (`TaxRule`) DEĞİŞMEDİ, yalnız sonucu değişti: ret değil kayıt. Kuru prova
+            // (`--check-tax`) da aynı çağrıyı yapıyor, iki taraf ıraksayamaz.
+            if (TaxRule.Conflicts(item.TaxCode, m.TaxRateBasisPoints)
+                && m.TaxRateBasisPoints is int deptRate
+                && int.TryParse(item.TaxCode, out var urunYuzde))
             {
-                var deptRate = m.TaxRateBasisPoints;
-                var reddi = SaleToPoiResponseBuilder.BuildFailure(req, "PaymentRestriction",
-                    $"PROVIDER_CONFIG_INCOMPLETE:{item.ProductCode}", _now(),
-                    RestomenumReasons.ProviderConfigIncomplete, productCode: item.ProductCode);
-                await NotifyAsync(req.PaymentId, reddi, ct);
-                _log("[yerel] departman KDV'si TaxCode ile çelişiyor — terminale gidilmedi (mali sapma önlendi)",
-                    new { req.PaymentId, item.ProductCode, item.TaxCode, deptRate, dept = m.Index });
-                return reddi;
+                (taxMismatches ??= new()).Add(new TaxMismatch(
+                    item.ProductCode, urunYuzde * 100, deptRate, m.Index));
+                _log("[uyarı] KDV çelişkisi — fişe BÖLÜMÜN oranı basılacak (K-30: ret değil bildirim)",
+                    new { req.PaymentId, item.ProductCode, urunOrani = urunYuzde * 100,
+                          bolumOrani = deptRate, dept = m.Index });
             }
             lines.AddRange(FiscalLineBuilder.Build(item, m.Index));
         }
@@ -451,7 +462,7 @@ public sealed class LocalSaleHandler
 
         // 4. Gövdeyi kur; ÖNCE platforma bildir, SONRA kasaya dön.
         var sonuc = ToTransportResult(outcome);
-        var body = SaleToPoiResponseBuilder.BuildResult(req, sonuc, d.Exponent, _now());
+        var body = SaleToPoiResponseBuilder.BuildResult(req, sonuc, d.Exponent, _now(), taxMismatches);
         await NotifyAsync(req.PaymentId, body, ct);
         _log("[yerel] sonuç", new { req.PaymentId, decision = outcome.Decision.ToString(), state = outcome.State.ToString() });
 

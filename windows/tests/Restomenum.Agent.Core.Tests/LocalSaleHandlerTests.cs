@@ -220,17 +220,18 @@ public class LocalSaleHandlerTests : IDisposable
     // ── W27: RET GÖVDESİNDE ÜRÜN ADRESİ ─────────────────────────────────────────
 
     [Fact]
-    public async Task Oran_celiskisinde_HANGI_URUN_oldugu_makine_okunur_gider()
+    public async Task Eslemesiz_urunde_HANGI_URUN_oldugu_makine_okunur_gider()
     {
         // ← ÇİVİ: kasiyer "ayar eksik" görüp ne yapacağını bilemiyordu. Kod `AdditionalResponse`
         // içinde de var ama orası serbest teşhis metni; kasanın oradan ayrıştırması kırılgan olur.
-        var (h, sim, _) = Kur(new PaymentDetailResult.Ok(Detail()), rate: 2000);   // departman %20
+        // (K-30'dan sonra bu çivi ORAN çelişkisinde değil, EŞLEMESİZ üründe geçerli.)
+        var (h, sim, _) = Kur(new PaymentDetailResult.Ok(Detail()), dept: null);
 
         var govde = await h.HandleAsync(Req());
         var ek = JsonDocument.Parse(govde).RootElement
             .GetProperty("SaleToPOIResponse").GetProperty("Restomenum");
 
-        Assert.Equal("PROVIDER_CONFIG_INCOMPLETE", ek.GetProperty("reason").GetString());
+        Assert.Equal("PRODUCT_UNMAPPED", ek.GetProperty("reason").GetString());
         Assert.Equal("p1", ek.GetProperty("productCode").GetString());     // ← ÇİVİ
         Assert.False(ek.GetProperty("paymentInvoked").GetBoolean());
         Assert.Empty(sim.SaleCalls);                                        // terminale GİDİLMEDİ
@@ -408,19 +409,64 @@ public class LocalSaleHandlerTests : IDisposable
     }
 
     [Fact]
-    public async Task Departman_KDVsi_TaxCode_ile_celisirse_terminale_GITMEZ_mali_sapma_onlenir()
+    public async Task KDV_celiskisi_satisi_DUSURMEZ_ama_BILDIRILIR()
     {
-        // Detail() SaleLine TaxCode="10" (%10). Departman oranı 2000 (%20) → 10*100=1000 ≠ 2000 → ret.
-        // Fişte %20, defterde %10 olur ve hiçbir kapı yakalamaz; §30.12 doğrulaması burada durdurur.
-        var (h, sim, notifier) = Kur(new PaymentDetailResult.Ok(Detail()), dept: 0, rate: 2000);
+        // ⚠️ DAVRANIŞ DEĞİŞTİ (K-30, kullanıcı kararı 2026-09-07): "Eklenti ürünlerin kdv oranını
+        // değiştirmesin zaten, terminal uygulaması bizim beyanımıza göre işlesin."
+        //
+        // ÖNCEDEN: bu durumda satış REDDEDİLİYORDU (`PROVIDER_CONFIG_INCOMPLETE`), gerekçesi
+        // fişe %20 basılıp deftere %10 yazılmasını engellemekti. Gerekçe hâlâ geçerli ama karar
+        // değişti: mali belge ÖKC fişidir, oranı bölüm belirler, katalogdaki oran menü verisidir.
+        // Eski hâlin sahadaki bedeli ölçüldü: 88 üründen 87'si satılamıyordu.
+        //
+        // ← ÇİVİ: sapma SESSİZ kalmaz. Satış geçer AMA ayrışan her kalem yanıtta sayılır.
+        var (h, sim, notifier) = Kur(new PaymentDetailResult.Ok(Detail()), dept: 0, rate: 2000,
+            terminal: new TransportResult(TransportOutcome.Approved, ApprovedAmountMinor: 24000));
+
+        var govde = await h.HandleAsync(Req());
+        var resp = Resp(govde);
+        var ek = JsonDocument.Parse(govde).RootElement
+            .GetProperty("SaleToPOIResponse").GetProperty("Restomenum");
+
+        Assert.Equal("Success", resp.GetProperty("Result").GetString());
+        Assert.Single(sim.SaleCalls);                       // terminale GİTTİ
+
+        var sapmalar = ek.GetProperty("taxMismatches").EnumerateArray().ToList();
+        var t = Assert.Single(sapmalar);
+        Assert.Equal("p1", t.GetProperty("productCode").GetString());
+        Assert.Equal(1000, t.GetProperty("productRateBasisPoints").GetInt32());      // ürün %10
+        Assert.Equal(2000, t.GetProperty("departmentRateBasisPoints").GetInt32());   // fişe %20
+        Assert.Equal(0, t.GetProperty("departmentIndex").GetInt32());
+    }
+
+    [Fact]
+    public async Task KDV_celiskisi_YOKSA_taxMismatches_alani_HIC_KONMAZ()
+    {
+        // ← ÇİVİ: "çelişki yok" ile "boş liste" ayrı beyanlar. Boş dizi göndermek, platformun
+        // "sapma kontrolü çalıştı ve temiz" ile "alan hiç gelmedi"yi ayırmasını engellerdi.
+        var (h, _, _) = Kur(new PaymentDetailResult.Ok(Detail()), dept: 10, rate: 1000,
+            terminal: new TransportResult(TransportOutcome.Approved, ApprovedAmountMinor: 24000));
+
+        var govde = await h.HandleAsync(Req());
+        var ek = JsonDocument.Parse(govde).RootElement
+            .GetProperty("SaleToPOIResponse").GetProperty("Restomenum");
+
+        Assert.False(ek.TryGetProperty("taxMismatches", out _));
+    }
+
+    [Fact]
+    public async Task Esleme_YOKSA_hala_REDDEDILIR_K30_bunu_degistirmedi()
+    {
+        // ← ÇİVİ: K-30 yalnız ORAN çelişkisini bildirime çevirdi. Eşlemesiz ürün hâlâ ret:
+        // departmanı bilinmeyen bir kalemi uydurulmuş bir bölüme yazmak, yanlış mali kayıt
+        // demektir ve bunun bir "beyanı" da yoktur.
+        var (h, sim, _) = Kur(new PaymentDetailResult.Ok(Detail()), dept: null);
 
         var resp = Resp(await h.HandleAsync(Req()));
+
         Assert.Equal("Failure", resp.GetProperty("Result").GetString());
-        Assert.Equal("PaymentRestriction", resp.GetProperty("ErrorCondition").GetString());
-        Assert.Contains("PROVIDER_CONFIG_INCOMPLETE", resp.GetProperty("AdditionalResponse").GetString());
-        Assert.Contains("p1", resp.GetProperty("AdditionalResponse").GetString());   // HANGİ ürün
-        Assert.Empty(sim.SaleCalls);         // terminale GİTMEDİ (mali sapma önlendi)
-        Assert.Single(notifier.Bodies);      // GET ACCEPTED'dı → takılı kalmasın diye bildir
+        Assert.Contains("PRODUCT_UNMAPPED", resp.GetProperty("AdditionalResponse").GetString());
+        Assert.Empty(sim.SaleCalls);
     }
 
     [Fact]
