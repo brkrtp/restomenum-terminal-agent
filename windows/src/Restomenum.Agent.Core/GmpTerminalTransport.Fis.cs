@@ -142,7 +142,19 @@ public sealed partial class GmpTerminalTransport
         {
             ("PrintTotalsAndPayments", () => _gmp.PrintTotalsAndPayments(handle)),
             ("PrintBeforeMF", () => _gmp.PrintBeforeMF(handle)),
-            ("PrintUserMessage", () => _gmp.PrintUserMessage(handle)),
+            // ── W50: `PrintUserMessage` ÇIKARILDI ─────────────────────────────────
+            // Ajan bu adımı BOŞ bir mesajla çağırıyordu (`GmpWrapper`: varsayılan
+            // `ST_USER_MESSAGE`), yani basılan bir kullanıcı mesajı YOKTU — ama 14 kapanış
+            // üzerinden ölçülen maliyeti **353 ms** (338–378), zincirin %11'i, her tam ödemede.
+            //
+            // Mali kapanış için gerekli DEĞİL: sertifikalı referansın üç kapanış yolundan İKİSİNDE
+            // bu adım hiç yok (`restomenum.gmp3/Controllers/DLLController.cs:508-525` ve
+            // `ClosePaidTicket()` ~1212). Ajan, adımı içeren üçüncü yolu (satır 907-947)
+            // kopyalamıştı.
+            //
+            // ⚠️ Kalan üç adım ZORUNLU ve sırası değişmez: `PrintBeforeMF` fişi mali hafızaya
+            // yazan taahhüt noktası (ondan sonra `VoidAll` 2357 döner), `PrintMF` fiziksel basım,
+            // `PrintTotalsAndPayments` üçünün de ilk adımı.
         })
         {
             var r = cagri();

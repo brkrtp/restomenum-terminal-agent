@@ -625,11 +625,17 @@ public class GmpTerminalTransportTests
         // ⚠️ Sıraya `Payment` ile baskı arasında bir OptionFlags+GetTicket EKLENDİ (K-26): fiş
         // kapanınca deftere yazılacak ödeme satırları kapatMADAN ÖNCE okunmalı — `Close` sonrası
         // fiş erişilemez olur ve o satırların kaynağı kaybolur.
+        // W50: `PrintUserMessage` zincirden ÇIKARILDI — BOŞ mesajla çağrılıyordu ve 14 kapanış
+        // üzerinden 353 ms tutuyordu; sertifikalı referansın iki kapanış yolunda hiç yok.
         Assert.Equal(
             new[] { "Start", "TicketHeader", "OptionFlags", "ItemSale", "GetTicket", "Payment",
                     "OptionFlags", "GetTicket",
-                    "PrintTotalsAndPayments", "PrintBeforeMF", "PrintUserMessage", "PrintMF", "Close" },
+                    "PrintTotalsAndPayments", "PrintBeforeMF", "PrintMF", "Close" },
             g.Calls);
+        // ← ÇİVİ: kalan üç baskı adımı ZORUNLU ve bu SIRADA olmalı. `PrintBeforeMF` fişi mali
+        // hafızaya yazan taahhüt noktası; ondan önce `PrintMF`'e geçilirse fiş mali kayda hiç
+        // girmez, sonra `VoidAll` denenirse 2357 alınır.
+        Assert.DoesNotContain("PrintUserMessage", g.Calls);
         Assert.Equal("CLOSED", r.TicketState);
     }
 
