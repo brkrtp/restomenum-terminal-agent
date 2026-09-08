@@ -1173,6 +1173,52 @@ public class GmpTerminalTransportTests
         Assert.Equal(1, g.Calls.Count(c => c == "Payment"));
     }
 
+    // ── W41: DEVAM YOLUNDA FİŞ İKİ KEZ OKUNMUYOR ────────────────────────────────
+
+    [Fact]
+    public async Task Devam_yolunda_fis_odeme_oncesi_BIR_KEZ_okunur()
+    {
+        // ← ÇİVİ: `DevamDogrula` fişi zaten okudu; o okumadan ödemeye kadar cihaza başka çağrı
+        // gitmiyor (kalem/başlık bloğu devam yolunda atlanıyor). İkinci `GetTicket` aynı sayıyı
+        // ikinci kez sormaktan ibaretti — sahada ölçülen ~345 ms'lik bir cihaz turu.
+        //
+        // Yeniden kullanım kaldırılırsa ödeme ÖNCESİNDEKİ GetTicket sayısı 2'ye çıkar ve bu
+        // test kırılır.
+        var (t, g, snap) = Kur();
+        snap.BindOpenTicket("t1", "oturum-A");
+        g.StartSequence.Enqueue(GmpCodes.AlreadyDone);
+        g.Ticket = new GmpTicket(990, 500, 1, GmpPaymentTypes.Cash);
+        g.AfterPayment = new GmpTicket(990, 990, 2, GmpPaymentTypes.Cash);
+
+        await t.SaleAsync(Req(amount: 490, paymentType: GmpPaymentTypes.Cash,
+            oturum: "oturum-A", satisToplam: 990));
+
+        var odeme = g.Calls.IndexOf("Payment");
+        Assert.True(odeme >= 0, "Payment çağrılmadı");
+        Assert.Equal(1, g.Calls.Take(odeme).Count(c => c == "GetTicket"));
+    }
+
+    [Fact]
+    public async Task Devam_yolunda_okuma_atlansa_da_anlik_goruntu_YAZILIR()
+    {
+        // ← ÇİVİ: W41 "okumayı atla" değil, "okunanı yeniden kullan". Anlık görüntü düşerse
+        // belirsizlik çözümü (P34/W25) dayanaksız kalır: ödeme yanıtsız bitince "cihazda ne oldu"
+        // sorusunu karşılaştıracak bir taban kalmaz.
+        var (t, g, snap) = Kur();
+        snap.BindOpenTicket("t1", "oturum-A");
+        g.StartSequence.Enqueue(GmpCodes.AlreadyDone);
+        g.Ticket = new GmpTicket(990, 500, 1, GmpPaymentTypes.Cash);
+        g.AfterPayment = new GmpTicket(990, 990, 2, GmpPaymentTypes.Cash);
+
+        await t.SaleAsync(Req(amount: 490, paymentType: GmpPaymentTypes.Cash,
+            oturum: "oturum-A", satisToplam: 990, komut: "c-devam"));
+
+        var g2 = snap.ReadSnapshot("c-devam");
+        Assert.NotNull(g2);
+        // ÖDEMEDEN ÖNCEKİ hâl yazılmış olmalı (990/500/1), ödemeden sonraki (990/990/2) DEĞİL.
+        Assert.Equal((990L, 500L, 1, "oturum-A"), g2!.Value);
+    }
+
     [Fact]
     public async Task Devam_yolunda_TAM_odemede_fis_kapanir_ve_bag_silinir()
     {

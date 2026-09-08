@@ -82,6 +82,7 @@ public sealed class GmpTerminalTransport : ITerminalTransport
         string? bilgi = null;
         string? fisId = null;                         // fisin kalici kimligi (P27)
         var devam = false;                            // AYNI satisin acik fisine odeme ekleme
+        GmpTicket? devamFisi = null;                  // W41: `DevamDogrula`'nin OKUDUGU fis
         var r = _gmp.Start(out var handle);
 
         if (r.Code == GmpCodes.AlreadyDone)
@@ -98,9 +99,10 @@ public sealed class GmpTerminalTransport : ITerminalTransport
 
             if (ayniSatis)
             {
-                var engel = DevamDogrula(handle, request);
+                var engel = DevamDogrula(handle, request, out var okunanFis);
                 if (engel is not null) return engel;
                 devam = true;
+                devamFisi = okunanFis;                // W41: asagida anlik goruntu olarak kullanilacak
                 _handle = handle;
                 // Kimlik fis ACILISINDA uretildi; devam yolunda YENIDEN uretilmez, OKUNUR.
                 // Uretilseydi ayni fisin odemeleri iki ayri fise bolunur ve kapanis listesi
@@ -162,10 +164,28 @@ public sealed class GmpTerminalTransport : ITerminalTransport
         }
 
         // ── ANLIK GÖRÜNTÜ: belirsizlik çözümünün tek dayanağı ────────────────────
-        if (_gmp.GetTicket(handle, out var once).Ok)
+        //
+        // W41 — DEVAM yolunda fiş ZATEN okundu, ikinci kez okumuyoruz.
+        //
+        // <para><b>Neden geçerli:</b> `DevamDogrula` fişi AYNI kilit kapsamında okuyor
+        // (`LocalSaleHandler._islemKilidi`, satış boyunca tutuluyor) ve o okumadan bu satıra kadar
+        // cihaza TEK BİR çağrı gitmiyor: aradaki her şey yerel (bağ okuması, günlük), üstteki
+        // `TicketHeader`/`OptionFlags`/`ItemSale`/`BindOpenTicket` bloğu ise `devam` yolunda
+        // ATLANIYOR. Yani iki okuma arasında fişin değişmesi mümkün değil.</para>
+        //
+        // <para><b>Ne kazanıyor:</b> sahada ölçülen ~345 ms'lik bir cihaz turu. Kısmi ödeme
+        // Türkiye'de normal olduğu için bu, her ek ödemede kasiyerin beklediği süreden düşüyor.</para>
+        //
+        // <para>⚠️ <b>Varsayım TEK bir koşula bağlı: arada cihaz çağrısı olmaması.</b> Buraya yeni
+        // bir cihaz adımı eklenirse varsayım SESSİZCE bozulur — anlık görüntü bayatlar, belirsizlik
+        // çözümünün (P34/W25) tek dayanağı o olduğu için bayat sayı yanlış "ödendi/ödenmedi"
+        // kararına dönüşür. Yeni adım eklerken bu bloğa bakın.</para>
+        var anlik = devamFisi;
+        if (anlik is null && _gmp.GetTicket(handle, out var once).Ok) anlik = once;
+        if (anlik is GmpTicket ag)
         {
             _snapshots?.SaveSnapshot(request.CommandId,
-                once.TotalAmountMinor, once.PaidAmountMinor, once.PaymentCount, request.SaleSessionId);
+                ag.TotalAmountMinor, ag.PaidAmountMinor, ag.PaymentCount, request.SaleSessionId);
         }
 
         // ── ÖDEME: kartta 20–32 sn bloke eder ────────────────────────────────────
@@ -304,10 +324,15 @@ public sealed class GmpTerminalTransport : ITerminalTransport
     /// ayni oldugunu SOYLEMEZ. Kasiyer kismi odemeden sonra kalem eklemis/silmisse, devam etmek
     /// fise yanlis tutarda odeme yazmaktir - mali kayit bozulur ve geri alinamaz.</para>
     /// </summary>
-    private TransportResult? DevamDogrula(ulong handle, SaleRequest request)
+    /// <param name="fis">
+    /// Bu metodun OKUDUĞU fiş (W41). Dönüş <c>null</c> ise — yani devam edilebiliyorsa — çağıran
+    /// bunu anlık görüntü olarak yeniden kullanır ve <b>ikinci bir <c>GetTicket</c> yapmaz</b>.
+    /// Hata dönüşlerinde de atanmıştır ama anlamı yoktur (okuma başarısızsa boş kayıt).
+    /// </param>
+    private TransportResult? DevamDogrula(ulong handle, SaleRequest request, out GmpTicket fis)
     {
         var of = _gmp.OptionFlags(handle, GmpEchoFlags.Reload);
-        var gt = _gmp.GetTicket(handle, out var fis);
+        var gt = _gmp.GetTicket(handle, out fis);
         if (!of.Ok || !gt.Ok)
             return Hata(TransportOutcome.Declined, $"TICKET_READ_FAILED:{of}/{gt}",
                 "PaymentRestriction", RestomenumReasons.TicketAlreadyOpen);
