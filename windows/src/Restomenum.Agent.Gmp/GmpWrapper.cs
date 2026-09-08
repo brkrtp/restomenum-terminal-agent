@@ -17,7 +17,7 @@ namespace Restomenum.Agent.Gmp;
 ///
 /// <para><b>Deploy:</b> <c>GmpSmartDLL.dll</c> ve <c>GMP.XML</c> çalışan sürecin dizininde olmalı.</para>
 /// </summary>
-public sealed class GmpWrapper : IGmpWrapper
+public sealed partial class GmpWrapper : IGmpWrapper
 {
     private const int TimeoutDefault = 10000;
     private const int TimeoutCard    = 90000;   // FP3_Payment

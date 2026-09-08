@@ -25,13 +25,15 @@ bool cancelModu = cancelIdx >= 0;
 string? cancelOturum = cancelIdx >= 0 && cancelIdx + 1 < args.Length
     && !args[cancelIdx + 1].StartsWith("--", StringComparison.Ordinal) ? args[cancelIdx + 1] : null;
 // --check-tax <dosya>: KURU PROVA — cihaza dokunmadan hangi kalemin reddedileceğini söyler.
+bool probeMultiModu = args.Contains("--probe-multi");
 var taxIdx = Array.IndexOf(args, "--check-tax");
 string? taxDosya = taxIdx >= 0 && taxIdx + 1 < args.Length ? args[taxIdx + 1] : null;
 var configArgs = args
     .Where(a => a != "--pair" && a != "--void" && a != "--config-smoke" && a != "--ticket"
              && a != "--onayla" && a != "--payment-apps" && a != "--retract" && a != retractKomut
              && a != "--cancel-ticket" && a != cancelOturum
-             && a != "--check-tax" && a != taxDosya)
+             && a != "--check-tax" && a != taxDosya
+             && a != "--probe-multi")
     .ToArray();
 
 var builder = Host.CreateApplicationBuilder(configArgs);
@@ -75,6 +77,15 @@ if (ticketModu)
 if (paymentAppsModu)
 {
     Environment.ExitCode = WindowsPaymentApps.Run(host.Services) ? 0 : 1;
+    return;
+}
+
+// PROVA (--probe-multi): toplu komut (prepare_* + FP3_MultipleCommand) ÖLÇÜMÜ ve çıkar (W42b).
+// `--onayla` YOKSA cihaza TEK BİR çağrı bile gitmez — yalnız yerel tampon ölçümü koşar.
+// Üretim satış yoluna dokunmaz; hiçbir tabloya yazmaz.
+if (probeMultiModu)
+{
+    Environment.ExitCode = WindowsProbeMulti.Run(host.Services, cihazaGit: voidOnayi) ? 0 : 1;
     return;
 }
 
