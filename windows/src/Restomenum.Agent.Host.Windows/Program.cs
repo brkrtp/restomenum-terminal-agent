@@ -26,6 +26,7 @@ string? cancelOturum = cancelIdx >= 0 && cancelIdx + 1 < args.Length
     && !args[cancelIdx + 1].StartsWith("--", StringComparison.Ordinal) ? args[cancelIdx + 1] : null;
 // --check-tax <dosya>: KURU PROVA — cihaza dokunmadan hangi kalemin reddedileceğini söyler.
 bool probeMultiModu = args.Contains("--probe-multi");
+bool probeAllocModu = args.Contains("--probe-alloc");
 var taxIdx = Array.IndexOf(args, "--check-tax");
 string? taxDosya = taxIdx >= 0 && taxIdx + 1 < args.Length ? args[taxIdx + 1] : null;
 var configArgs = args
@@ -33,7 +34,7 @@ var configArgs = args
              && a != "--onayla" && a != "--payment-apps" && a != "--retract" && a != retractKomut
              && a != "--cancel-ticket" && a != cancelOturum
              && a != "--check-tax" && a != taxDosya
-             && a != "--probe-multi")
+             && a != "--probe-multi" && a != "--probe-alloc")
     .ToArray();
 
 var builder = Host.CreateApplicationBuilder(configArgs);
@@ -43,6 +44,14 @@ var builder = Host.CreateApplicationBuilder(configArgs);
 if (configSmoke)
 {
     Environment.ExitCode = await WindowsConfigSmoke.RunAsync(builder.Configuration) ? 0 : 1;
+    return;
+}
+
+// --probe-alloc: W42b çökmesinin izolasyonu. CİHAZA HİÇ DOKUNMAZ, DI kurmaz, yönetici istemez.
+// Tam DI'dan ÖNCE kısa devre — çalışan ajanın hiçbir şeyine değmez.
+if (probeAllocModu)
+{
+    Environment.ExitCode = WindowsAllocProbe.Run() ? 0 : 1;
     return;
 }
 

@@ -45,51 +45,65 @@ public sealed partial class GmpWrapper
         // cihazın kabul edip etmediği ÖLÇÜLMEDİ, o yüzden uydurmuyoruz.
         const int TamponBoyu = 24564;
         var adimlar = new List<(int, int, int)>();
-        var tampon = new byte[TamponBoyu];
         var uniqueId = new byte[24];
         var userData = new byte[] { 0x74, 0x65, 0x73, 0x74, 0x64, 0x61, 0x74, 0x61 };   // "testdata"
 
-        var rStart = GMPSmartDLL.prepare_Start(tampon, TamponBoyu, uniqueId, uniqueId.Length,
+        // ⚠️ ÖLÇÜLDÜ (2026-09-08 20:26, ilk Faz A koşusu): `prepare_*` BİRİKTİRMİYOR. Her çağrı
+        // verilen tamponu OFFSET 0'DAN itibaren yeniden yazıyor ve DÖNÜŞ DEĞERİ o TEK komutun
+        // bayt uzunluğu. Kanıt: Start→58, TicketHeader→17, OptionFlags→33 çağrıldığında tamponun
+        // dolu uzunluğu 57'de KALDI (sonraki komutlar öncekinin üstüne yazdı), ItemSale→72'de 72
+        // oldu. Yani paketi ÇAĞIRAN birleştirmek zorunda.
+        //
+        // (İlk denememde biriktirdiğini varsaymıştım; o varsayımla kurulan tampon YALNIZ son
+        // komutu taşıyordu — `Start` olmadan gönderilseydi cihaza anlamsız bir paket giderdi.)
+        var parca = new byte[TamponBoyu];
+        var paket = new byte[TamponBoyu];
+        var uzunluk = 0;
+
+        int Ekle(int n)
+        {
+            if (n <= 0 || uzunluk + n > TamponBoyu) return -1;
+            Buffer.BlockCopy(parca, 0, paket, uzunluk, n);
+            uzunluk += n;
+            return n;
+        }
+
+        var rStart = GMPSmartDLL.prepare_Start(parca, TamponBoyu, uniqueId, uniqueId.Length,
             null!, 0, userData, userData.Length);
-        adimlar.Add((-3, rStart, SonDolu(tampon)));
+        Ekle(rStart);
+        adimlar.Add((-3, rStart, uzunluk));
 
-        var rHeader = GMPSmartDLL.prepare_TicketHeader(tampon, TamponBoyu, (TTicketType)1);
-        adimlar.Add((-2, rHeader, SonDolu(tampon)));
+        var rHeader = GMPSmartDLL.prepare_TicketHeader(parca, TamponBoyu, (TTicketType)1);
+        Ekle(rHeader);
+        adimlar.Add((-2, rHeader, uzunluk));
 
-        var rFlags = GMPSmartDLL.prepare_OptionFlags(tampon, TamponBoyu, 7, 0);
-        adimlar.Add((-1, rFlags, SonDolu(tampon)));
+        var rFlags = GMPSmartDLL.prepare_OptionFlags(parca, TamponBoyu, 7, 0);
+        Ekle(rFlags);
+        adimlar.Add((-1, rFlags, uzunluk));
 
-        var onek = SonDolu(tampon);
+        var onek = uzunluk;
 
-        // Kalemleri BİRER BİRER ekleyip uzunluğun nasıl büyüdüğünü ölç; tampon dolunca dur.
+        // Kalemleri BİRER BİRER ekleyip paketin nasıl büyüdüğünü ölç; tampon dolunca dur.
         int kalem = 0, sigan = 0;
-        while (kalem < 300)
+        while (kalem < 400)
         {
             var st = ProvaKalemi(deptIndex, kalem + 1);
-            var onceki = SonDolu(tampon);
-            var r = Json_GMPSmartDLL.prepare_ItemSale(tampon, TamponBoyu, ref st);
-            var sonra = SonDolu(tampon);
-            if (sonra <= onceki)
+            var r = Json_GMPSmartDLL.prepare_ItemSale(parca, TamponBoyu, ref st);
+            if (Ekle(r) < 0)
             {
-                Yaz($"[fazA] prepare_ItemSale tamponu BUYUTMEDI (kalem {kalem + 1}, donus={r}) — sinir burada");
+                Yaz($"[fazA] {kalem + 1}. kalem SIGMADI (komut={r} bayt, paket={uzunluk}/{TamponBoyu}) — sinir burada");
                 break;
             }
             kalem++; sigan = kalem;
-            if (kalem <= 3 || kalem is 5 or 10 or 20 or 50 or 100 or 200) adimlar.Add((kalem, r, sonra));
+            if (kalem <= 3 || kalem is 5 or 10 or 20 or 50 or 100 or 200) adimlar.Add((kalem, r, uzunluk));
         }
 
-        var dolu = SonDolu(tampon);
-        var kalemBasina = kalem > 0 ? (dolu - onek) / (double)kalem : 0;
+        var kalemBasina = kalem > 0 ? (uzunluk - onek) / (double)kalem : 0;
 
-        // `prepare_*` dönüşünün ANLAMI: satıcı sarmalayıcısı 0'ı başarı sayıyor (GmpInterop.cs:2972)
-        // ama GMP izinde native fonksiyon UZUNLUK döndürüyor ("prepare_OptionFlags (return:33)").
-        // İkisi tutarsız — hangisi olduğunu TAHMİN ETMİYORUZ, ölçümden söylüyoruz.
-        var donusler = adimlar.Select(a => a.Item2).ToList();
-        var anlam = donusler.All(x => x == 0) ? "hep 0 -> 'basari' bayragi"
-            : donusler.SequenceEqual(donusler.OrderBy(x => x)) && donusler.Distinct().Count() > 1
-                ? "artiyor -> BIRIKIMLI tampon uzunlugu"
-                : "karisik -> adim basina uzunluk (tabloya bakin)";
-        Yaz($"[fazA] onek={onek} bayt · kalem basina~{kalemBasina:F1} bayt · {TamponBoyu} bayta {sigan} kalem sigdi · donus anlami: {anlam}");
+        // Dönüşün anlamı artık ÖLÇÜLDÜ, tahmin değil.
+        var anlam = "TEK komutun bayt uzunlugu (biriktirmez; offset 0'dan yeniden yazar)";
+        Yaz($"[fazA] onek={onek} bayt (Start {rStart} + Header {rHeader} + Flags {rFlags}) · " +
+            $"kalem basina={kalemBasina:F1} bayt · {TamponBoyu} bayta {sigan} kalem sigdi");
 
         var bosKodlar = Array.Empty<(uint, uint, uint, ushort, ushort)>();
         if (!cihazaGit)
@@ -102,14 +116,22 @@ public sealed partial class GmpWrapper
                 false, 0xF000, 0, 0, 0, bosKodlar, 0, 0, 0, "arayuz alinamadi — cihaza dokunulmadi");
 
         // ── FAZ B: TEK KALEM ─────────────────────────────────────────────────────
-        // Tampon SIFIRDAN kurulur; yukarıdaki 300 kalemlik ölçüm tamponu GÖNDERİLMEZ.
+        // Paket SIFIRDAN kurulur; yukarıdaki 400 kalemlik ölçüm paketi GÖNDERİLMEZ.
+        // Birleştirme ÇAĞIRANIN işi (yukarıda ölçüldü): her `prepare_*` offset 0'a yazıyor.
         var gonder = new byte[TamponBoyu];
-        GMPSmartDLL.prepare_Start(gonder, TamponBoyu, uniqueId, uniqueId.Length, null!, 0, userData, userData.Length);
-        GMPSmartDLL.prepare_TicketHeader(gonder, TamponBoyu, (TTicketType)1);
-        GMPSmartDLL.prepare_OptionFlags(gonder, TamponBoyu, 7, 0);
+        var gonderLen = 0;
+        int EkleG(int n)
+        {
+            if (n <= 0 || gonderLen + n > TamponBoyu) return -1;
+            Buffer.BlockCopy(parca, 0, gonder, gonderLen, n);
+            gonderLen += n;
+            return n;
+        }
+        EkleG(GMPSmartDLL.prepare_Start(parca, TamponBoyu, uniqueId, uniqueId.Length, null!, 0, userData, userData.Length));
+        EkleG(GMPSmartDLL.prepare_TicketHeader(parca, TamponBoyu, (TTicketType)1));
+        EkleG(GMPSmartDLL.prepare_OptionFlags(parca, TamponBoyu, 7, 0));
         var tek = ProvaKalemi(deptIndex, 1);
-        Json_GMPSmartDLL.prepare_ItemSale(gonder, TamponBoyu, ref tek);
-        var gonderLen = SonDolu(gonder);
+        EkleG(Json_GMPSmartDLL.prepare_ItemSale(parca, TamponBoyu, ref tek));
 
         ulong hTrx = 0;
         var kodlar = Array.Empty<ST_MULTIPLE_RETURN_CODE>();
