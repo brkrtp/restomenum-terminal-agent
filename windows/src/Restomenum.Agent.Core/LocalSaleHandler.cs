@@ -539,22 +539,7 @@ public sealed class LocalSaleHandler
         // ⚠️ `cihazMs` KİLİT BEKLEMESİNİ DE İÇERİR. Ayırmak için ölçümü kilidin içine almak
         // gerekirdi; o zaman da "cihaz mı meşguldü, biz mi bekledik" sorusu kaybolurdu. Kasiyerin
         // beklediği süre bu — bölmek değil, bütün olarak doğru sayı.
-        var oturum = OlcenSessionProvider.Son;
-        _log("[yerel] süre dökümü", new
-        {
-            req.PaymentId,
-            // Kasanın zarftaki damgasından ajanın isteği okumasına kadar. ⚠️ KASANIN saati;
-            // ajanınkiyle aynı değilse negatif/şişkin çıkabilir — o yüzden ayrı alan, toplama
-            // DAHİL DEĞİL.
-            bekleMs = (long)(tBas - req.TimeStamp).TotalMilliseconds,
-            tutarMs,
-            eslemeMs,
-            oturumMs = oturum?.ToplamMs ?? -1,          // -1 = ölçülmedi (0 ile karıştırılmasın)
-            oturumCagri = oturum?.Cagri ?? 0,
-            oturumHttp = oturum?.HttpDeneme ?? -1,      // Cagri'dan büyükse içeride tekrar olmuş
-            cihazMs,
-            toplamMs = (long)(_now() - tBas).TotalMilliseconds,
-        });
+        var tBildirim = _now();
 
         // 4. Gövdeyi kur; ÖNCE platforma bildir, SONRA kasaya dön.
         var sonuc = ToTransportResult(outcome);
@@ -564,6 +549,31 @@ public sealed class LocalSaleHandler
 
         // Fiş bu ödemeyle KAPANDIYSA: satırların deftere yazılma anı budur (K-26).
         await FisKapandiBildirAsync(req, sonuc, ct);
+
+        // ── W51b: DÖKÜM EN SONDA ────────────────────────────────────────────────────
+        // İlk hâlinde bu satır cihaz çağrısından hemen SONRA yazılıyordu ve satışın son
+        // parçasını — iki bildirimi — dışarıda bırakıyordu. Sahada ölçüldü (2026-09-08 23:08):
+        // `toplamMs = 14.261` ama gerçek uçtan uca **15,76 sn**; fark 1,5 sn ve `oturumCagri`
+        // yalnız 1 görünüyordu çünkü bildirimlerin oturum alımları satırdan sonra oluyordu.
+        // Yani ölçüm aracının kendisi eksik ölçüyordu — W48'de düzelttiğimiz hatanın kardeşi.
+        var bildirimMs = (long)(_now() - tBildirim).TotalMilliseconds;
+        var oturum = OlcenSessionProvider.Son;
+        _log("[yerel] süre dökümü", new
+        {
+            req.PaymentId,
+            // Kasanın zarftaki damgasından ajanın isteği okumasına kadar. ⚠️ KASANIN saati;
+            // ajanınkiyle aynı değilse negatif/şişkin çıkabilir (sahada −83 ms görüldü) — o
+            // yüzden ayrı alan, `toplamMs`'e DAHİL DEĞİL.
+            bekleMs = (long)(tBas - req.TimeStamp).TotalMilliseconds,
+            tutarMs,
+            eslemeMs,
+            oturumMs = oturum?.ToplamMs ?? -1,          // -1 = ölçülmedi (0 ile karıştırılmasın)
+            oturumCagri = oturum?.Cagri ?? 0,
+            oturumHttp = oturum?.HttpDeneme ?? -1,      // Cagri'dan büyükse içeride tekrar olmuş
+            cihazMs,
+            bildirimMs,                                  // sonuç + kapanış bildirimleri
+            toplamMs = (long)(_now() - tBas).TotalMilliseconds,
+        });
         return body;
     }
 

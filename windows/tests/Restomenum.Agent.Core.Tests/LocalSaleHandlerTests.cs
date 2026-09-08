@@ -33,7 +33,10 @@ public class LocalSaleHandlerTests : IDisposable
     private sealed class FakeAmounts : IPaymentDetailClient
     {
         public required PaymentDetailResult Result;
-        public Task<PaymentDetailResult> FetchAsync(string p, CancellationToken ct = default) => Task.FromResult(Result);
+        /// <summary>Çağrı SIRASINDA çalışır — testte sahte saati ilerletmek için (W51/W51b).</summary>
+        public Action? Sirasinda;
+        public Task<PaymentDetailResult> FetchAsync(string p, CancellationToken ct = default)
+        { Sirasinda?.Invoke(); return Task.FromResult(Result); }
     }
 
     private sealed class FakeResolver : ILineDepartmentResolver
@@ -61,13 +64,15 @@ public class LocalSaleHandlerTests : IDisposable
     {
         public List<string> Bodies { get; } = new();
         public NotifyResult Result = new(NotifyOutcome.Recorded, "APPROVED", null, 200, "");
+        /// <summary>Çağrı SIRASINDA çalışır — testte sahte saati ilerletmek için (W51b).</summary>
+        public Action? Sirasinda;
         public Task<NotifyResult> NotifyAsync(string p, string body, CancellationToken ct = default)
-        { Bodies.Add(body); return Task.FromResult(Result); }
+        { Bodies.Add(body); Sirasinda?.Invoke(); return Task.FromResult(Result); }
         public Task<NotifyResult> NotifyTicketCancelAsync(string body, CancellationToken ct = default)
         { Bodies.Add(body); return Task.FromResult(Result); }
         public List<string> TicketClosedBodies { get; } = new();
         public Task<NotifyResult> NotifyTicketClosedAsync(string body, CancellationToken ct = default)
-        { TicketClosedBodies.Add(body); return Task.FromResult(Result); }
+        { TicketClosedBodies.Add(body); Sirasinda?.Invoke(); return Task.FromResult(Result); }
     }
 
     private const string Pay = "pay_0123456789abcdef0123456789abcdef01234567";
@@ -97,6 +102,18 @@ public class LocalSaleHandlerTests : IDisposable
         }
     }
 
+    /// <summary>Yakalanan log çağrıları (W51b çivileri sırayı ve alanları buradan okuyor).</summary>
+    private readonly List<(string Mesaj, object? Veri)> _loglar = new();
+
+    /// <summary>Sahte duvar saati (unix ms) — W51/W51b süre ölçümü testte bununla sürülüyor.</summary>
+    private long _saatMs = 1_700_000_000_000;
+
+    private object? LogVeri(string mesajParcasi) =>
+        _loglar.LastOrDefault(l => l.Mesaj.Contains(mesajParcasi)).Veri;
+
+    private static T? Alan<T>(object? veri, string ad) =>
+        veri is null ? default : (T?)veri.GetType().GetProperty(ad)?.GetValue(veri);
+
     private (LocalSaleHandler, SimulatorTransport, FakeNotifier) Kur(
         PaymentDetailResult amounts, int? dept = 3, TransportResult? terminal = null, int? rate = null,
         int? paymentType = GmpPaymentTypes.Card, IMappingRefresher? refresher = null)
@@ -105,9 +122,13 @@ public class LocalSaleHandlerTests : IDisposable
         if (terminal is not null) sim.Expect(terminal);
         var orch = new AgentOrchestrator(_store, sim, _clock, RecoveryPolicy.Immediate);
         var notifier = new FakeNotifier();
+        _loglar.Clear();
         var h = new LocalSaleHandler(new FakeAmounts { Result = amounts }, orch, _store,
             new FakeResolver { Dept = dept, Rate = rate }, new FakePaymentMethods { Type = paymentType },
-            notifier, _outbox, sim, mappingRefresher: refresher);
+            notifier, _outbox, sim,
+            now: () => DateTimeOffset.FromUnixTimeMilliseconds(_saatMs),
+            log: (m, o) => _loglar.Add((m, o)),
+            mappingRefresher: refresher);
         return (h, sim, notifier);
     }
 
@@ -138,6 +159,48 @@ public class LocalSaleHandlerTests : IDisposable
 
         // Terminale komut başına TEK yoklama gitti — iki tur çalışsaydı iki olurdu.
         Assert.Equal(1, sim.ReadTicketCalls + sim.ProbeCalls);
+    }
+
+    // ── W51b: SÜRE DÖKÜMÜ SATIŞIN TAMAMINI ÖLÇÜYOR ─────────────────────────────
+
+    [Fact]
+    public async Task Sure_dokumu_BILDIRIMLERDEN_SONRA_yazilir()
+    {
+        // ← ÇİVİ: satır bildirimlerden ÖNCE yazılırsa satışın son parçası ölçüm dışında kalır.
+        // Sahada ölçüldü (2026-09-08 23:08): `toplamMs = 14.261` ama gerçek uçtan uca 15,76 sn.
+        // Ölçüm aracının kendisi eksik ölçüyordu.
+        var (h, _, _) = Kur(new PaymentDetailResult.Ok(Detail()),
+            terminal: new TransportResult(TransportOutcome.Approved, ApprovedAmountMinor: 990,
+                TicketState: "CLOSED", TicketId: "tkt_1"));
+
+        await h.HandleAsync(Req());
+
+        var dokumIndex = _loglar.FindIndex(l => l.Mesaj.Contains("süre dökümü"));
+        var kapanisIndex = _loglar.FindIndex(l => l.Mesaj.Contains("fiş kapandı bildirimi"));
+        Assert.True(dokumIndex >= 0, "süre dökümü satırı yok");
+        Assert.True(kapanisIndex >= 0, "kapanış bildirimi satırı yok");
+        Assert.True(dokumIndex > kapanisIndex, "döküm satırı kapanış bildiriminden ÖNCE yazılmış");
+    }
+
+    [Fact]
+    public async Task toplamMs_UCTAN_UCA_olcuyor_bildirimler_DAHIL()
+    {
+        // ← ÇİVİ: `toplamMs` cihaz çağrısında bitiyordu. Sahte saat her aşamada ilerliyor;
+        // toplam, aşamaların TAMAMINI kapsamazsa bu test kırılır.
+        var (h, _, notifier) = Kur(new PaymentDetailResult.Ok(Detail()),
+            terminal: new TransportResult(TransportOutcome.Approved, ApprovedAmountMinor: 990,
+                TicketState: "CLOSED", TicketId: "tkt_1"));
+        var bas = _saatMs;
+        notifier.Sirasinda = () => _saatMs += 700;      // her bildirim 700 ms
+        await h.HandleAsync(Req());
+        var gercek = _saatMs - bas;
+
+        var veri = LogVeri("süre dökümü");
+        var toplam = Alan<long>(veri, "toplamMs");
+        var bildirim = Alan<long>(veri, "bildirimMs");
+
+        Assert.Equal(gercek, toplam);                   // ← ÇİVİ: ±0 (sahte saat)
+        Assert.True(bildirim >= 1400, $"bildirimMs={bildirim}, iki bildirim 700+700 bekleniyordu");
     }
 
     // ── W38: açık fiş rakamları GÖVDEYE ve OUTBOX'A giriyor ─────────────────────
