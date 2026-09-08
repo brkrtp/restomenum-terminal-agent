@@ -483,8 +483,19 @@ public sealed class GmpWrapper : IGmpWrapper
         int  count = t.totalNumberOfPayments;
 
         var payments = t.stPayment;
-        // Bozuk sayaç: dizi yok ya da sayaç dizi kapasitesini aşıyor → PaymentCount = -1 (okunamadı).
-        if (count > 0 && (payments is null || count > payments.Length))
+        // ── BOZUK SAYAÇ KORUMASI — ÖLÇÜMLE DARALTILDI (2026-09-08) ────────────────────
+        // Eskiden `count > payments.Length` bozuk sayılıyordu. Sahada ölçüldü ki bu MEŞRU bir
+        // hâl: `FP3_Payment`'ın yankısında `totalNumberOfPayments=2` gelirken dizi yalnız
+        // `numberOfPaymentsInThis=1` uzunluğunda geldi (13:02). Aynı DLL bir gün önce diziyi
+        // `count` uzunluğunda döndürmüştü (07.09 18:00, 3/1) — yani iki biçim de gerçek.
+        //
+        // Eski kural o yanıtta `PaymentCount = -1` ("okunamadı") üretiyordu ve bacak bilgisi
+        // kayboluyordu: başarısız ödemede hangi bankaya gidildiği bildirilemedi.
+        //
+        // Bozukluğun GERÇEK ölçütü sayacın struct kapasitesini (24) aşmasıdır — orada sayı
+        // bellek çöpüdür. Dizinin `count`'tan kısa olması bozukluk değil, "bu yanıtta yalnız
+        // şu kadarı var" demektir.
+        if (count > 0 && (payments is null || count > PaymentWindow.Capacity))
             return new GmpTicket(total, paid, -1, 0, null, null);
 
         var satirlar = new List<GmpPaymentLine>();
@@ -502,9 +513,15 @@ public sealed class GmpWrapper : IGmpWrapper
         // `FP3_Payment` yanıtında 3/1 geldi, ilk iki kayıt tamamen sıfırdı; aynı fiş `FP3_GetTicket`
         // ile 2/2 okundu ve ikisi de doluydu. Diziyi baştan taramak, doldurulmamış kayıtları
         // "0 TL'lik ödeme" sanıp deftere hayalet satır yazdırırdı.
+        // Dolu pencerenin YERİ diziye göre değişiyor (yukarıdaki iki biçim):
+        //   dizi `count` uzunluğundaysa → dolu kayıtlar SONDA  [count-dolu .. count-1]
+        //   dizi `dolu` uzunluğundaysa  → dolu kayıtlar BAŞTA  [0 .. dolu-1]
+        // İkisini birden karşılayan tek ifade: elimizdeki dizinin SON `dolu` kaydı.
+        // Konumu varsaymak yerine diziden türetiyoruz — varsayım bugün bir kez ısırdı.
         int dolu = t.numberOfPaymentsInThis;
-        if (dolu < 0 || dolu > count) dolu = 0;          // tutarsız sayaç → hiçbir şey iddia etme
-        for (int i = count - dolu; i < count && payments is not null && i >= 0 && i < payments.Length; i++)
+        int uzunluk = payments?.Length ?? 0;
+        var (basla, son) = PaymentWindow.Range(count, dolu, uzunluk);
+        for (int i = basla; i < son && payments is not null; i++)
         {
             var pl = payments[i];
             if (pl is null) continue;
@@ -516,9 +533,10 @@ public sealed class GmpWrapper : IGmpWrapper
             satirlar.Add(new GmpPaymentLine((int)pl.typeOfPayment, pl.payAmount, bkm, ad, hata, uygKod));
         }
 
-        if (count > 0)
+        if (count > 0 && son > 0)
         {
-            var p = payments![count - 1];
+            // Son DOLU kayıt — `count-1` değil. Dizi `count`'tan kısaysa o indeks yok.
+            var p = payments![son - 1];
             if (p is not null)
             {
                 lastType = (int)p.typeOfPayment;
@@ -551,8 +569,10 @@ public sealed class GmpWrapper : IGmpWrapper
             }
         }
 
+        // Liste ancak dizide fişin TAMAMI varsa "tam" sayılır: hem sayaç kadar dolu kayıt
+        // okunmuş olmalı hem de dizi o kadarını taşıyabilmiş olmalı.
         return new GmpTicket(total, paid, count, lastType, rrn, last4, errCode, errText, appErrCode,
-            appErrText, satirlar, PaymentsAreComplete: dolu == count);
+            appErrText, satirlar, PaymentsAreComplete: dolu == count && uzunluk >= count);
     }
 
     private static bool Bos(string? s) => string.IsNullOrWhiteSpace(s);

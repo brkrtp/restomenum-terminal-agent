@@ -76,4 +76,42 @@ public class FiscalLineBuilderTests
         // §30.12 koruması yalnız GERÇEK, sayısal çelişkide devreye girer.
         Assert.False(TaxRule.Conflicts(taxCode, deptRate));
     }
+
+    // ── PaymentWindow: cihazın İKİ ayrı dizi biçimi de doğru okunmalı ───────────
+
+    [Fact]
+    public void Dizi_COUNT_uzunlugundaysa_dolu_kayitlar_SONDA()
+    {
+        // Ölçüm 2026-09-07 18:00: total=3, inThis=1, dizi 3 uzunluğunda, dolu olan index 2.
+        Assert.Equal((2, 3), PaymentWindow.Range(totalCount: 3, inThisCount: 1, arrayLength: 3));
+    }
+
+    [Fact]
+    public void Dizi_INTHIS_uzunlugundaysa_dolu_kayitlar_BASTA()
+    {
+        // ← ÇİVİ (ölçüm 2026-09-08 13:02): total=2, inThis=1, dizi 1 uzunluğunda, dolu index 0.
+        // Eski mantık [count-inThis .. count-1] = index 1'e bakıyordu; dizi o kadar uzun değil,
+        // sonuç boş liste → başarısız kart denemesinde banka bacağı bildirilemedi.
+        Assert.Equal((0, 1), PaymentWindow.Range(totalCount: 2, inThisCount: 1, arrayLength: 1));
+    }
+
+    [Fact]
+    public void Dizinin_TAMAMI_doluysa_hepsi_alinir()
+    {
+        Assert.Equal((0, 2), PaymentWindow.Range(totalCount: 2, inThisCount: 2, arrayLength: 2));
+    }
+
+    [Theory]
+    [InlineData(0, 0, 24)]    // fişte ödeme yok
+    [InlineData(3, 0, 3)]     // bu yanıtta dolu kayıt yok
+    [InlineData(2, 5, 2)]     // inThis > total → tutarsız, iddia etme
+    [InlineData(2, -1, 2)]    // negatif sayaç
+    [InlineData(3, 1, 0)]     // dizi hiç gelmemiş
+    public void Tutarsiz_ya_da_bos_hallerde_BOS_aralik(int total, int inThis, int len)
+    {
+        // ← ÇİVİ: şüphede kalınca hiçbir kayıt iddia edilmez. Uydurulmuş bir satır, deftere
+        // gerçekleşmemiş bir ödeme yazdırabilirdi.
+        var (b, s2) = PaymentWindow.Range(total, inThis, len);
+        Assert.Equal(b, s2);
+    }
 }
