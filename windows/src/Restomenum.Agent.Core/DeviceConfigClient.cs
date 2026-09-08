@@ -230,12 +230,36 @@ public sealed class DeviceConfigClient
 ///   <item><c>void</c> — canlı ölçüldü (2026-09-07, iki kez): ödemesiz açık fiş ve NAKİT ödemeli
 ///     fiş <c>VoidAll</c>→<c>Close</c> ile iptal edildi (2069 çıkmadı). Kart bacaklı fişin iptali
 ///     (2069 → <c>VoidPayment</c>) ÖLÇÜLMEDİ — banka hattı gerektiriyor.</item>
+///   <item><c>sale.giftVoucher</c> / <c>sale.points</c> / <c>sale.bankTransfer</c> /
+///     <c>sale.cheque</c> (W55) — <b>canlı ölçüldü (2026-09-09 01:23, <c>--capability-probe</c>)</b>:
+///     tek fiş üzerinde dördü de <c>FP3_Payment</c> ile denendi, <b>dördü de rc=0</b> döndü ve fişin
+///     tahsilat sayacı 1→2→3→4 yükseldi — yani cihaz bunları kabul etmekle kalmıyor, gerçek ödeme
+///     satırı olarak yazıyor. Hiçbiri banka bacağı istemedi (2086 çıkmadı). Fiş yazdırılmadan
+///     <c>VoidAll</c>+<c>Close</c> ile temizlendi; <c>--ticket</c> "açık fiş YOK" dedi.</item>
 /// </list>
 ///
-/// <para><b>Beyan edilmeyen:</b> <c>status</c> — ajanda böyle bir uç YOK. İstenirse önce yazılır,
-/// sonra beyan edilir.</para>
+/// <para><b>Beyan EDİLMEYENLER ve nedeni:</b></para>
+/// <list type="bullet">
+///   <item><c>status</c> — ajanda böyle bir uç YOK. İstenirse önce yazılır, sonra beyan edilir.</item>
+///   <item><c>sale.mealVoucher</c> (8) ve <c>sale.mobileWallet</c> (16) — DLL'in kendi tablosunda
+///     (<c>EPaymentTypes</c>) bu ikisinin yanında <b>"(Uygulama varsa)"</b> yazıyor ve bu terminalde
+///     öyle bir uygulama YOK: <c>--payment-apps</c> dört kayıt döndürdü, <b>dördü de banka kartı</b>
+///     (Garanti, Ziraat, İş Bankası, Akbank). Beyan etmek, kasiyere çalışmayacak bir düğme
+///     göstermek olurdu. Cihaza yemek çeki / mobil uygulaması kurulursa ÖNCE
+///     <c>--capability-probe</c> ile ölçülür, SONRA eklenir.</item>
+///   <item><c>sale.foreignCurrency</c> (2) — ajan her tutarı TL gönderiyor
+///     (<c>GmpWrapper.CurrencyTl = 949</c> sabit, kur profili bağlı değil). Dövizli bir ödemeyi TL
+///     tutarıyla deftere yazmak geri alınamaz yanlış mali kayıt olurdu.</item>
+/// </list>
 /// </summary>
 public static class AgentCapabilities
 {
-    public static readonly string[] Declared = { "sale.cash", "sale.card", "void" };
+    /// <summary>⚠️ Bu diziye ölçülmemiş bir op EKLENMEZ. Her madde için yukarıdaki listede tarihli
+    /// bir dayanak olmalı; dayanağı olmayan bir satır <c>AgentCapabilitiesTests</c> ile kırılır.</summary>
+    public static readonly string[] Declared =
+    {
+        "sale.cash", "sale.card", "void",
+        // W55 — 2026-09-09 01:23 `--capability-probe` ölçümü (dördü de rc=0).
+        "sale.giftVoucher", "sale.points", "sale.bankTransfer", "sale.cheque",
+    };
 }
