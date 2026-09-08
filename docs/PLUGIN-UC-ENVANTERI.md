@@ -2,7 +2,7 @@
 
 > Bu belge **ölçülmüş davranışı** anlatır, tasarım niyetini değil. Her madde koddaki
 > satırla ve mümkün olduğunca sahadaki ölçümle bağlanmıştır.
-> Kaynak: `restomenum-agent`, 2026-09-08.
+> Kaynak: `restomenum-agent`, son güncelleme **2026-09-09** (W52–W62 ölçümleri işlendi).
 
 ## Özet
 
@@ -111,14 +111,23 @@ Gövde: `serverId` + `data{ code, publicKey, fingerprint, platform:"windows", ve
 
 ## P2 — `POST {SessionUrl}` · cihaz oturumu
 
-Gövde: `serverId` + `data{ connectorId, nonce, ts, fingerprint, signature }`.
+Gövde: `serverId` + `data{ connectorId, nonce, **timestamp**, fingerprint, signature }`.
+`timestamp` **JSON NUMBER**'dır (`HttpSessionProvider.cs:141` — `long.Parse(ts)`), string değil.
 İmza **DER** kodlu olmak zorundadır (ham `r‖s` reddedilir).
-Yanıt: `success`, `data.token` (JWT), `data.expiresInSec` (900), `serverTime`.
+Yanıt: `success`, `data.token` (JWT), `data.expiresInSec`, `serverTime`.
 `serverTime` ile yerel saat farkı senkronlanır; sunucu `stale` derse **tek** tekrar.
 
-**W52:** jeton `expiresInSec − 60 sn` boyunca **önbelleklenir** (yalnız bellekte).
-401 → **tek** geçersiz kılma + **tek** tekrar. Ölçüm: önbellek öncesi satış başına
-**3 tur**, sonrası **1**; soğuk başlangıçta tur maliyeti 4,59 sn.
+**`expiresInSec` = 300 (ÖLÇÜLDÜ, 900 DEĞİL).** Belgede uzun süre 900 yazıyordu; W53 ömrü
+günlüğe yazdırınca saha iki kez **300** gösterdi (2026-09-09 00:42 ve 01:03). Kodun
+varsayılanı da 300 (`HttpSessionProvider.cs:169`) — yanıt alanı düşerse uydurma bir ömürle
+devam etmemek için.
+
+**W52:** jeton `expiresInSec − 60 sn` boyunca **önbelleklenir** (yalnız bellekte), yani
+pratik geçerlilik **240 sn**. 401 → **tek** geçersiz kılma + **tek** tekrar.
+Ölçüm: önbellek öncesi satış başına **3 tur**, sonrası **1**; soğuk başlangıçta tur
+maliyeti 4,59 sn. Marjın davranışsal teyidi (2026-09-09 01:07): jeton 01:03:55'te alındı,
+01:07:34'teki satış (219 sn sonra) **`oturumHttp = 0`** ile geçti — 240 sn penceresinin
+içinde; 21 saniye sonra gelseydi yeni bir tur atılacaktı.
 
 ## P3 — `GET plugin-api/payments/{paymentId}` · tutar çekimi
 
@@ -197,11 +206,44 @@ Tekilleştirme anahtarı **`ticketId`** (`paymentId` OLAMAZ — bildirim bir den
 ## C1–C3 — config kanalı (ayrı adres, ayrı sır)
 
 - **C1** `POST api/device/session` — `{enrollmentSecret}` → oturum.
-- **C2** `POST api/device/departments` — cihazdan okunan departman tablosu
-  (`index`, `name`, `taxRateBasisPoints`) + `deviceInfo`. **Yalnız eşleşmeden SONRA** okunabilir.
+- **C2** `POST api/device/departments` — dört alan gider:
+  `departments[]` (`index`, `name`, `taxRateBasisPoints`), `deviceInfo`, `capabilities`,
+  `paymentApplications`. **Yalnız eşleşmeden SONRA** okunabilir (cihaz eşli değilken
+  `GetDepartments` çalışmaz).
+  - **`taxRateBasisPoints` `null` olabilir** ve bu "%0" DEĞİL, "oran bilinmiyor" demektir
+    (cihazın vergi indeksi tabloda karşılık bulamadı). Uydurma 0 yazılmaz.
+  - **Bildirim tabloyu DEĞİŞTİRİR, birleştirmez.** Bu yüzden tablo *boş okunursa* bildirim
+    hiç gönderilmez: boş liste platformdakini kırpar ve eşleme ekranı çalışmaz hâle gelir.
+    "Okunamadı" (rc≠0) ile "boş okundu" (rc=0, 0 kayıt) ayrı ele alınır; ikisi de eski
+    tabloyu olduğu yerde bırakır.
+  - **`null` alan = alan yok = KORUMA.** Gövde varsayılan seçeneklerle serialize edildiği
+    için `null` alanlar tele *çıkar* (`"paymentApplications": null`), ama eklenti tarafında
+    alanın olmaması ile `null` olması aynı muamele görüyor: ikisi de saklananı korur, yalnız
+    **boş dizi** listeyi siler (a7 gerçek uçtan ölçtü, 2026-09-09). Aynısı `deviceInfo` için
+    de geçerli.
+  - **`capabilities`** — ajanın beyan ettiği op'lar; kasa/panel düğmelerini buna göre
+    gösterir. Kural: **ölçülmemiş yetenek beyan edilmez.** Bugün yedi op:
+    `sale.cash`, `sale.card`, `void` + (W55, `--capability-probe` ile ölçüldü)
+    `sale.giftVoucher`, `sale.points`, `sale.bankTransfer`, `sale.cheque`.
+    **Beyan EDİLMEYENLER:** `sale.mealVoucher` (8) ve `sale.mobileWallet` (16) — DLL
+    tablosunda ikisinin de yanında "(Uygulama varsa)" yazıyor ve bu terminalde öyle bir
+    uygulama yok (`--payment-apps`: 4 kayıt, dördü de banka kartı); `sale.foreignCurrency`
+    (2) — ajan her tutarı TL gönderiyor.
 - **C3** `GET api/device/mapping` — `If-None-Match: W/"v{n}"`; **304 = değişmedi**.
-  Satıştan hemen önce **sert 2 sn** zaman aşımıyla tazelenir; hata yutulur ve diskteki
-  sürümle devam edilir — bu çağrı satışı **asla** düşürmez.
+
+### Eşleme ve tablo hangi tetikle tazelenir
+
+| ne | tetik | notlar |
+|---|---|---|
+| **Eşleme** (C3'ten ÇEKME) | açılış + **~30 dk ± %20** yoklama | `DeviceConfigPoller`; jitter şart (aynı işletmede çok cihaz aynı saniyede vurmasın) |
+| **Eşleme** (satış öncesi) | her satıştan hemen önce, **sert 2 sn** | W29; hata yutulur, diskteki sürümle devam — satışı **asla** düşürmez |
+| **Cihaz bölüm tablosu** (C2'ye BİLDİRME) | eşleşme (`--pair`, `--payment-apps`, `--void`, `--cancel-ticket`) **+ yoklama turu (W56)** | W56 öncesi TEK yol eşleşmeydi ve terminalde değişen bir KDV oranı, biri yeniden eşleştirene kadar görünmüyordu |
+
+**W56 kuralları:** tazeleme cihazı **satışın kilidinden** alır ve **beklemez** (meşguldü →
+tur atlanır, satış önceliklidir); tablo **yalnız platformdakinden farklıysa** bildirilir
+(her turda bildirmek eşleme sürümünü boşuna artırır ve "sürüm değişti" sinyalini
+anlamsızlaştırır); okunamayan/boş tablo **bildirilmez**; `null` oran ile `0` oran **ayrı**
+sayılır.
 
 ---
 
@@ -217,3 +259,39 @@ Tekilleştirme anahtarı **`ticketId`** (`paymentId` OLAMAZ — bildirim bir den
 5. **Uydurma yok:** okunamayan alan `null` kalır; "veri yok" ile "sıfır/boş" ayrı yazılır.
 6. **Jeton ve `Authorization` hiçbir loga girmez** — yapısal: HTTP istemcilerinin
    günlükçü bağımlılığı yoktur.
+7. **Terminal başına TEK işlem:** satış, iptal, kurtarma ve bakım turu **aynı** kilidi
+   alır. İkinci bir kilit açmak, kuralı iki yerde tanımlamak ve birinin ötekini görmemesi
+   demek olurdu.
+8. **Kilit cihazı korur, defteri korumaz.** Satış kilidi yalnız cihaz çağrısı boyunca
+   tutulur (bildirimi beklemek kurtarmayı ve iptali satışın BULUT turu kadar geciktirirdi).
+   Defteri koruyan ayrı bir kural var: kurtarma turu **bu süreçte uçuşta olan** komutlara
+   dokunmaz (W62). Sahada ölçüldü — kurtarma, hâlâ koşan bir komutun adına P4 gönderdi ve
+   yoklamasını KAPATTI; satış o an çökseydi kayıt sessizce kaybolurdu.
+9. **Ölçülmemiş yetenek beyan edilmez.** Beyan, kasiyere "bu düğme çalışır" sözü vermektir;
+   çalışmayan bir düğme, olmayan düğmeden kötüdür. Yeni bir ödeme tipi için sıra hep aynı:
+   önce `--capability-probe` ile **ölç**, sonra `capabilities`'e ekle.
+
+---
+
+## Cihaz olguları (ölçüldü, belgede yok)
+
+Bunlar üretici belgesinde yazmıyor; sahada ölçülüp burada kayda geçti.
+
+- **Mali fiş numarası (`FNo`) fiş AÇILIRKEN verilir**, kapanırken değil: başarılı bir
+  `ItemSale`'in kendi yanıtı `ZNo`/`FNo` taşır.
+- **Yazdırılmadan iptal edilen fiş de `FNo` TÜKETİR.** 2026-09-09, ZNo 87 içinde üç kez
+  ölçüldü: 3 (satış) → 4 (`--capability-probe`) → 5 (iptal edilen fiş) → 6 (satış).
+  **Sayaçtaki boşluk bir kayıp değil, iptal edilmiş fişlerin izidir.**
+- **`ItemSale` HATA dönerse yanıtında sayaçlar SIFIR gelir** (`ZNo=0, FNo=0`); numarayı
+  görmek için `VoidAll`/`GetTicket` yanıtına bakılır.
+- **Fiş limiti** `ItemSale`'den **2067** (`APP_ERR_FIS_LIMITI_ASILAMAZ`) ile döner; ödeme
+  aşamasına hiç gelinmez. Limit DEĞERİ hiçbir çağrıdan okunamıyor (`GMP.XML`'de de yok);
+  ölçülen tek sınır: **≤ 100.000,00 TL**.
+- **KDV'yi cihaz DEPARTMANDAN türetir**; telde `taxRate` her zaman `0` gider. Doğrulandı:
+  dept 10 (%10) 891 kuruşluk kalem → `TotalReceiptTax` **81** = 891×10/110.
+- **`bankBkmId = 0` = "cihaz seçsin"** ve cihaz aynı fişte art arda iki denemede **farklı**
+  banka seçebiliyor (GARANTİ 62 → AKBANK 46).
+- **Kurulu ödeme uygulamaları ≠ desteklenen ödeme tipleri.** `FP3_GetPaymentApplicationInfo`
+  yalnız **banka kartı** uygulamalarını listeler. Hediye çeki / puan / havale / çek
+  uygulama gerektirmiyor (DLL tablosunda "(Uygulama varsa)" notu yalnız yemek çeki ve
+  mobilde var) ve dördü de `FP3_Payment` ile **rc=0** kabul edildi.
