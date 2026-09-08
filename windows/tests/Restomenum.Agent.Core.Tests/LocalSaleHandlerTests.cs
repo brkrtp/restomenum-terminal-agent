@@ -427,9 +427,13 @@ public class LocalSaleHandlerTests : IDisposable
 
         await h.HandleAsync(Req());
 
-        var bekleyen = _outbox.Pending().Where(e => e.Status == OutboxKinds.TicketClosed).ToList();
+        // W20: başarısız gönderimden sonra kayıt kuyrukta AMA hemen sıraya girmiyor (30 sn
+        // geri çekilme). `ignoreBackoff` ile bakınca duruyor — kayıp yok, yalnız ertelenmiş.
+        var bekleyen = _outbox.Pending(ignoreBackoff: true)
+            .Where(e => e.Status == OutboxKinds.TicketClosed).ToList();
         var kayit = Assert.Single(bekleyen);
         Assert.Equal("tkt_xyz:ticket-closed", kayit.EventId);   // tekilleştirme fiş bazlı
+        Assert.Empty(_outbox.Pending().Where(e => e.Status == OutboxKinds.TicketClosed));   // ← ÇİVİ
     }
 
     [Fact]

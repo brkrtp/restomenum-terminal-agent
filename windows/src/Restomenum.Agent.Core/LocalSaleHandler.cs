@@ -560,6 +560,23 @@ public sealed class LocalSaleHandler
     }
 
     /// <summary>
+    /// Gönderilemeyen kaydı üstel geri çekilmeyle erteler ve <b>takılı kalanı GÖRÜNÜR kılar</b>.
+    ///
+    /// <para>Uyarı 10. denemede ve sonra her 10'da bir: her turda loglamak, alarmın kendisini
+    /// gürültüye çevirir ve okuyan kişi bir süre sonra bakmaz olur.</para>
+    /// </summary>
+    private void Ertele(OutboxEntry e)
+    {
+        var deneme = _outbox.MarkAttempt(e.EventId);
+        if (deneme >= 10 && deneme % 10 == 0)
+            _log("[uyarı] outbox kaydı gönderilemiyor — takılı kalıyor", new
+            {
+                tur = e.Status, anahtar = e.EventId, deneme,
+                sonrakiDenemeSn = (int)Outbox.Bekleme(deneme).TotalSeconds,
+            });
+    }
+
+    /// <summary>
     /// Fişi kapanmış ama kapanış gövdesi outbox'a HİÇ yazılamamış vakaları kurtarır.
     ///
     /// <para><b>Hangi aralık:</b> taşıma katmanı fişi kapatıp bağı sildikten sonra, üst katman
@@ -600,12 +617,16 @@ public sealed class LocalSaleHandler
     /// Outbox'ta bekleyen bildirimleri (ağ/429 nedeniyle gönderilememişler) yeniden dener. Worker
     /// açılışta ve periyodik çağırır — WSS'te oturum bağlanınca yapılan drain'in yerini alır.
     /// </summary>
-    public async Task DrainOutboxAsync(CancellationToken ct = default)
+    /// <param name="ignoreBackoff">
+    /// Bağlantı yeniden kurulduğunda <c>true</c>: geri çekilme BİR TURLUK atlanır. Bekleme sebebi
+    /// ağ kesintisiyse, ağ geri geldiği anda beklemenin anlamı kalmaz.
+    /// </param>
+    public async Task DrainOutboxAsync(CancellationToken ct = default, bool ignoreBackoff = false)
     {
         // ÖNCE yarım kalmış kapanışlar: gövdesi hiç kurulamamış fişler outbox'ta görünmez.
         KayipKapanislariTopla();
 
-        foreach (var e in _outbox.Pending())
+        foreach (var e in _outbox.Pending(ignoreBackoff: ignoreBackoff))
         {
             if (ct.IsCancellationRequested) return;
             try
@@ -619,7 +640,7 @@ public sealed class LocalSaleHandler
                     _ => await _notifier.NotifyAsync(e.PaymentId, e.PayloadJson, ct),
                 };
                 if (res.IsFinal) _outbox.Confirm(e.EventId);
-                else _outbox.MarkAttempt(e.EventId);
+                else Ertele(e);
                 if (res.IsProblem)
                     _log("[yerel] outbox bildirim SORUNU (alarm)", new { e.PaymentId, outcome = res.Outcome.ToString(), res.StatusCode });
                 else if (res.IsFinal)
@@ -633,7 +654,7 @@ public sealed class LocalSaleHandler
             }
             catch (Exception ex) when (ex is not OperationCanceledException)
             {
-                _outbox.MarkAttempt(e.EventId);   // kalsın, bir sonraki drain'de tekrar
+                Ertele(e);   // kalsın, geri çekilmeyle birlikte bir sonraki drain'de tekrar
             }
         }
     }

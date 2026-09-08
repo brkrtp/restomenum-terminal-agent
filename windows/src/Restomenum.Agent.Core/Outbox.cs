@@ -66,6 +66,19 @@ public sealed class Outbox : IDisposable
                 )
                 """;
             cmd.ExecuteNonQuery();
+            // ── W20: KAYIT BAŞINA GERİ ÇEKİLME ────────────────────────────────────────
+            // Sütun SONRADAN eklendi ve varsayılanı 0 — eski kayıtlar (ve eski şemayla açılan
+            // dosyalar) HEMEN uygun sayılır, yani geçiş bir tek bildirimi bile geciktirmez.
+            var kolonlar = new List<string>();
+            cmd.CommandText = "PRAGMA table_info(outbox)";
+            using (var r = cmd.ExecuteReader())
+                while (r.Read()) kolonlar.Add(r.GetString(1));
+            if (!kolonlar.Contains("next_attempt_at"))
+            {
+                cmd.CommandText = "ALTER TABLE outbox ADD COLUMN next_attempt_at INTEGER NOT NULL DEFAULT 0";
+                cmd.ExecuteNonQuery();
+            }
+
             // Gönderim sırası kuyruk sırasıdır: en eski sonuç en önce yazılmalı.
             cmd.CommandText = "CREATE INDEX IF NOT EXISTS ix_outbox_created ON outbox(created_at)";
             cmd.ExecuteNonQuery();
@@ -101,12 +114,22 @@ public sealed class Outbox : IDisposable
     }
 
     /// <summary>Gönderilmeyi bekleyenler — <b>en eski önce</b>.</summary>
-    public IReadOnlyList<OutboxEntry> Pending(int limit = 50)
+    /// <param name="ignoreBackoff">
+    /// <c>true</c> ise geri çekilme BİR TURLUK atlanır. Bağlantı yeniden kurulduğunda kullanılır:
+    /// bekleme sebebi ağ kesintisiyse, ağ geri geldiği anda beklemenin bir anlamı kalmaz.
+    /// </param>
+    /// <param name="now">Şimdiki zaman (unix ms) — testlerde sabitlenir.</param>
+    public IReadOnlyList<OutboxEntry> Pending(int limit = 50, bool ignoreBackoff = false, long? now = null)
     {
         lock (_gate)
         {
             using var cmd = _conn.CreateCommand();
-            cmd.CommandText = "SELECT * FROM outbox ORDER BY created_at ASC LIMIT $n";
+            // Sıra DEĞİŞMEDİ: en eski önce. Süzgeç yalnız "vakti geldi mi" sorusunu ekliyor.
+            cmd.CommandText = ignoreBackoff
+                ? "SELECT * FROM outbox ORDER BY created_at ASC LIMIT $n"
+                : "SELECT * FROM outbox WHERE next_attempt_at <= $now ORDER BY created_at ASC LIMIT $n";
+            if (!ignoreBackoff)
+                cmd.Parameters.AddWithValue("$now", now ?? DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
             cmd.Parameters.AddWithValue("$n", limit);
             using var r = cmd.ExecuteReader();
             var liste = new List<OutboxEntry>();
@@ -140,15 +163,58 @@ public sealed class Outbox : IDisposable
         }
     }
 
-    /// <summary>Deneme sayacını artırır — kuyrukta takılan bir sonucu görünür kılar (alarm girdisi).</summary>
-    public void MarkAttempt(string eventId)
+    /// <summary>İlk yeniden deneme aralığı.</summary>
+    public static readonly TimeSpan IlkAralik = TimeSpan.FromSeconds(30);
+
+    /// <summary>Geri çekilmenin ÜST SINIRI. Bunun ötesine çıkmak kaydı fiilen unutmak olurdu.</summary>
+    public static readonly TimeSpan AzamiAralik = TimeSpan.FromMinutes(5);
+
+    /// <summary>
+    /// <paramref name="attempts"/> denemeden sonraki bekleme: 30 sn × 2^(n−1), 5 dakikada sabitlenir.
+    /// 1→30 sn · 2→60 · 3→120 · 4→240 · 5+→300.
+    /// </summary>
+    public static TimeSpan Bekleme(int attempts)
+    {
+        if (attempts <= 1) return IlkAralik;
+        // Üs 30'u aşarsa taşma olur; sınır zaten 5 dk olduğu için erken kırpıyoruz.
+        var us = Math.Min(attempts - 1, 20);
+        var sn = IlkAralik.TotalSeconds * Math.Pow(2, us);
+        return sn >= AzamiAralik.TotalSeconds ? AzamiAralik : TimeSpan.FromSeconds(sn);
+    }
+
+    /// <summary>
+    /// Deneme sayacını artırır ve bir sonraki denemeyi <b>üstel olarak</b> erteler (W20).
+    ///
+    /// <para><b>Vazgeçme YOK, silme YOK.</b> Bu kayıtlar para satırı taşıyor; ertelemek başka,
+    /// unutmak başka. Üst sınır 5 dakika — kalıcı bir arızada dakikada 2 istek yerine 5 dakikada
+    /// 1 istek olur, ama kayıt sonsuza kadar kuyrukta kalır ve uç düzelince gider.</para>
+    /// </summary>
+    /// <returns>Artırımdan SONRAKİ deneme sayısı — çağıran alarm eşiğini buna göre kurar.</returns>
+    public int MarkAttempt(string eventId, long? now = null)
     {
         lock (_gate)
         {
+            var simdi = now ?? DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
             using var cmd = _conn.CreateCommand();
-            cmd.CommandText = "UPDATE outbox SET attempts = attempts + 1 WHERE event_id = $eid";
+            cmd.CommandText = """
+                UPDATE outbox
+                   SET attempts = attempts + 1,
+                       next_attempt_at = $now + $bekleme
+                 WHERE event_id = $eid
+                """;
+            // Yeni sayaç için önce oku: SQLite'ta UPDATE ... RETURNING her sürümde yok.
+            using var oku = _conn.CreateCommand();
+            oku.CommandText = "SELECT attempts FROM outbox WHERE event_id = $eid";
+            oku.Parameters.AddWithValue("$eid", eventId);
+            var mevcut = oku.ExecuteScalar();
+            if (mevcut is null) return 0;                      // kayıt yok (Confirm edilmiş olabilir)
+            var yeni = Convert.ToInt32(mevcut) + 1;
+
             cmd.Parameters.AddWithValue("$eid", eventId);
+            cmd.Parameters.AddWithValue("$now", simdi);
+            cmd.Parameters.AddWithValue("$bekleme", (long)Bekleme(yeni).TotalMilliseconds);
             cmd.ExecuteNonQuery();
+            return yeni;
         }
     }
 

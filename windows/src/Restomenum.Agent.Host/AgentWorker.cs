@@ -80,7 +80,10 @@ public sealed class AgentWorker : BackgroundService
         {
             try { await _handler.RecoverPendingAsync(ct); }
             catch (Exception e) when (e is not OperationCanceledException) { _log.LogError(e, "açılış kurtarması hata verdi"); }
-            try { await _handler.DrainOutboxAsync(ct); }
+            // AÇILIŞ = bağlantının yeniden kurulduğu an. Geri çekilme BİR TURLUK atlanıyor:
+            // kuyrukta bekleyen kayıtların bekleme sebebi çoğu zaman ağın gitmiş olmasıdır ve
+            // ağ geri geldiğinde beklemeye devam etmenin bir anlamı yok (W20).
+            try { await _handler.DrainOutboxAsync(ct, ignoreBackoff: true); }
             catch (Exception e) when (e is not OperationCanceledException) { _log.LogError(e, "açılış drain hata verdi"); }
             Temizle();
         }, ct);
