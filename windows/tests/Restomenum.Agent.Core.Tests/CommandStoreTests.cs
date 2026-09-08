@@ -187,6 +187,33 @@ public class CommandStoreTests
     }
 
     [Fact]
+    public void KAPATILMIS_kayit_yas_siniri_sayisina_GIRMEZ()
+    {
+        // ← ÇİVİ: bu sayı doğrudan bir günlük satırına dönüşüyor ("yaş sınırı — atlanan = N") ve o
+        // satır "N kayıt SIRF YAŞI yüzünden yoklanmıyor" diye okunuyor. Kapatılmış (W34) kayıtlar
+        // zaten hiçbir koşulda yoklanmayacak; onları saymak sayıyı ŞİŞİRİR.
+        //
+        // Sahada ölçüldü (2026-09-09 01:16): satır `atlanan = 6` diyordu ama yalnız 2 kayıt yaş
+        // yüzünden atlanmıştı — kalan 4'ü kapatılmıştı. Yanındaki `Pending()` satırı "2 komut yarım
+        // kalmış" diyordu; ikisi yan yana çelişkili görünüyor, oysa AYNI 2 kaydı anlatıyorlardı.
+        using var store = CommandStore.Open(TempDb());
+        var eski = DateTimeOffset.UtcNow.AddHours(-25).ToUnixTimeMilliseconds();
+
+        foreach (var id in new[] { "acik", "kapali" })
+        {
+            store.Save(id, "pay-" + id, "t1", Now + 60_000, eski);
+            store.Advance(id, CommandState.RECEIVED, CommandState.SENT_TO_TERMINAL, now: eski);
+            store.Advance(id, CommandState.SENT_TO_TERMINAL, CommandState.UNKNOWN, now: eski);
+        }
+        store.CloseRecovery("kapali");
+
+        var esik = DateTimeOffset.UtcNow.AddHours(-24).ToUnixTimeMilliseconds();
+
+        Assert.Equal(1, store.CountSkippedUnknown(esik));   // ← ÇİVİ: 2 değil, 1
+        Assert.NotNull(store.Read("kapali"));               // kayıt DURUYOR, yalnız sayılmıyor
+    }
+
+    [Fact]
     public void Yas_siniri_YALNIZ_UNKNOWNa_uygulanir()
     {
         // `SENT_TO_TERMINAL` bir çökme penceresini gösterir ve nadirdir; yaşına bakmadan

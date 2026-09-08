@@ -387,13 +387,25 @@ public sealed class CommandStore : ITicketSnapshotStore, IDisposable
     }
 
     /// <summary>Yaş sınırı yüzünden açılışta ATLANAN <c>UNKNOWN</c> kayıt sayısı (yalnız raporlama).</summary>
+    /// <summary>
+    /// YALNIZ YAŞI yüzünden yoklanmayan <c>UNKNOWN</c> kayıtlar (W59).
+    ///
+    /// <para><b>Neden <c>recovery_closed_at IS NULL</c> şart:</b> bu sayı bir günlük satırına
+    /// dönüşüyor ("yaş sınırı — atlanan = N") ve o satır "N kayıt SIRF YAŞI yüzünden yoklanmıyor"
+    /// diye okunuyor. Kapatılmış (W34) kayıtlar zaten hiçbir koşulda yoklanmayacak — onları da
+    /// saymak sayıyı ŞİŞİRİR. Sahada ölçüldü (2026-09-09 01:16): satır <c>atlanan = 6</c>
+    /// diyordu, gerçekte yalnız <b>2</b> kayıt yaş yüzünden atlanmıştı; kalan 4'ü kapatılmıştı.
+    /// Yanındaki <c>Pending()</c> satırı da "2 komut yarım kalmış" diyordu ve ikisi yan yana
+    /// çelişkili görünüyordu — oysa ikisi de AYNI 2 kaydı anlatıyordu.</para>
+    /// </summary>
     public int CountSkippedUnknown(long unknownEsigi)
     {
         lock (_gate)
         {
             using var cmd = _conn.CreateCommand();
             cmd.CommandText =
-                "SELECT COUNT(*) FROM commands WHERE kind='sale' AND state='UNKNOWN' AND updated_at < $esik";
+                "SELECT COUNT(*) FROM commands WHERE kind='sale' AND state='UNKNOWN' " +
+                "AND recovery_closed_at IS NULL AND updated_at < $esik";
             cmd.Parameters.AddWithValue("$esik", unknownEsigi);
             return Convert.ToInt32(cmd.ExecuteScalar());
         }
