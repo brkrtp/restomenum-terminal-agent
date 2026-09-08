@@ -140,6 +140,31 @@ public class LocalSaleHandlerTests : IDisposable
         Assert.Equal(1, sim.ReadTicketCalls + sim.ProbeCalls);
     }
 
+    // ── W38: açık fiş rakamları GÖVDEYE ve OUTBOX'A giriyor ─────────────────────
+
+    [Fact]
+    public async Task Acik_fis_rakamlari_govdeye_ve_outboxa_AYNI_gider()
+    {
+        // ← ÇİVİ: kasaya dönen ile kuyruğa yazılan TEK üreticiden gelmeli; iki ayrı üretici
+        // olsaydı biri değişince diğeri sessizce eskirdi.
+        var (h, _, notifier) = Kur(new PaymentDetailResult.Ok(Detail()),
+            terminal: new TransportResult(TransportOutcome.Approved, ApprovedAmountMinor: 990,
+                TicketState: "OPEN", TicketId: "tkt_acik",
+                DeviceTicketTotalMinor: 2380, DeviceRemainingMinor: 1390));
+        notifier.Result = new NotifyResult(NotifyOutcome.NetworkError, null, null, 0, "ağ");
+
+        var govde = await h.HandleAsync(Req());
+
+        foreach (var kaynak in new[] { govde, _outbox.Pending(ignoreBackoff: true).Single().PayloadJson })
+        {
+            var ek = JsonDocument.Parse(kaynak).RootElement
+                .GetProperty("SaleToPOIResponse").GetProperty("Restomenum");
+            Assert.Equal("OPEN", ek.GetProperty("ticketState").GetString());
+            Assert.Equal(2380, ek.GetProperty("deviceTicketTotalMinor").GetInt64());
+            Assert.Equal(1390, ek.GetProperty("deviceRemainingMinor").GetInt64());
+        }
+    }
+
     // ── W34: PLATFORM NİHAİ DEDİYSE YOKLAMA KAPANIR ─────────────────────────────
 
     [Fact]

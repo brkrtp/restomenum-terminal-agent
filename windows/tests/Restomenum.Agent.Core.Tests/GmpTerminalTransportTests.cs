@@ -324,6 +324,60 @@ public class GmpTerminalTransportTests
         Assert.DoesNotContain("VoidAll", g.Calls);                  // fişe DOKUNULMADI
     }
 
+    // ── W38: açık fişte cihazın toplam/kalan rakamı ─────────────────────────────
+
+    [Fact]
+    public async Task Acik_fiste_cihazin_TOPLAM_ve_KALAN_rakami_bildirilir()
+    {
+        // ← ÇİVİ: kısmi ödemede kasa kalanı KENDİ tabanından hesaplamak zorundaydı; cihazla
+        // panel ayrışırsa kimse fark etmiyordu. Artık otorite cihazın rakamı.
+        var (t, g, _) = Kur();
+        g.AfterPayment = new GmpTicket(2380, 990, 1, GmpPaymentTypes.Cash);   // kısmi
+
+        var r = await t.SaleAsync(Req(amount: 990, paymentType: GmpPaymentTypes.Cash,
+            oturum: "oturum-A", satisToplam: 2380));
+
+        Assert.Equal("OPEN", r.TicketState);
+        Assert.Equal(2380, r.DeviceTicketTotalMinor);
+        Assert.Equal(1390, r.DeviceRemainingMinor);      // 2380 − 990
+    }
+
+    [Theory]
+    [InlineData(0, 0)]        // toplam sıfır
+    [InlineData(-100, 50)]    // toplam negatif
+    [InlineData(990, -1)]     // ödenen negatif
+    [InlineData(990, 1500)]   // ödenen toplamı aşıyor → kalan negatif çıkardı
+    public async Task Cihaz_rakamlari_TUTARSIZSA_ikisi_de_KONMAZ(long toplam, long odenen)
+    {
+        // ← ÇİVİ: kasa bu sayıyı OTORİTE kabul edecek; yanlış bir sayı, kasanın kendi
+        // hesabından daha kötüdür. Şüphede ikisini birden bırakıyoruz.
+        var (t, g, _) = Kur();
+        g.AfterPayment = new GmpTicket(toplam, odenen, 1, GmpPaymentTypes.Cash);
+
+        var r = await t.SaleAsync(Req(amount: 990, paymentType: GmpPaymentTypes.Cash,
+            oturum: "oturum-A", satisToplam: 2380));
+
+        Assert.Null(r.DeviceTicketTotalMinor);
+        Assert.Null(r.DeviceRemainingMinor);
+    }
+
+    [Fact]
+    public async Task Kapali_fiste_davranis_DEGISMEDI()
+    {
+        // Kapanışta toplam AYRI bir `GetTicket`'ten geliyor ve kalan bildirilmiyor (kalan sıfır,
+        // söylenecek bir şey yok). W38 o yolu değiştirmemeli.
+        var (t, g, _) = Kur();
+        g.Ticket = new GmpTicket(990, 990, 1, GmpPaymentTypes.Cash, PaymentsAreComplete: true);
+        g.AfterPayment = new GmpTicket(990, 990, 1, GmpPaymentTypes.Cash);
+
+        var r = await t.SaleAsync(Req(amount: 990, paymentType: GmpPaymentTypes.Cash,
+            oturum: "oturum-A", satisToplam: 990));
+
+        Assert.Equal("CLOSED", r.TicketState);
+        Assert.Equal(990, r.DeviceTicketTotalMinor);     // kapanış okumasından
+        Assert.Null(r.DeviceRemainingMinor);             // ← ÇİVİ: kapalıda kalan YOK
+    }
+
     // ── W37: iptal edilen FİŞİN kimliği ─────────────────────────────────────────
 
     [Fact]

@@ -201,7 +201,7 @@ public sealed class GmpTerminalTransport : ITerminalTransport
         // Fiş durumu ödemeden SONRA belirlenir; `CLOSED` yalnız `Close` gerçekten başarılıysa.
         var fisDurumu = "OPEN";
         IReadOnlyList<TicketPaymentRow>? kapanisOdemeleri = null;
-        long? cihazTahsil = null, cihazToplam = null;
+        long? cihazTahsil = null, cihazToplam = null, cihazKalan = null;
 
         // ── ÖDEMEYİ KENDİ DEFTERİMİZE YAZ ────────────────────────────────────────
         // Cihaz bu ödemeyi tutarı ve tipiyle tutar ama BİZİM `paymentId`'mizi bilmez. Fiş kapanınca
@@ -264,6 +264,23 @@ public sealed class GmpTerminalTransport : ITerminalTransport
             _snapshots?.BindOpenTicket(request.TerminalId, oturum);
         }
 
+        // ── W38: AÇIK FİŞTE CİHAZIN TOPLAM/KALAN RAKAMI ──────────────────────────
+        // Kısmi ödemede kasa kalanı KENDİ tabanından hesaplamak zorundaydı; cihazla panel
+        // ayrışırsa kimse fark etmiyordu. Cihazın rakamı buradan gidiyor ve panel için
+        // otorite oluyor; ayrışma kapanışı beklemeden ilk kısmi ödemede yakalanabiliyor.
+        //
+        // ⚠️ ANLAMI: "ÖDEMEDEN HEMEN SONRAKİ hâl". Aynı fişe başka bir kasadan ödeme
+        // eklenirse bu rakam eskir — "şu anki kalan" DEĞİL.
+        //
+        // Kaynak `FP3_Payment` yankısı; ölçümlerde bu iki alan (aksine ödeme satırı dizisi)
+        // hep dolu geldi. Yine de doğrulanıyor: tutarsızsa İKİSİ DE konmuyor — yanlış sayı
+        // göndermektense hiç göndermemek (sözleşme ilkesi).
+        if (fisDurumu == "OPEN" && CihazTutarlariGecerli(tk))
+        {
+            cihazToplam = tk.TotalAmountMinor;
+            cihazKalan = tk.TotalAmountMinor - tk.PaidAmountMinor;
+        }
+
         return new TransportResult(
             TransportOutcome.Approved,
             ApprovedAmountMinor: request.AmountMinor,
@@ -276,7 +293,8 @@ public sealed class GmpTerminalTransport : ITerminalTransport
             TicketId: fisId,
             ClosedTicketPayments: kapanisOdemeleri,
             DevicePaidMinor: cihazTahsil,
-            DeviceTicketTotalMinor: cihazToplam);
+            DeviceTicketTotalMinor: cihazToplam,
+            DeviceRemainingMinor: cihazKalan);
     }
 
     /// <summary>
@@ -880,6 +898,16 @@ public sealed class GmpTerminalTransport : ITerminalTransport
             VoidedPaymentCount: sayi, VoidedAmountMinor: tutar, CancelledSaleSessionId: sahibi,
             CancelledTicketId: iptalEdilenFis);
     }
+
+    /// <summary>
+    /// Cihazın bildirdiği toplam/ödenen çifti kendi içinde tutarlı mı? (W38)
+    ///
+    /// <para>Tutarsızsa hiçbir rakam bildirilmez: kasa cihazın sayısını otorite kabul edecek,
+    /// dolayısıyla yanlış bir sayı kendi hesabından daha kötüdür. Üç durum reddedilir —
+    /// toplam sıfır/negatif, ödenen negatif, ödenen toplamı aşıyor (kalan negatif çıkardı).</para>
+    /// </summary>
+    private static bool CihazTutarlariGecerli(GmpTicket t) =>
+        t.TotalAmountMinor > 0 && t.PaidAmountMinor >= 0 && t.PaidAmountMinor <= t.TotalAmountMinor;
 
     /// <summary>
     /// Anlık görüntüden BU YANA eklenen ödeme satırları. <c>null</c> = okunamadı (liste eksik ya da
