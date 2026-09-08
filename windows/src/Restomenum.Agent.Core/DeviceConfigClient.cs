@@ -87,10 +87,17 @@ public sealed class DeviceConfigClient
 
     /// <summary>Cihazın departman tablosunu (yalnız EŞLİYKEN okunur) + kimliğini platforma bildirir.</summary>
     /// <param name="paymentAppsJson">
-    /// Cihazdan okunan KURULU ödeme (banka) uygulamalarının ham JSON dizisi. <c>null</c> ise alan
-    /// gönderilmez ve platformdaki saklanan liste KORUNUR; boş dizi ise "kurulu uygulama yok"
-    /// beyanıdır. Ayrım önemli: okuyamadığımız bir durumu "yok" diye bildirmek, panelde çalışan
-    /// bankaları silerdi.
+    /// Cihazdan okunan KURULU ödeme (banka) uygulamalarının ham JSON dizisi. <c>null</c> ise
+    /// platformdaki saklanan liste KORUNUR; <b>boş dizi</b> ise "kurulu uygulama yok" beyanıdır.
+    /// Ayrım önemli: okuyamadığımız bir durumu "yok" diye bildirmek, panelde çalışan bankaları
+    /// silerdi.
+    ///
+    /// <para><b>Telde ne oluyor (a7 gerçek uçtan ölçtü, 2026-09-09):</b> gövde varsayılan
+    /// seçeneklerle serialize edildiği için <c>null</c> alan <b>gönderilir</b> —
+    /// <c>"paymentApplications": null</c> çıkar, alan düşmez. Eklenti tarafında <b>alanın olmaması
+    /// ile <c>null</c> olması AYNI</b> muamele görüyor (<c>deviceRoutes.ts</c>): ikisi de saklananı
+    /// korur, yalnız boş dizi listeyi siler. Yani belgelenen davranış geçerli; <c>null</c>'ı
+    /// ayıklamak için ek kod GEREKMİYOR. Aynısı <c>deviceInfo</c> için de geçerli.</para>
     /// </param>
     public async Task<bool> ReportDepartmentsAsync(
         IReadOnlyList<DeviceDepartment> departments, GmpDeviceInfo? deviceInfo,
