@@ -154,6 +154,28 @@ Gövde = G1'in yanıt gövdesinin aynısı (**tek üretici**, `SaleToPoiResponse
 `replayed` ve `alreadyPosted` yalnız teşhise taşınır; **karar vermez**. Alan gelmezse
 `null` kalır — "gelmedi" ile "false" ayrı beyanlardır.
 
+### P4 varyantı — onayın geri çekilmesi (`LANDED_RETRACTED`)
+
+Ayrı uç **değildir**: aynı `payments/{paymentId}/result` ucuna,
+`Restomenum.info = "LANDED_RETRACTED"` taşıyan bir gövdeyle POST edilir.
+
+Gövde `Result: "Failure"` + `ErrorCondition: "InProgress"` ile gider — `Success`
+**DEĞİL**, çünkü `Success ⇒ AuthorizedAmount zorunlu` değişmezi çiğnenirdi ve
+`PaymentResult` boş olduğu için mesaj kendi içinde tutarsız olurdu.
+
+**Bu neden çalışıyor** (platform tarafı ölçüldü, `statusSink.js:171`): koşul
+`providerInfo === 'LANDED_RETRACTED' && attempt.state === 'APPROVED'` — buradaki
+`attempt.state` **defterdeki önceden onaylanmış denemenin** durumudur, gövdedeki
+`Result` değil. Gövde `Failure` olduğu için `status:'unknown'` sınıfına düşer ve o
+sınıf için 171'den önce erken dönüş yoktur. Platform `{recorded:false,
+reason:'landedRetracted'}` döner. **İki tarafta da değişiklik gerekmiyor.**
+
+**Yalnız operatör tetikler:** `--retract <commandId>`. Otomatik tetikleyici YOK —
+hayaletin nasıl oluştuğuna dair güvenilir bir sinyal olmadığı için uydurma tetikleyici
+doğru onayları bozardı. Cihaza DOKUNMAZ. Başarı ölçütü `Outcome == Recorded`.
+
+`[VARSAYIM]` Bu yol sahada hiç çalıştırılmadı.
+
 ## P5 — `POST plugin-api/payments/ticket-cancel/result` · fiş iptali
 
 Ödeme ucundan **AYRI**: iptal bir denemeye değil FİŞE aittir.
