@@ -824,6 +824,8 @@ public sealed class GmpTerminalTransport : ITerminalTransport
                 ProviderResultCode: $"TICKET_READ_FAILED:{of}/{gt}");
 
         var sahibi = _snapshots?.ReadOpenTicketBinding(terminalId);
+        // ⚠️ ŞİMDİ oku: aşağıda `ClearOpenTicketBinding` çağrılıyor ve ondan sonra kimlik YOK.
+        var iptalEdilenFis = _snapshots?.ReadOpenTicketId(terminalId);
         var sayi = fis.PaymentCount;
         var tutar = fis.PaidAmountMinor;
         _log("[gmp] fiş iptali — iptal öncesi fiş", new
@@ -846,7 +848,7 @@ public sealed class GmpTerminalTransport : ITerminalTransport
                 {
                     _log("[gmp] fiş iptali — banka ters işlemi BAŞARISIZ", new { index = i, code = vp.ToString() });
                     return new TicketVoidResult(TransportOutcome.Unknown, TicketWasOpen: true,
-                        VoidedPaymentCount: sayi, VoidedAmountMinor: tutar, CancelledSaleSessionId: sahibi,
+                        VoidedPaymentCount: sayi, VoidedAmountMinor: tutar, CancelledSaleSessionId: sahibi, CancelledTicketId: iptalEdilenFis,
                         ErrorCondition: "InProgress", Reason: RestomenumReasons.VoidIncomplete,
                         ProviderResultCode: $"REVERSAL_FAILED:{vp}");
                 }
@@ -856,7 +858,7 @@ public sealed class GmpTerminalTransport : ITerminalTransport
 
         if (!vr.Ok)
             return new TicketVoidResult(TransportOutcome.Unknown, TicketWasOpen: true,
-                VoidedPaymentCount: sayi, VoidedAmountMinor: tutar, CancelledSaleSessionId: sahibi,
+                VoidedPaymentCount: sayi, VoidedAmountMinor: tutar, CancelledSaleSessionId: sahibi, CancelledTicketId: iptalEdilenFis,
                 ErrorCondition: "InProgress", Reason: RestomenumReasons.VoidIncomplete,
                 ProviderResultCode: $"VOIDALL_FAILED:{vr}");
 
@@ -868,14 +870,15 @@ public sealed class GmpTerminalTransport : ITerminalTransport
         {
             // Fiş iptal edildi ama kapatılamadı: durum BELİRSİZ, "olmadı" değil.
             return new TicketVoidResult(TransportOutcome.Unknown, TicketWasOpen: true,
-                VoidedPaymentCount: sayi, VoidedAmountMinor: tutar, CancelledSaleSessionId: sahibi,
+                VoidedPaymentCount: sayi, VoidedAmountMinor: tutar, CancelledSaleSessionId: sahibi, CancelledTicketId: iptalEdilenFis,
                 ErrorCondition: "InProgress", Reason: RestomenumReasons.VoidIncomplete,
                 ProviderResultCode: $"CLOSE_FAILED:{kapat}");
         }
 
         _log("[gmp] fiş iptal edildi", new { terminalId, odemeSayisi = sayi, tutar, sahibi = sahibi ?? "(bağ yok)" });
         return new TicketVoidResult(TransportOutcome.Approved, TicketWasOpen: true,
-            VoidedPaymentCount: sayi, VoidedAmountMinor: tutar, CancelledSaleSessionId: sahibi);
+            VoidedPaymentCount: sayi, VoidedAmountMinor: tutar, CancelledSaleSessionId: sahibi,
+            CancelledTicketId: iptalEdilenFis);
     }
 
     /// <summary>

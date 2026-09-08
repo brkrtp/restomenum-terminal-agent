@@ -310,6 +310,10 @@ public static class SaleToPoiResponseBuilder
                 ? null : JsonValue.Create(sonuc.CancelledSaleSessionId),
         };
         if (req.SaleSessionId is not null) ek["saleSessionId"] = req.SaleSessionId;
+        // W37: HANGİ fişin iptal edildiği. Platform bunu bilmeyince oturum+terminal ile arıyor ve
+        // aynı oturumda önce KAPANMIŞ bir fişin tahsilatını da ters kayda alabiliyordu.
+        // Fiş yoksa (`TICKET_NOT_OPEN`) alan HİÇ konmaz — "iptal edilen fiş" diye bir şey yok.
+        if (sonuc.CancelledTicketId is not null) ek["ticketId"] = sonuc.CancelledTicketId;
         // Komut kimliği AYNEN döner — platform açtığı iptali bununla eşleştiriyor; uyuşmazsa
         // 409 `voidNotRequested` üretip alarm veriyor. Üretmiyoruz, yansıtıyoruz.
         if (req.TicketCancelId is not null) ek["ticketCancelId"] = req.TicketCancelId;

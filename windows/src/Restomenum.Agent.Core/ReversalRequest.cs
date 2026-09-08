@@ -73,6 +73,20 @@ public sealed record TicketVoidResult(
     long VoidedAmountMinor = 0,
     /// <summary>Gerçekten iptal edilen fişin sahibi; bağ yoksa <c>null</c>.</summary>
     string? CancelledSaleSessionId = null,
+
+    /// <summary>
+    /// İptal edilen FİŞİN kimliği (<c>tkt_</c>+32hex). Bağ yoksa ya da fiş zaten yoksa <c>null</c>.
+    ///
+    /// <para><b>Neden lazım (W37):</b> platform iptal sonucunda hangi fişin iptal edildiğini
+    /// bilmiyordu ve oturum+terminal ile arıyordu; aynı oturumda önce KAPANMIŞ bir fişin tahsilatı
+    /// da ters kayda gidebiliyordu. K-33 ile o satırlar para taşıdığı için bu artık görünür bir
+    /// hata olurdu.</para>
+    ///
+    /// <para><b>Bağ SİLİNMEDEN ÖNCE okunur.</b> Silindikten sonra okumak her zaman <c>null</c>
+    /// verirdi — alan var ama hep boş, yani sessizce işe yaramaz.</para>
+    /// </summary>
+    string? CancelledTicketId = null,
+
     string? ErrorCondition = null,
     string? Reason = null,
     string? ProviderResultCode = null);

@@ -324,6 +324,39 @@ public class GmpTerminalTransportTests
         Assert.DoesNotContain("VoidAll", g.Calls);                  // fişe DOKUNULMADI
     }
 
+    // ── W37: iptal edilen FİŞİN kimliği ─────────────────────────────────────────
+
+    [Fact]
+    public async Task Fis_iptalinde_ticketId_BAG_SILINMEDEN_ONCE_okunur()
+    {
+        // ← ÇİVİ: kimlik `ClearOpenTicketBinding`'den SONRA okunsaydı her zaman null gelirdi —
+        // alan var ama hep boş, yani sessizce işe yaramaz. Platform da hangi fişin iptal
+        // edildiğini bilemeyip oturum+terminal ile arardı; aynı oturumda önce KAPANMIŞ bir
+        // fişin tahsilatı ters kayda gidebilirdi.
+        var (t, g, snap) = Kur();
+        g.Codes["Start"] = GmpCodes.AlreadyDone;                 // cihazda AÇIK fiş var
+        g.Ticket = new GmpTicket(990, 490, 1, GmpPaymentTypes.Cash, PaymentsAreComplete: true);
+        var fisId = snap.BindOpenTicket("t1", "oturum-B");
+
+        var r = await t.VoidTicketAsync("t1");
+
+        Assert.Equal(TransportOutcome.Approved, r.Outcome);
+        Assert.Equal(fisId, r.CancelledTicketId);                // ← ÇİVİ
+        Assert.Equal("oturum-B", r.CancelledSaleSessionId);
+        Assert.Null(snap.ReadOpenTicketId("t1"));                // bağ GERÇEKTEN silindi
+    }
+
+    [Fact]
+    public async Task Acik_fis_yoksa_iptalde_ticketId_NULL()
+    {
+        // İptal edilecek fiş yoksa "iptal edilen fişin kimliği" diye bir şey de yok.
+        var (t, g, _) = Kur();                                   // Start OK → açık fiş YOK
+        var r = await t.VoidTicketAsync("t1");
+
+        Assert.False(r.TicketWasOpen);
+        Assert.Null(r.CancelledTicketId);
+    }
+
     // ── W17(3): BANKA SEÇİMİ ────────────────────────────────────────────────────
 
     [Fact]

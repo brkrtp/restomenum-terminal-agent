@@ -255,6 +255,74 @@ public class ReversalTests : IDisposable
         Assert.Equal(4.9, Gövde(govde).GetProperty("ReversedAmount").GetDouble(), 3);
     }
 
+    // ── W37: HANGİ FİŞİN iptal edildiği ─────────────────────────────────────────
+
+    [Fact]
+    public async Task Iptal_bildiriminde_ticketId_GIDER()
+    {
+        // ← ÇİVİ: platform iptal sonucunda hangi fişin iptal edildiğini bilmiyordu ve
+        // oturum+terminal ile arıyordu; aynı oturumda önce KAPANMIŞ bir fişin tahsilatı da
+        // ters kayda gidebiliyordu. K-33 ile o satırlar para taşıyor.
+        var (h, sim) = Kur();
+        sim.WithTicket(new TicketState(HasOpenTicket: true, TotalAmountMinor: 990,
+            PaidAmountMinor: 490, PaymentCount: 1));
+        sim.TicketVoidResult = new TicketVoidResult(TransportOutcome.Approved, TicketWasOpen: true,
+            VoidedPaymentCount: 1, VoidedAmountMinor: 490, CancelledSaleSessionId: "oturum-B",
+            CancelledTicketId: "tkt_11112222333344445555666677778888");
+        var req = ((ReversalParseResult.Ok)ReversalRequestParser.Parse(
+            Zarf(scope: "ticket", oturum: "oturum-A"))).Request;
+
+        var govde = await h.HandleReversalAsync(req);
+        var ek = Ek(govde);
+
+        Assert.Equal("tkt_11112222333344445555666677778888", ek.GetProperty("ticketId").GetString());
+        // Oturum bilgisi DE duruyor — ikisi ayrı soru: hangi fiş, kimin fişi.
+        Assert.Equal("oturum-B", ek.GetProperty("cancelledSaleSessionId").GetString());
+    }
+
+    [Fact]
+    public async Task Acik_fis_YOKSA_ticketId_alani_HIC_KONMAZ()
+    {
+        // ← ÇİVİ: iptal edilen fiş yoksa "iptal edilen fişin kimliği" diye bir şey de yok.
+        // Boş dize ya da null göndermek, platformda var olmayan bir fişi aratırdı.
+        var (h, sim) = Kur();
+        sim.WithTicket(new TicketState(HasOpenTicket: false, TotalAmountMinor: 0, PaidAmountMinor: 0));
+        var req = ((ReversalParseResult.Ok)ReversalRequestParser.Parse(
+            Zarf(scope: "ticket", oturum: "oturum-A"))).Request;
+
+        var ek = Ek(await h.HandleReversalAsync(req));
+
+        Assert.False(ek.TryGetProperty("ticketId", out _));
+        Assert.Equal(RestomenumReasons.TicketNotOpen, ek.GetProperty("info").GetString());
+    }
+
+    [Fact]
+    public async Task Outboxa_giren_govde_de_ticketId_TASIR()
+    {
+        // ← ÇİVİ: yeniden gönderimde kaybolmamalı. Kasaya giden ile kuyruğa yazılan AYNI gövde
+        // olmalı — iki ayrı üretici olsaydı biri değişince diğeri sessizce eskirdi.
+        var (h, sim) = Kur();
+        sim.WithTicket(new TicketState(HasOpenTicket: true, TotalAmountMinor: 990,
+            PaidAmountMinor: 490, PaymentCount: 1));
+        sim.TicketVoidResult = new TicketVoidResult(TransportOutcome.Approved, TicketWasOpen: true,
+            VoidedPaymentCount: 1, VoidedAmountMinor: 490, CancelledSaleSessionId: "oturum-B",
+            CancelledTicketId: "tkt_aaaabbbbccccddddeeeeffff00001111");
+        // Gönderim BAŞARISIZ olsun ki kayıt kuyrukta kalsın — başarılıda `Confirm` siliyor
+        // (doğru davranış). Test edilecek şey tam da "gidemediğinde kuyrukta ne duruyor".
+        _notifier.TicketCancelResult = new NotifyResult(NotifyOutcome.NetworkError, null, null, 0, "ağ");
+        var req = ((ReversalParseResult.Ok)ReversalRequestParser.Parse(
+            Zarf(scope: "ticket", oturum: "oturum-A"))).Request;
+
+        await h.HandleReversalAsync(req);
+
+        var kuyruk = _outbox.Pending(ignoreBackoff: true)
+            .Single(e => e.Status == OutboxKinds.TicketCancel);
+        var kuyruktakiEk = System.Text.Json.JsonDocument.Parse(kuyruk.PayloadJson).RootElement
+            .GetProperty("SaleToPOIResponse").GetProperty("Restomenum");
+        Assert.Equal("tkt_aaaabbbbccccddddeeeeffff00001111",
+            kuyruktakiEk.GetProperty("ticketId").GetString());
+    }
+
     [Fact]
     public async Task Acik_fis_YOKSA_basarisizlik_DEGIL_TICKET_NOT_OPEN()
     {
@@ -438,8 +506,10 @@ public class ReversalTests : IDisposable
         public List<string> TicketCancelBodies { get; } = new();
         public Task<NotifyResult> NotifyAsync(string p, string body, CancellationToken ct = default) =>
             Task.FromResult(new NotifyResult(NotifyOutcome.Recorded, "OK", null, 200, ""));
+        /// <summary>İptal bildiriminin sonucu — testte ağ hatasına çevrilebilir.</summary>
+        public NotifyResult TicketCancelResult = new(NotifyOutcome.Recorded, "OK", null, 200, "");
         public Task<NotifyResult> NotifyTicketCancelAsync(string body, CancellationToken ct = default)
-        { TicketCancelBodies.Add(body); return Task.FromResult(new NotifyResult(NotifyOutcome.Recorded, "OK", null, 200, "")); }
+        { TicketCancelBodies.Add(body); return Task.FromResult(TicketCancelResult); }
         public List<string> TicketClosedBodies { get; } = new();
         public Task<NotifyResult> NotifyTicketClosedAsync(string body, CancellationToken ct = default)
         { TicketClosedBodies.Add(body); return Task.FromResult(new NotifyResult(NotifyOutcome.Recorded, "OK", null, 200, "")); }
