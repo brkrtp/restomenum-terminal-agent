@@ -93,22 +93,48 @@ public sealed class Outbox : IDisposable
     /// <returns><c>true</c> yeni yazıldı, <c>false</c> zaten vardı.</returns>
     public bool Enqueue(
         string eventId, string paymentId, string status, string payloadJson,
-        string providerPluginId, long? now = null)
+        string providerPluginId, long? now = null, bool anlikDenemeVar = false)
     {
         lock (_gate)
         {
             using var cmd = _conn.CreateCommand();
+            // ── W47: ANLIK DENEMESİ OLAN KAYIT DRAIN TURUNA GÖRÜNMEZ DOĞAR ────────────
+            // `next_attempt_at` yazılmıyordu ve sütunun varsayılanı 0 — yani kayıt doğar doğmaz
+            // "vakti gelmiş" sayılıyordu. Çağıran ise sırayla ÖNCE buraya yazıp SONRA anlık POST
+            // atıyor; o POST uçarken araya giren periyodik drain turu aynı gövdeyi İKİNCİ KEZ
+            // gönderiyordu.
+            //
+            // ÖLÇÜLDÜ (2026-09-08 19:59:31, W44b): anlık POST 3.004 ms sürdü (oturum alımı dahil);
+            // 19:59:35.308'de drain turu araya girdi ve `attempts` 1'den 2'ye atladı — a1'in son
+            // tarihinden 29 sn ÖNCE. Sonuç bugün doğruydu (platform tekilleştiriyor) ama:
+            //   • ağ zorlanırken trafiği İKİYE katlıyor — W20'nin çözdüğü sorunun küçük kopyası,
+            //   • deneme sayacını şişirip alarm eşiğini (10) erken tetikliyor,
+            //   • geri çekilme ızgarasını ölçülemez hale getiriyor.
+            //
+            // Çözüm: ANLIK DENEMESİ OLAN kayıt `IlkAralik` kadar ileriden doğsun. O POST zaten
+            // HEMEN deneniyor; başarılıysa `Confirm`, değilse `MarkAttempt` sayacı ve süreyi kendi
+            // kuruyor. Süreç anlık POST'u bitiremeden ölürse kayıt 30 sn bekler — ama açılış
+            // drain'i `ignoreBackoff: true` ile onu BEKLETMEDEN alır (sahada ölçüldü, 194 sn marj).
+            //
+            // ⚠️ VARSAYILAN `false` — yani "hemen uygun", eski davranış. Çünkü anlık denemesi
+            // OLMAYAN çağrılar da var (kurtarılan gövdesiz kapanışlar: onların İLK denemesi zaten
+            // drain turudur) ve onları 30 sn bekletmek gereksiz gecikme olurdu. Gecikmeyi yalnız
+            // "yazdım, şimdi kendim deneyeceğim" diyen çağrı istiyor.
             cmd.CommandText = """
                 INSERT OR IGNORE INTO outbox
-                    (event_id, payment_id, status, payload_json, provider_plugin_id, created_at)
-                VALUES ($eid, $pid, $st, $pl, $prov, $now)
+                    (event_id, payment_id, status, payload_json, provider_plugin_id, created_at,
+                     next_attempt_at)
+                VALUES ($eid, $pid, $st, $pl, $prov, $now, $ilk)
                 """;
             cmd.Parameters.AddWithValue("$eid", eventId);
             cmd.Parameters.AddWithValue("$pid", paymentId);
             cmd.Parameters.AddWithValue("$st", status);
             cmd.Parameters.AddWithValue("$pl", payloadJson);
             cmd.Parameters.AddWithValue("$prov", providerPluginId);
-            cmd.Parameters.AddWithValue("$now", now ?? DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+            var simdi = now ?? DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            cmd.Parameters.AddWithValue("$now", simdi);
+            cmd.Parameters.AddWithValue("$ilk",
+                anlikDenemeVar ? simdi + (long)IlkAralik.TotalMilliseconds : 0L);
             return cmd.ExecuteNonQuery() == 1;
         }
     }

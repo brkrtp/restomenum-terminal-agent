@@ -37,10 +37,16 @@ public sealed class HttpResultNotifier : IResultNotifier
     {
         int status;
         string body;
+        // W48: iki ayak AYRI ölçülüyor. Tek toplam sayı, yavaşlığın oturum alımında mı POST'ta mı
+        // olduğunu söylemiyor ve teşhisi yanlış yere gönderiyor (2026-09-08: `sureMs=3004`
+        // görüldü, POST sanıldı, hepsi oturum alımıydı).
+        var kronometre = System.Diagnostics.Stopwatch.StartNew();
+        long? oturumMs = null, postMs = null;
         try
         {
             // Oturum + POST tek try'da: oturum ucu erişilemezse NetworkError → outbox'ta kalır, replay.
             var token = (await _sessions.AcquireAsync(ct)).Token;
+            oturumMs = kronometre.ElapsedMilliseconds;
             var uri = new Uri(_baseUri, yol);
             using var req = new HttpRequestMessage(HttpMethod.Post, uri)
             {
@@ -50,12 +56,19 @@ public sealed class HttpResultNotifier : IResultNotifier
             using var resp = await _http.SendAsync(req, ct);
             status = (int)resp.StatusCode;
             body = await resp.Content.ReadAsStringAsync(ct);
+            postMs = kronometre.ElapsedMilliseconds - oturumMs;
         }
         catch (Exception e) when (e is not OperationCanceledException)
         {
-            return new NotifyResult(NotifyOutcome.NetworkError, null, null, 0, $"ağ/oturum hatası: {e.Message}");
+            // Hangi ayakta düştüğü, `oturumMs`'in dolu olup olmamasından okunur: null ise oturum
+            // alınamadı ve POST'a HİÇ gelinmedi — o yüzden `postMs` null KALIR (0 yazmak
+            // "denendi, anında bitti" derdi ki yanlış).
+            if (oturumMs is null) oturumMs = kronometre.ElapsedMilliseconds;
+            else postMs = kronometre.ElapsedMilliseconds - oturumMs;
+            return new NotifyResult(NotifyOutcome.NetworkError, null, null, 0,
+                $"ağ/oturum hatası: {e.Message}", SessionMs: oturumMs, PostMs: postMs);
         }
 
-        return ResultNotifyParser.Parse(status, body);
+        return ResultNotifyParser.Parse(status, body) with { SessionMs = oturumMs, PostMs = postMs };
     }
 }

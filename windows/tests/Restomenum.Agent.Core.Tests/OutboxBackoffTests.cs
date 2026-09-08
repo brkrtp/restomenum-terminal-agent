@@ -58,11 +58,49 @@ public class OutboxBackoffTests : IDisposable
     public void Sira_created_at_olarak_KALIYOR()
     {
         // Süzgeç eklendi ama kuyruk sırası değişmedi: en eski önce.
-        _outbox.Enqueue("eski", "pay_1", OutboxKinds.Result, "{}", "", now: T0);
-        _outbox.Enqueue("yeni", "pay_2", OutboxKinds.Result, "{}", "", now: T0 + 5_000);
+        _outbox.Enqueue("eski", "pay_1", OutboxKinds.Result, "{}", "", now: T0, anlikDenemeVar: true);
+        _outbox.Enqueue("yeni", "pay_2", OutboxKinds.Result, "{}", "", now: T0 + 5_000, anlikDenemeVar: true);
 
-        var sirali = _outbox.Pending(now: T0 + 10_000);
+        // W47: taze kayıt +30 sn ileriden doğuyor; sıra testi bu yüzden 40. sn'den bakıyor.
+        // Sınanan şey DEĞİŞMEDİ: hangi kaydın önce geldiği.
+        var sirali = _outbox.Pending(now: T0 + 40_000);
         Assert.Equal(new[] { "eski", "yeni" }, sirali.Select(x => x.EventId));
+    }
+
+    [Fact]
+    public void TAZE_kayit_drain_turunda_GORUNMEZ()
+    {
+        // ← ÇİVİ (W47): çağıran ÖNCE outbox'a yazıp SONRA anlık POST atıyor. Kayıt "vakti gelmiş"
+        // doğarsa, o POST uçarken araya giren periyodik drain turu aynı gövdeyi İKİNCİ KEZ
+        // gönderir. Sahada ölçüldü (2026-09-08 19:59:35): anlık POST 3 sn sürdü, drain araya
+        // girdi, `attempts` 1'den 2'ye atladı ve geri çekilme ızgarası bozuldu.
+        _outbox.Enqueue("taze", "pay_1", OutboxKinds.Result, "{}", "", now: T0, anlikDenemeVar: true);
+
+        Assert.Empty(_outbox.Pending(now: T0));               // ← ÇİVİ: anlık POST'un penceresi
+        Assert.Empty(_outbox.Pending(now: T0 + 29_000));
+        Assert.Single(_outbox.Pending(now: T0 + 30_000));     // 30 sn sonra normal kuyruğa girer
+    }
+
+    [Fact]
+    public void ANLIK_denemesi_OLMAYAN_kayit_HEMEN_gorunur()
+    {
+        // ← ÇİVİ: gecikme yalnız "yazdım, şimdi kendim deneyeceğim" diyen çağrı için. Kurtarılan
+        // gövdesiz kapanışların anlık denemesi YOK — onların İLK denemesi zaten drain turu.
+        // Hepsini geciktirmek o kurtarmayı 30 sn boşuna bekletirdi.
+        _outbox.Enqueue("kurtarilan", "pay_1", OutboxKinds.TicketClosed, "{}", "", now: T0);
+
+        Assert.Single(_outbox.Pending(now: T0));
+    }
+
+    [Fact]
+    public void TAZE_kayit_ACILIS_drainde_BEKLETILMEZ()
+    {
+        // ← ÇİVİ: W47'nin bedeli "süreç anlık POST'u bitiremeden ölürse kayıt 30 sn bekler" olurdu.
+        // Beklemiyor: açılış drain'i `ignoreBackoff: true` ile koşuyor (AgentWorker.cs:86) ve
+        // kaydı ANINDA alıyor. Bu daldan vazgeçilirse yeniden başlatma 30 sn geciktirirdi.
+        _outbox.Enqueue("taze", "pay_1", OutboxKinds.Result, "{}", "", now: T0, anlikDenemeVar: true);
+
+        Assert.Single(_outbox.Pending(now: T0, ignoreBackoff: true));
     }
 
     [Fact]

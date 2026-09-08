@@ -34,8 +34,21 @@ public enum NotifyOutcome
 /// <param name="AlreadyPosted">
 /// Fiş kapanış bildiriminde: daha önce yazılmış satır sayısı. <c>null</c> = alan gelmedi.
 /// </param>
+/// <param name="SessionMs">
+/// Oturum JWT'sini almak kaç ms sürdü (W48). <c>null</c> = ölçülmedi (ör. testteki sahte istemci).
+///
+/// <para><b>Neden ayrı (ölçüm 2026-09-08 19:59:34):</b> `sureMs = 3004` gördük ve bunu "POST 3 sn
+/// sürdü" diye okumak çok kolaydı — oysa hedef LOOPBACK ölü porttu, bağlantı ANINDA reddediliyordu.
+/// Üç saniyenin tamamı oturum alımıydı. Tek sayı, yavaşlığın hangi ayakta olduğunu söyleyemiyor ve
+/// teşhisi yanlış yere gönderiyor.</para>
+/// </param>
+/// <param name="PostMs">
+/// Gövdenin POST edilmesi kaç ms sürdü (W48). <c>null</c> = o aşamaya HİÇ gelinmedi (oturum
+/// alınamadı) ya da ölçülmedi. "0 ms" ile "hiç denenmedi" AYRI: ilki ölçüm, ikincisi bilgisizlik.
+/// </param>
 public sealed record NotifyResult(NotifyOutcome Outcome, string? State, string? Reason, int StatusCode,
-    string Message, bool? Replayed = null, int? AlreadyPosted = null)
+    string Message, bool? Replayed = null, int? AlreadyPosted = null,
+    long? SessionMs = null, long? PostMs = null)
 {
     /// <summary>Outbox kaydı silinmeli mi? Kesin (yazıldı/bayat/çelişki/red/notfound) → EVET; ağ/hız → HAYIR.</summary>
     public bool IsFinal => Outcome is not (NotifyOutcome.RateLimited or NotifyOutcome.NetworkError);

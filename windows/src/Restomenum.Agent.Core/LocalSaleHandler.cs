@@ -346,7 +346,8 @@ public sealed class LocalSaleHandler
         var eid = (req.TicketCancelId ?? req.PaymentId) + ":ticket-cancel";
         // Fiş iptalinde paymentId olmayabilir (başka kasadan kalmış fiş). Outbox'ta yalnız
         // bilgi amaçlı taşınıyor; replay uca göre yönleniyor, paymentId'ye bakmıyor.
-        _outbox.Enqueue(eid, req.PaymentId ?? "", OutboxKinds.TicketCancel, govde, "");
+        _outbox.Enqueue(eid, req.PaymentId ?? "", OutboxKinds.TicketCancel, govde, "",
+            anlikDenemeVar: true);   // W47: hemen aşağıda kendim deneyeceğim
         try
         {
             // ── W46: BİLDİRİMİN AKIBETİ HER DURUMDA YAZILIR ───────────────────────
@@ -367,13 +368,13 @@ public sealed class LocalSaleHandler
                 _log("[iptal] fiş iptali bildirimi SORUNU (alarm)", new
                 {
                     req.PaymentId, outcome = bildirim.Outcome.ToString(),
-                    bildirim.StatusCode, bildirim.Message, sureMs,
+                    bildirim.StatusCode, bildirim.Message, sureMs, oturumMs = bildirim.SessionMs, postMs = bildirim.PostMs,
                 });
             else if (!bildirim.IsFinal)
                 _log("[iptal] fiş iptali bildirimi GİTMEDİ — outbox'ta kaldı (replay)", new
                 {
                     req.PaymentId, ticketCancelId = req.TicketCancelId ?? "(yok)",
-                    outcome = bildirim.Outcome.ToString(), bildirim.StatusCode, sureMs,
+                    outcome = bildirim.Outcome.ToString(), bildirim.StatusCode, sureMs, oturumMs = bildirim.SessionMs, postMs = bildirim.PostMs,
                 });
             else
                 _log("[iptal] fiş iptali bildirimi yazıldı", new
@@ -382,7 +383,7 @@ public sealed class LocalSaleHandler
                     outcome = bildirim.Outcome.ToString(), bildirim.StatusCode,
                     state = bildirim.State ?? "(yok)",
                     replayed = bildirim.Replayed?.ToString() ?? "(yok)",
-                    sureMs,
+                    sureMs, oturumMs = bildirim.SessionMs, postMs = bildirim.PostMs,
                 });
         }
         catch (Exception e) when (e is not OperationCanceledException)
@@ -562,7 +563,8 @@ public sealed class LocalSaleHandler
             totalMinor: sonuc.DeviceTicketTotalMinor, paidMinor: sonuc.DevicePaidMinor);
 
         var eid = fisId + ":ticket-closed";
-        _outbox.Enqueue(eid, req.PaymentId, OutboxKinds.TicketClosed, govde, "");
+        _outbox.Enqueue(eid, req.PaymentId, OutboxKinds.TicketClosed, govde, "",
+            anlikDenemeVar: true);   // W47
         // Gövde artık outbox'ta: gönderim garantisi oraya DEVREDİLDİ. `closed_tickets` yalnız
         // "bağ silindi ama gövde henüz yazılmadı" aralığını koruyordu, o aralık kapandı.
         _store.ConfirmTicketClosed(fisId);
@@ -582,7 +584,7 @@ public sealed class LocalSaleHandler
                 _log("[yerel] fiş kapandı bildirimi SORUNU (alarm)", new
                 {
                     req.PaymentId, fisId, outcome = bildirim.Outcome.ToString(),
-                    bildirim.StatusCode, bildirim.Message, sureMs,
+                    bildirim.StatusCode, bildirim.Message, sureMs, oturumMs = bildirim.SessionMs, postMs = bildirim.PostMs,
                 });
             // W46: AĞ HATASI "yazıldı" diye loglanıyordu. `IsProblem` false + `IsFinal` false
             // birlikte "gitmedi, kuyrukta kaldı" demek; alt daldaki başarı metnine düşüyordu.
@@ -592,7 +594,7 @@ public sealed class LocalSaleHandler
                 _log("[yerel] fiş kapandı bildirimi GİTMEDİ — outbox'ta kaldı (replay)", new
                 {
                     req.PaymentId, fisId, outcome = bildirim.Outcome.ToString(),
-                    bildirim.StatusCode, sureMs,
+                    bildirim.StatusCode, sureMs, oturumMs = bildirim.SessionMs, postMs = bildirim.PostMs,
                 });
             else
                 // BAŞARIYI DA YAZ. Bu yol W22'de atlanmıştı ve bedeli ölçüldü (2026-09-07 23:51):
@@ -605,7 +607,7 @@ public sealed class LocalSaleHandler
                     bildirim.StatusCode, state = bildirim.State ?? "(yok)",
                     replayed = bildirim.Replayed?.ToString() ?? "(yok)",
                     zatenYazilan = bildirim.AlreadyPosted?.ToString() ?? "(yok)",
-                    sureMs,
+                    sureMs, oturumMs = bildirim.SessionMs, postMs = bildirim.PostMs,
                 });
         }
         catch (Exception e) when (e is not OperationCanceledException)
@@ -719,7 +721,8 @@ public sealed class LocalSaleHandler
     private async Task<NotifyResult?> NotifyAsync(string paymentId, string body, CancellationToken ct)
     {
         var eid = paymentId + ":result";
-        _outbox.Enqueue(eid, paymentId, OutboxKinds.Result, body, "");   // dayanıklı yazım ÖNCE (INSERT OR IGNORE)
+        // dayanıklı yazım ÖNCE (INSERT OR IGNORE). W47: anlık deneme benim, drain araya girmesin.
+        _outbox.Enqueue(eid, paymentId, OutboxKinds.Result, body, "", anlikDenemeVar: true);
         try
         {
             NotifyResult res;
