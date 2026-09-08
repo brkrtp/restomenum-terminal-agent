@@ -24,14 +24,19 @@ public sealed class HttpSessionProvider : ISessionProvider
     private readonly ClockOffset _clock;
 
     public HttpSessionProvider(
-        HttpClient http, IDeviceKey key, string serverId, Uri endpoint, ClockOffset clock)
+        HttpClient http, IDeviceKey key, string serverId, Uri endpoint, ClockOffset clock,
+        Func<DateTimeOffset>? now = null)
     {
         _http = http;
         _key = key;
         _serverId = serverId;
         _endpoint = endpoint;
         _clock = clock;
+        _simdi = now ?? (() => DateTimeOffset.UtcNow);
     }
+
+    /// <summary>Önbellek geçerliliği için duvar saati (W52) — testte sabitlenir.</summary>
+    private readonly Func<DateTimeOffset> _simdi;
 
     /// <summary>
     /// Bu sağlayıcıdan giden TOPLAM oturum HTTP isteği (W51 — yalnız ölçüm, karar etkilemez).
@@ -41,7 +46,70 @@ public sealed class HttpSessionProvider : ISessionProvider
     public int HttpDenemeSayisi => _httpDeneme;
     private int _httpDeneme;
 
+    /// <summary>
+    /// Jetonun ömrünün sonuna bırakılan GÜVENLİK MARJI (W52). Jeton `ExpiresInSec` kadar geçerli
+    /// ama son saniyesine kadar kullanmak, tam da uçta işlenirken dolmasına yol açardı — ve o
+    /// hata satışın ortasında görünürdü.
+    /// </summary>
+    public static readonly TimeSpan Marj = TimeSpan.FromSeconds(60);
+
+    private readonly SemaphoreSlim _jetonKilidi = new(1, 1);
+    private SessionToken? _jeton;
+    private DateTimeOffset _gecerlilikSonu;
+
+    /// <summary>
+    /// Elde tutulan jetonu atar (W52) — çağıran <c>401</c> aldığında.
+    /// </summary>
+    public void Invalidate()
+    {
+        lock (_atmaKilidi) { _jeton = null; _gecerlilikSonu = default; }
+    }
+
+    private readonly object _atmaKilidi = new();
+
+    /// <summary>
+    /// Oturum jetonu — <b>geçerliyse yeniden kullanılır</b> (W52).
+    ///
+    /// <para><b>Neden (ölçüm 2026-09-08 22:45):</b> önbellek yoktu; platforma giden HER çağrı
+    /// baştan bir oturum POST'u atıyordu. Tek satışta 3 tur sayıldı (bulut günlüğü: 09.370 /
+    /// 27.861 / 29.355). Sıcakken ~140 ms, SOĞUKKEN <b>4,59 sn</b> — o gün 20 saniyelik satışın
+    /// yarısı buydu.</para>
+    ///
+    /// <para><b>Süreç yeniden başlayınca temiz:</b> jeton yalnız bellekte. Diske yazmak, süreç
+    /// ölümünde geçersiz bir jetonla uyanma riski getirirdi ve kazancı yok.</para>
+    /// </summary>
     public async Task<SessionToken> AcquireAsync(CancellationToken ct = default)
+    {
+        if (GecerliJeton() is { } hazir) return hazir;
+
+        // Tek uçuş: eşzamanlı iki satış aynı anda jeton almasın (fırtına yok).
+        await _jetonKilidi.WaitAsync(ct);
+        try
+        {
+            // Kilidi beklerken başkası almış olabilir.
+            if (GecerliJeton() is { } arada) return arada;
+            var yeni = await AlAsync(ct);
+            lock (_atmaKilidi)
+            {
+                _jeton = yeni;
+                // `ExpiresInSec` 0/negatif gelirse önbellek KURULMAZ (her çağrı yeniden alır) —
+                // uydurma bir ömür vermektense önbelleksiz çalışmak doğru.
+                _gecerlilikSonu = yeni.ExpiresInSec > Marj.TotalSeconds
+                    ? _simdi().AddSeconds(yeni.ExpiresInSec) - Marj
+                    : default;
+            }
+            return yeni;
+        }
+        finally { _jetonKilidi.Release(); }
+    }
+
+    private SessionToken? GecerliJeton()
+    {
+        lock (_atmaKilidi)
+            return _jeton is not null && _gecerlilikSonu > _simdi() ? _jeton : null;
+    }
+
+    private async Task<SessionToken> AlAsync(CancellationToken ct)
     {
         var (token, stale) = await DeneAsync(ct);
         if (token is not null) return token;

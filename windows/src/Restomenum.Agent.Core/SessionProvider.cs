@@ -13,4 +13,15 @@ public sealed record SessionToken(string Token, int ExpiresInSec, long ServerTim
 public interface ISessionProvider
 {
     Task<SessionToken> AcquireAsync(CancellationToken ct = default);
+
+    /// <summary>
+    /// Elde tutulan jetonu ATAR (W52). Bir çağrı <c>401</c> alırsa jeton erken geçersiz olmuş
+    /// demektir; çağıran bunu söyler, sağlayıcı bir sonraki <see cref="AcquireAsync"/>'te yeni
+    /// jeton alır.
+    ///
+    /// <para><b>Varsayılan gövde BOŞ:</b> önbelleklemeyen uygulamalar (testlerdeki sahteler)
+    /// için atacak bir şey yok. Zorunlu üye yapmak onlarca sahte uygulamayı kırardı ve
+    /// kırılanların hiçbiri gerçek bir hata olmazdı.</para>
+    /// </summary>
+    void Invalidate() { }
 }

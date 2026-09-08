@@ -53,6 +53,9 @@ public sealed class OlcenSessionProvider : ISessionProvider
 
     public OlcenSessionProvider(ISessionProvider ic) => _ic = ic;
 
+    /// <summary>Geçersiz kılmayı olduğu gibi geçirir (W52) — ölçüm sarmalayıcısı karar vermez.</summary>
+    public void Invalidate() => _ic.Invalidate();
+
     public async Task<SessionToken> AcquireAsync(CancellationToken ct = default)
     {
         var kutu = _kutu.Value;

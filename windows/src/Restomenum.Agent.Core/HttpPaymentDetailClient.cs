@@ -34,14 +34,17 @@ public sealed class HttpPaymentDetailClient : IPaymentDetailClient
         string body;
         try
         {
-            // Oturum token'ı + GET tek try'da: oturum ucu erişilemezse de "platform erişilemez"→sürme.
-            var token = (await _sessions.AcquireAsync(ct)).Token;
-            var uri = new Uri(_baseUri, $"plugin-api/payments/{Uri.EscapeDataString(paymentId)}");
-            using var req = new HttpRequestMessage(HttpMethod.Get, uri);
-            req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
-            using var resp = await _http.SendAsync(req, ct);
-            status = (int)resp.StatusCode;
-            body = await resp.Content.ReadAsStringAsync(ct);
+            (status, body) = await GetAsync(paymentId, ct);
+
+            // ── W52: 401 → TEK yenileme + TEK tekrar ────────────────────────────────
+            // Jeton artık önbellekli; uç onu bizden önce geçersiz sayabilir (erken süre dolumu,
+            // anahtar döndürme). Tek bir yenileme + tek bir tekrar: fırtına YOK. İkinci 401
+            // olduğu gibi ayrıştırıcıya gider — orada "reddedildi" olur ve terminal SÜRÜLMEZ.
+            if (status == 401)
+            {
+                _sessions.Invalidate();
+                (status, body) = await GetAsync(paymentId, ct);
+            }
         }
         catch (Exception e) when (e is not OperationCanceledException)
         {
@@ -49,5 +52,16 @@ public sealed class HttpPaymentDetailClient : IPaymentDetailClient
         }
 
         return PaymentDetailParser.Parse(status, body);
+    }
+
+    /// <summary>Tek GET denemesi. Jeton BAŞLIKTA kalır — hiçbir log satırına girmez.</summary>
+    private async Task<(int Status, string Body)> GetAsync(string paymentId, CancellationToken ct)
+    {
+        var token = (await _sessions.AcquireAsync(ct)).Token;
+        var uri = new Uri(_baseUri, $"plugin-api/payments/{Uri.EscapeDataString(paymentId)}");
+        using var req = new HttpRequestMessage(HttpMethod.Get, uri);
+        req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+        using var resp = await _http.SendAsync(req, ct);
+        return ((int)resp.StatusCode, await resp.Content.ReadAsStringAsync(ct));
     }
 }

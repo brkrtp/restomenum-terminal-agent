@@ -47,16 +47,24 @@ public sealed class HttpResultNotifier : IResultNotifier
             // Oturum + POST tek try'da: oturum ucu erişilemezse NetworkError → outbox'ta kalır, replay.
             var token = (await _sessions.AcquireAsync(ct)).Token;
             oturumMs = kronometre.ElapsedMilliseconds;
-            var uri = new Uri(_baseUri, yol);
-            using var req = new HttpRequestMessage(HttpMethod.Post, uri)
-            {
-                Content = new StringContent(bodyJson, Encoding.UTF8, "application/json"),
-            };
-            req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
-            using var resp = await _http.SendAsync(req, ct);
-            status = (int)resp.StatusCode;
-            body = await resp.Content.ReadAsStringAsync(ct);
+            (status, body) = await PostAsync(yol, bodyJson, token, ct);
             postMs = kronometre.ElapsedMilliseconds - oturumMs;
+
+            // ── W52: 401 → TEK yenileme + TEK tekrar ────────────────────────────────
+            // Jeton önbellekli; uç onu bizden önce geçersiz sayabilir. Tek yenileme + tek
+            // tekrar: fırtına YOK. İkinci 401 olduğu gibi ayrıştırıcıya gider.
+            // ⚠️ Süreler tekrarı DA kapsayacak şekilde yeniden okunuyor — "bir tur sürdü" diye
+            // raporlamak, iki tur sürmüşken teşhisi yanıltırdı.
+            if (status == 401)
+            {
+                _sessions.Invalidate();
+                var oturum2Bas = kronometre.ElapsedMilliseconds;
+                var token2 = (await _sessions.AcquireAsync(ct)).Token;
+                oturumMs += kronometre.ElapsedMilliseconds - oturum2Bas;
+                var post2Bas = kronometre.ElapsedMilliseconds;
+                (status, body) = await PostAsync(yol, bodyJson, token2, ct);
+                postMs += kronometre.ElapsedMilliseconds - post2Bas;
+            }
         }
         catch (Exception e) when (e is not OperationCanceledException)
         {
@@ -70,5 +78,19 @@ public sealed class HttpResultNotifier : IResultNotifier
         }
 
         return ResultNotifyParser.Parse(status, body) with { SessionMs = oturumMs, PostMs = postMs };
+    }
+
+    /// <summary>Tek POST denemesi. Jeton BAŞLIKTA kalır — hiçbir log satırına girmez.</summary>
+    private async Task<(int Status, string Body)> PostAsync(string yol, string bodyJson, string token,
+        CancellationToken ct)
+    {
+        var uri = new Uri(_baseUri, yol);
+        using var req = new HttpRequestMessage(HttpMethod.Post, uri)
+        {
+            Content = new StringContent(bodyJson, Encoding.UTF8, "application/json"),
+        };
+        req.Headers.Authorization = new AuthenticationHeaderValue("Bearer", token);
+        using var resp = await _http.SendAsync(req, ct);
+        return ((int)resp.StatusCode, await resp.Content.ReadAsStringAsync(ct));
     }
 }
