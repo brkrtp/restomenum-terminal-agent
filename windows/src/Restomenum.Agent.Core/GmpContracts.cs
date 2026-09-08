@@ -346,7 +346,39 @@ public static class GmpPaymentTypes
 
     /// <summary>Cihazın tanıdığı bir ödeme tipi mi (1/4/16). Eşleme dosyasındaki uydurma bir değer
     /// (ör. 99) terminale gitmeden yakalanır — bilinmeyen tip yanlış işlem/iptal yolu üretir.</summary>
-    public static bool IsKnown(int paymentType) => paymentType is Cash or Card or Mobile;
+    /// <summary>Yemek çeki (<c>PAYMENT_YEMEKCEKI</c>, 0x08). ⚠️ DLL notu: <b>"Uygulama varsa"</b> — cihazda ilgili ödeme uygulaması kurulu olmalı.</summary>
+    public const int MealVoucher = 8;
+
+    /// <summary>Hediye çeki (<c>PAYMENT_HEDIYE_CEKI</c>, 0x20).</summary>
+    public const int GiftVoucher = 32;
+
+    /// <summary>Puan (<c>PAYMENT_PUAN</c>, 0x200).</summary>
+    public const int Points = 512;
+
+    /// <summary>Havale/banka transferi (<c>PAYMENT_BANKA_TRANSFERI</c>, 0x800).</summary>
+    public const int BankTransfer = 2048;
+
+    /// <summary>Çek (<c>PAYMENT_CEK</c>, 0x1000).</summary>
+    public const int Cheque = 4096;
+
+    /// <summary>
+    /// Bu tip <b>ödeme olarak gönderilebilir mi?</b> (W54)
+    ///
+    /// <para>⚠️ <b>"Gönderilebilir" ≠ "iptal edilebilir".</b> İptal yolu tipe göre ayrılıyor ve
+    /// ölçülmüş olanlar yalnız üçü: nakit → <c>VoidAll</c> doğrudan · kart → <c>2069</c>, banka
+    /// ters işlemi gerekir · QR/mobil → nakde benzer (<c>VoidAll</c> doğrudan, 2026-09-07 ölçümü).
+    /// <b>Yeni beş tipin iptal davranışı ÖLÇÜLMEDİ</b>; uygulama tabanlıysa <c>2069</c> gelip
+    /// <c>VoidPayment</c> dalına düşebilirler ve o dal sahada hiç çalışmadı.</para>
+    ///
+    /// <para>Listede OLMAYANLAR bilinçli: <c>PAYMENT_IKRAM</c> (64), <c>PAYMENT_ODEMESIZ</c> (128),
+    /// <c>PAYMENT_KAPORA</c> (256), <c>PAYMENT_ACIK_HESAP</c> (8192) — bunlar para tahsil etmiyor
+    /// ya da ayrı karar bekliyor; <c>PAYMENT_CASH_CURRENCY</c> (2, döviz) ise ajan her tutarı
+    /// <b>TL</b> gönderdiği için (949 sabit, kur profili bağlı değil) eklenirse yanlış mali kayıt
+    /// üretirdi.</para>
+    /// </summary>
+    public static bool IsKnown(int paymentType) => paymentType
+        is Cash or Card or Mobile
+        or MealVoucher or GiftVoucher or Points or BankTransfer or Cheque;
 }
 
 /// <summary>

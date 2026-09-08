@@ -432,6 +432,14 @@ public static class SaleToPoiResponseBuilder
                 GmpPaymentTypes.Cash => "cash",
                 GmpPaymentTypes.Card => "card",
                 GmpPaymentTypes.Mobile => "qr",
+                // W54 — beş yeni tür. Adlar 16 karakterin altında (uç sınırı).
+                GmpPaymentTypes.MealVoucher => "mealVoucher",
+                GmpPaymentTypes.GiftVoucher => "giftVoucher",
+                GmpPaymentTypes.Points => "points",
+                GmpPaymentTypes.BankTransfer => "bankTransfer",
+                GmpPaymentTypes.Cheque => "cheque",
+                // ⚠️ KURAL KORUNDU: tanımadığımız tipte alan KONMAZ. "bilmiyorum" ile "nakit"
+                // ayrı olgular; yanlış yöntemi deftere yazmak muhasebeyi bozar.
                 _ => null,
             };
             if (ad is not null) satir["methodType"] = ad;
