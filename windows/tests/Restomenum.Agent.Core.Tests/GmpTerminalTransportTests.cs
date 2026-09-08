@@ -46,8 +46,16 @@ public class GmpTerminalTransportTests
         public GmpResult ItemSale(ulong h, GmpItem i, out GmpTicket tk) { tk = Ticket; return Kod("ItemSale"); }
         /// <summary>Cihaza GİDEN ödeme isteği — banka seçiminin taşınıp taşınmadığı burada görülür.</summary>
         public GmpPaymentRequest? LastPaymentRequest;
+        /// <summary>TUM odeme istekleri sirasiyla (W57 yoklamasi dort tipi arka arkaya deniyor).</summary>
+        public List<GmpPaymentRequest> PaymentRequests { get; } = new();
+        /// <summary>`Payment`in SIRAYLA donecegi kodlar (bossa <see cref="Codes"/> gecerli).</summary>
+        public Queue<uint> PaymentSequence { get; } = new();
         public GmpResult Payment(ulong h, GmpPaymentRequest r, out GmpTicket tk)
-        { LastPaymentRequest = r; var res = Kod("Payment"); tk = AfterPayment; return res; }
+        {
+            LastPaymentRequest = r; PaymentRequests.Add(r); tk = AfterPayment;
+            if (PaymentSequence.Count > 0) { Calls.Add("Payment"); return new GmpResult(PaymentSequence.Dequeue()); }
+            return Kod("Payment");
+        }
         public GmpResult GetTicket(ulong h, out GmpTicket tk)
         {
             Calls.Add("GetTicket"); tk = Ticket;

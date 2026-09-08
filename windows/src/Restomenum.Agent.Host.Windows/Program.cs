@@ -16,6 +16,9 @@ bool configSmoke = args.Contains("--config-smoke");
 bool ticketModu = args.Contains("--ticket");
 bool voidOnayi = args.Contains("--onayla");
 bool paymentAppsModu = args.Contains("--payment-apps");
+// --capability-probe: hangi ödeme tiplerini cihazın KABUL ettiğini ölçer (W57). MALİ FİŞ AÇAR —
+// `--onayla` olmadan yalnız ne yapacağını yazar.
+bool capabilityProbeModu = args.Contains("--capability-probe");
 // --retract <commandId>: daha önce onaylı bildirilmiş bir komutun düzeltmesini platforma yollar.
 var retractIdx = Array.IndexOf(args, "--retract");
 string? retractKomut = retractIdx >= 0 && retractIdx + 1 < args.Length ? args[retractIdx + 1] : null;
@@ -29,7 +32,8 @@ var taxIdx = Array.IndexOf(args, "--check-tax");
 string? taxDosya = taxIdx >= 0 && taxIdx + 1 < args.Length ? args[taxIdx + 1] : null;
 var configArgs = args
     .Where(a => a != "--pair" && a != "--void" && a != "--config-smoke" && a != "--ticket"
-             && a != "--onayla" && a != "--payment-apps" && a != "--retract" && a != retractKomut
+             && a != "--onayla" && a != "--payment-apps" && a != "--capability-probe"
+             && a != "--retract" && a != retractKomut
              && a != "--cancel-ticket" && a != cancelOturum
              && a != "--check-tax" && a != taxDosya)
     .ToArray();
@@ -75,6 +79,15 @@ if (ticketModu)
 if (paymentAppsModu)
 {
     Environment.ExitCode = WindowsPaymentApps.Run(host.Services) ? 0 : 1;
+    return;
+}
+
+// YETENEK YOKLAMASI (--capability-probe): hangi ödeme tiplerini cihazın KABUL ettiğini ölçer.
+// ⚠️ MALİ FİŞ AÇAR (yazdırmadan iptal eder, ama FNo tüketebilir) — bu yüzden `--onayla` şart;
+// onaysız çağrı yalnız planı yazar ve cihaza DOKUNMAZ.
+if (capabilityProbeModu)
+{
+    Environment.ExitCode = WindowsCapabilityProbe.Run(host.Services, voidOnayi) ? 0 : 1;
     return;
 }
 
