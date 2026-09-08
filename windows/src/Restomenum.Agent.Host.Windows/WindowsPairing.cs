@@ -52,14 +52,15 @@ public static class WindowsPairing
         // eşleşme geçerli (satış yolu ayrı). Config kanalı kapalıysa (yerel dosya modu) atlanır.
         var configClient = services.GetService<DeviceConfigClient>();
         if (configClient is not null)
-            RaporDepartmanlar(gmp, info, log, configClient);
+            RaporDepartmanlar(gmp, info, log, configClient, services.GetService<DeviceIdentityHolder>());
 
         return true;
     }
 
     /// <summary>GetDepartments + GetTaxRates → birleştir → config kanalına bildir. Oran tabloda yoksa null
     /// (uydurma yok). Rapor başarısızlığı eşleşmeyi/satışı ETKİLEMEZ — yalnız eklenti ekranı tabloyu geç görür.</summary>
-    private static void RaporDepartmanlar(IGmpWrapper gmp, GmpDeviceInfo info, ILogger log, DeviceConfigClient client)
+    private static void RaporDepartmanlar(IGmpWrapper gmp, GmpDeviceInfo info, ILogger log,
+        DeviceConfigClient client, DeviceIdentityHolder? kimlik)
     {
         var drc = gmp.GetDepartments(out var deptJson);
         if (!drc.Ok) { log.LogWarning("GetDepartments başarısız (rc={Rc}) — departman tablosu bildirilemedi.", drc.Code); return; }
@@ -98,6 +99,11 @@ public static class WindowsPairing
                 log.LogWarning("kurulu ödeme uygulamaları OKUNAMADI (rc={Rc}) — alan gönderilmiyor, " +
                     "platformdaki liste korunuyor.", appRc.Code);
             }
+
+            // W56: kimliği ve uygulama listesini SAKLA — bakım turu aynı gövdeyi yeniden kurabilsin.
+            // Saklamasaydık tazeleme `deviceInfo`/`paymentApplications` alanlarını null gönderir ve
+            // "okuyamadım" ile "yok" aynı tele düşerdi.
+            kimlik?.Kaydet(info, uygulamalar);
 
             var ok = client.ReportDepartmentsAsync(departments, info, uygulamalar).GetAwaiter().GetResult();
             log.LogInformation("departman tablosu config kanalına bildirildi: {Adet} departman ({Null} oranı null), sonuç={Ok}",

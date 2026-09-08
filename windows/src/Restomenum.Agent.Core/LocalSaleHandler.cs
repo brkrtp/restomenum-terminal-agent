@@ -12,7 +12,7 @@ namespace Restomenum.Agent.Core;
 /// <para><b>2xx dışında terminale gidilmez.</b> Tutar alınamadıysa çekilecek doğru tutar bilinmez.
 /// Eşlenmeyen kalem terminale GİTMEDEN reddedilir ve HANGİ ürün olduğu söylenir.</para>
 /// </summary>
-public sealed class LocalSaleHandler
+public sealed class LocalSaleHandler : IDeviceIdleGate
 {
     private readonly IPaymentDetailClient _amounts;
     private readonly AgentOrchestrator _orch;
@@ -37,6 +37,27 @@ public sealed class LocalSaleHandler
     /// iptal eder ve üzerindeki para kaybolur. Yerel dinleyici istekleri eşzamanlı gelebildiği için şart.
     /// </summary>
     private readonly SemaphoreSlim _islemKilidi = new(1, 1);
+
+    /// <summary>
+    /// <see cref="IDeviceIdleGate"/> (W56) — bakım işleri cihazı AYNI kilitten alır. İkinci bir kilit
+    /// açsaydık "cihaz başına tek işlem" iki ayrı yerde tanımlanır ve biri diğerini görmezdi: bakım
+    /// turu satışın ortasında <c>GetDepartments</c> çağırırdı.
+    ///
+    /// <para><b>BEKLEMEZ</b> (<c>Wait(0)</c>): satış her zaman öncelikli. Meşgulse tur atlanır ve
+    /// ~30 dk sonra yeniden denenir; tabloyu bir tur geç görmek, satışı geciktirmekten iyidir.</para>
+    /// </summary>
+    public IDisposable? TryAcquire()
+        => _islemKilidi.Wait(0) ? new KilidiBirak(_islemKilidi) : null;
+
+    private sealed class KilidiBirak(SemaphoreSlim kilit) : IDisposable
+    {
+        private int _birakildi;
+        public void Dispose()
+        {
+            // Çift Dispose semaforu 1'in ÜSTÜNE çıkarır ve o andan sonra iki iş cihazı paylaşır.
+            if (Interlocked.Exchange(ref _birakildi, 1) == 0) kilit.Release();
+        }
+    }
 
     /// <summary>
     /// Aynı anda TEK kurtarma turu. Açılış kurtarması ile periyodik kurtarma (W31) aynı metodu

@@ -24,14 +24,22 @@ public sealed class DeviceConfigPoller : BackgroundService
     private readonly double _jitter;
     private readonly Random _rng = new();
 
+    /// <summary>
+    /// W56 — cihaz bölüm tablosunun tazeleyicisi. <b>İSTEĞE BAĞLI</b>: cihaz sarmalayıcısı olmayan
+    /// (saf Host / test) kurulumlarda <c>null</c> ve yoklama eskisi gibi yalnız platformdan ÇEKER.
+    /// </summary>
+    private readonly DeviceDepartmentRefresher? _tazeleyici;
+
     public DeviceConfigPoller(DeviceConfigClient client, IDeviceMappingStore store,
-        ILogger<DeviceConfigPoller> log, TimeSpan? interval = null, double jitter = 0.20)
+        ILogger<DeviceConfigPoller> log, TimeSpan? interval = null, double jitter = 0.20,
+        DeviceDepartmentRefresher? tazeleyici = null)
     {
         _client = client;
         _store = store;
         _log = log;
         _base = interval ?? TimeSpan.FromMinutes(30);
         _jitter = jitter;
+        _tazeleyici = tazeleyici;
     }
 
     protected override async Task ExecuteAsync(CancellationToken ct)
@@ -41,9 +49,33 @@ public sealed class DeviceConfigPoller : BackgroundService
 
         while (!ct.IsCancellationRequested)
         {
+            // SIRA ÖNEMLİ (W56): ÖNCE cihaz tablosu, SONRA platformdan çekme. Cihazda bir KDV oranı
+            // değişmişse bildirim aynı turda gider ve hemen ardından gelen `GET /mapping` yeni sürümü
+            // getirir — tabloyu bir tur geç görmeyiz.
+            await CihazTablosunuTazeleAsync(ct);
             await PollOnceAsync(ct);
             try { await Task.Delay(NextDelay(), ct); }
             catch (OperationCanceledException) { break; }
+        }
+    }
+
+    /// <summary>W56 — cihaz boştaysa bölüm tablosunu oku, DEĞİŞTİYSE bildir. Hata yutulur: bakım işi
+    /// yoklamayı da satışı da düşüremez.</summary>
+    private async Task CihazTablosunuTazeleAsync(CancellationToken ct)
+    {
+        if (_tazeleyici is null) return;
+        try
+        {
+            var sonuc = await _tazeleyici.RefreshAsync(ct);
+            if (sonuc == DepartmentRefreshOutcome.Reported)
+                _log.LogWarning("cihaz bölüm tablosu DEĞİŞMİŞTİ ve platforma bildirildi — yeni eşleme sürümü bu turda gelir.");
+            else if (sonuc is DepartmentRefreshOutcome.ReadFailed or DepartmentRefreshOutcome.ReadEmpty
+                     or DepartmentRefreshOutcome.ReportFailed)
+                _log.LogWarning("cihaz bölüm tablosu tazelenemedi ({Sonuc}) — eski tablo geçerli, sonraki turda yeniden denenir.", sonuc);
+        }
+        catch (Exception e) when (e is not OperationCanceledException)
+        {
+            _log.LogWarning(e, "cihaz bölüm tablosu tazelemesi hata verdi — eski tabloyla devam.");
         }
     }
 

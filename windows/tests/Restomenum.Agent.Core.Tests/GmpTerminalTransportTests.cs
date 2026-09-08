@@ -12,7 +12,9 @@ namespace Restomenum.Agent.Core.Tests;
 /// </summary>
 public class GmpTerminalTransportTests
 {
-    private sealed class FakeGmp : IGmpWrapper
+    /// <summary>Tek sahte sarmalayici: W56 tazeleyicisi de bunu kullanir. Iki ayri sahte, iki ayri
+    /// "cihaz nasil davranir" tanimi demek olurdu.</summary>
+    internal sealed class FakeGmp : IGmpWrapper
     {
         public List<string> Calls { get; } = new();
         /// <summary>Son gönderilen fiş tipi — canlı terminalde yanlış değer fişi hiç açtırmıyordu.</summary>
@@ -70,8 +72,11 @@ public class GmpTerminalTransportTests
         public GmpResult SetIpAddress(string ip, int port) => Kod("SetIpAddress");
         public GmpResult SetInvoice(ulong h, GmpInvoice inv) => Kod("SetInvoice");
         public GmpResult SetDepartments(string json, string pwd) => Kod("SetDepartments");
-        public GmpResult GetDepartments(out string json) { json = "[]"; return Kod("GetDepartments"); }
-        public GmpResult GetTaxRates(out string json) { json = "[]"; return Kod("GetTaxRates"); }
+        /// <summary>Cihazin bolum/oran tablolari (W56). Varsayilan bos — eski testler etkilenmez.</summary>
+        public string DepartmentsJson = "[]";
+        public string TaxRatesJson = "[]";
+        public GmpResult GetDepartments(out string json) { json = DepartmentsJson; return Kod("GetDepartments"); }
+        public GmpResult GetTaxRates(out string json) { json = TaxRatesJson; return Kod("GetTaxRates"); }
     }
 
     // ── P27: FİŞ KİMLİĞİ + KAPANIŞ LİSTESİ ──────────────────────────────────────

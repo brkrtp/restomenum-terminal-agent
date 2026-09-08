@@ -70,5 +70,22 @@ public static class WindowsTerminalRegistration
                 gmp, snapshots,
                 log: (m, a) => log.LogInformation("{Msg} {Arg}", m, a));
         });
+
+        // ── W56: cihaz bölüm tablosunun periyodik tazelenmesi ─────────────────────────────
+        // Yalnız GMP'nin OLDUĞU yerde kayıtlı: platform-nötr Host bu tipi görmez, yoklayıcı onu
+        // `GetService` ile İSTEĞE BAĞLI çözer ve yoksa eskisi gibi sadece platformdan çeker.
+        services.AddSingleton<DeviceIdentityHolder>();
+        // Cihaz kilidi satışınkinin TA KENDİSİ: ikinci bir kilit "cihaz başına tek işlem"i iki ayrı
+        // yerde tanımlar ve bakım turu satışın ortasına girerdi.
+        services.AddSingleton<IDeviceIdleGate>(sp => sp.GetRequiredService<LocalSaleHandler>());
+        services.AddSingleton(sp =>
+        {
+            var log = sp.GetRequiredService<ILoggerFactory>().CreateLogger("DeviceDepartments");
+            return new DeviceDepartmentRefresher(
+                sp.GetRequiredService<IGmpWrapper>(), sp.GetRequiredService<DeviceConfigClient>(),
+                sp.GetRequiredService<IDeviceMappingStore>(), sp.GetRequiredService<IDeviceIdleGate>(),
+                sp.GetRequiredService<DeviceIdentityHolder>(),
+                log: (m, d) => log.LogInformation("{Mesaj} {Detay}", m, d));
+        });
     }
 }

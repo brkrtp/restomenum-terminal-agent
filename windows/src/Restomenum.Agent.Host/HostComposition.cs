@@ -130,7 +130,13 @@ public static class HostComposition
                 return new DeviceConfigClient(sp.GetRequiredService<HttpClient>(), deviceConfig.BaseUri, deviceConfig.Secret,
                     log: (m, d) => log.LogInformation("{Mesaj} {Detay}", m, d));
             });
-            builder.Services.AddHostedService<DeviceConfigPoller>();   // açılış + ~30dk±jitter; satış anında ÇEKMEZ
+            // Açılış + ~30dk±jitter; satış anında ÇEKMEZ. Cihaz bölüm tablosu tazeleyicisi (W56)
+            // İSTEĞE BAĞLI çözülür: yalnız GMP'li (Windows) kurulumda kayıtlıdır, yoksa null ve
+            // yoklama eskisi gibi sadece platformdan çeker.
+            builder.Services.AddHostedService(sp => new DeviceConfigPoller(
+                sp.GetRequiredService<DeviceConfigClient>(), sp.GetRequiredService<IDeviceMappingStore>(),
+                sp.GetRequiredService<ILogger<DeviceConfigPoller>>(),
+                tazeleyici: sp.GetService<DeviceDepartmentRefresher>()));
         }
         else
         {
