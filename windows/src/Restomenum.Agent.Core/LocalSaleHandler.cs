@@ -397,8 +397,17 @@ public sealed class LocalSaleHandler
     /// <summary>Bir SaleToPOIRequest'i uçtan uca işler; kasaya dönecek <c>SaleToPOIResponse</c> JSON'unu verir.</summary>
     public async Task<string> HandleAsync(SaleToPoiRequest req, CancellationToken ct = default)
     {
+        // ── W51: CİHAZ ÖNCESİ AŞAMALARIN SÜRESİ ─────────────────────────────────────
+        // Ölçüm 2026-09-08 22:45:08: bir satış uçtan uca 20,2 sn sürdü, cihaz tarafı 7,8 sn'ydi.
+        // Aradaki 10,9 sn cihaza gitmeden ÖNCE harcandı ve günlükte o aralığa dair tek satır
+        // yoktu — hangi aşamada olduğunu söyleyemedik. Buradaki sayılar YALNIZ ölçüm: hiçbir
+        // karar, sıra ya da zaman aşımı değişmiyor.
+        OlcenSessionProvider.Sifirla();
+        var tBas = _now();
+
         // 1. Tutarı çek — GET = ACK. Reddedilirse/ağ hatası → terminale GİTME.
         var fetch = await _amounts.FetchAsync(req.PaymentId, ct);
+        var tutarMs = (long)(_now() - tBas).TotalMilliseconds;
         if (fetch is PaymentDetailResult.Rejected rej)
         {
             // GET reddinde deneme ACCEPTED olmadı (platform durumu otorite) → bildirim YOK, yalnız kasaya ret.
@@ -419,6 +428,7 @@ public sealed class LocalSaleHandler
         //
         // K-21'in koruduğu şey duruyor: bu çağrı satışı ASLA düşürmez ve beklemez (sert zaman
         // aşımı, hata yutulur, diskteki eşlemeyle devam). Bağımlılık gerekli değil FIRSATÇI.
+        var tEsleme = _now();
         if (_mappingRefresher is not null)
         {
             // Sözleşme "istisna fırlatmaz" diyor ama BURADA DA YAKALIYORUZ. Sebebi ilkesel:
@@ -516,11 +526,35 @@ public sealed class LocalSaleHandler
             // Bankayı KASİYER seçer, biz taşırız. Zarfta yoksa cihaz seçer (bugünkü davranış).
             BankBkmId: req.BankBkmId);
 
+        var eslemeMs = (long)(_now() - tEsleme).TotalMilliseconds;
+
         // Terminal başına TEK işlem (değişmez #4): eşzamanlı iki satış cihaz fişini bozar.
         AgentOutcome outcome;
+        var tCihaz = _now();
         await _islemKilidi.WaitAsync(ct);
         try { outcome = await _orch.HandleAsync(sale, d.ExpiresAtMs, ct); }
         finally { _islemKilidi.Release(); }
+        var cihazMs = (long)(_now() - tCihaz).TotalMilliseconds;
+
+        // ⚠️ `cihazMs` KİLİT BEKLEMESİNİ DE İÇERİR. Ayırmak için ölçümü kilidin içine almak
+        // gerekirdi; o zaman da "cihaz mı meşguldü, biz mi bekledik" sorusu kaybolurdu. Kasiyerin
+        // beklediği süre bu — bölmek değil, bütün olarak doğru sayı.
+        var oturum = OlcenSessionProvider.Son;
+        _log("[yerel] süre dökümü", new
+        {
+            req.PaymentId,
+            // Kasanın zarftaki damgasından ajanın isteği okumasına kadar. ⚠️ KASANIN saati;
+            // ajanınkiyle aynı değilse negatif/şişkin çıkabilir — o yüzden ayrı alan, toplama
+            // DAHİL DEĞİL.
+            bekleMs = (long)(tBas - req.TimeStamp).TotalMilliseconds,
+            tutarMs,
+            eslemeMs,
+            oturumMs = oturum?.ToplamMs ?? -1,          // -1 = ölçülmedi (0 ile karıştırılmasın)
+            oturumCagri = oturum?.Cagri ?? 0,
+            oturumHttp = oturum?.HttpDeneme ?? -1,      // Cagri'dan büyükse içeride tekrar olmuş
+            cihazMs,
+            toplamMs = (long)(_now() - tBas).TotalMilliseconds,
+        });
 
         // 4. Gövdeyi kur; ÖNCE platforma bildir, SONRA kasaya dön.
         var sonuc = ToTransportResult(outcome);

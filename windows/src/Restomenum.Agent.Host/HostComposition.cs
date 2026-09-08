@@ -83,8 +83,11 @@ public static class HostComposition
         builder.Services.AddSingleton<ISessionProvider>(sp =>
         {
             var o = sp.GetRequiredService<IOptions<AgentOptions>>().Value;
-            return new HttpSessionProvider(sp.GetRequiredService<HttpClient>(), sp.GetRequiredService<IDeviceKey>(),
-                o.ServerId, new Uri(o.SessionUrl), sp.GetRequiredService<ClockOffset>());
+            // W51: ÖLÇEN sarmalayıcı. Karar vermez, yeniden denemez — yalnız süreyi ve HTTP
+            // deneme sayısını kaydeder ki "cihaz öncesi 10,9 sn" sorusunun cevabı olsun.
+            return new OlcenSessionProvider(
+                new HttpSessionProvider(sp.GetRequiredService<HttpClient>(), sp.GetRequiredService<IDeviceKey>(),
+                    o.ServerId, new Uri(o.SessionUrl), sp.GetRequiredService<ClockOffset>()));
         });
         builder.Services.AddSingleton<IPaymentDetailClient>(sp =>
         {

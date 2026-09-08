@@ -33,6 +33,14 @@ public sealed class HttpSessionProvider : ISessionProvider
         _clock = clock;
     }
 
+    /// <summary>
+    /// Bu sağlayıcıdan giden TOPLAM oturum HTTP isteği (W51 — yalnız ölçüm, karar etkilemez).
+    /// İçerideki tekrarı dışarıdan görünür kılar: bir <see cref="AcquireAsync"/> çağrısı iki
+    /// istek üretmişse saat penceresi kaçmış demektir ve gecikmenin sebebi budur.
+    /// </summary>
+    public int HttpDenemeSayisi => _httpDeneme;
+    private int _httpDeneme;
+
     public async Task<SessionToken> AcquireAsync(CancellationToken ct = default)
     {
         var (token, stale) = await DeneAsync(ct);
@@ -46,6 +54,7 @@ public sealed class HttpSessionProvider : ISessionProvider
 
     private async Task<(SessionToken?, bool stale)> DeneAsync(CancellationToken ct)
     {
+        Interlocked.Increment(ref _httpDeneme);   // W51: yalnız sayaç
         // Nonce tek kullanımlık ve tahmin edilemez olmalı — replay koruması buna dayanıyor.
         var nonce = Convert.ToHexString(RandomNumberGenerator.GetBytes(16)).ToLowerInvariant();
         var ts = (_clock.IsSynced ? _clock.ServerNow() : DateTimeOffset.UtcNow.ToUnixTimeMilliseconds())
