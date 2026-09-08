@@ -273,12 +273,42 @@ sayılır.
 
 ---
 
+## Operatör komutları (`Restomenum.Agent.Host.Windows.exe <bayrak>`)
+
+En kritik sütun **"FNo yakar mı"**: mali fiş numarası geri alınamaz bir sayaçtır ve bir
+teşhis aracının onu tüketmesi sürpriz olmamalı.
+
+| bayrak | ne yapar | cihaza dokunur | **FNo yakar** | `--onayla` |
+|---|---|---|---|---|
+| `--pair` | eşleşir, bölüm tablosunu C2'ye bildirir, **dinleyiciyi başlatır** (üretim akışı) | evet | hayır | — |
+| `--ticket` | **salt-okunur** fiş durumu raporu | evet | **hayır** ¹ | — |
+| `--void` | açık fişi `VoidAll`+`Close` ile temizler (**defteri düzeltmez**) | evet | hayır ¹ | evet |
+| `--cancel-ticket [saleSessionId]` | açık fişi **kasanın yolundan** iptal eder: cihaz **+ dayanıklı platform bildirimi** | evet | hayır ¹ | evet |
+| `--payment-apps` | kurulu banka uygulamalarını **ham JSON** basar | evet | hayır | — |
+| `--capability-probe` | hangi ödeme tiplerini cihazın kabul ettiğini ölçer (W57) | evet | **EVET** | evet |
+| `--discount-probe` | indirimin cihaz sözleşmesini ölçer (W60) | evet | **EVET** | evet |
+| `--check-tax <dosya>` | **kuru prova**: hangi kalemin reddedileceğini söyler | **hayır** | hayır | — |
+| `--retract <commandId>` | hatalı bir ONAYI platformda geri çeker | hayır | hayır | — |
+| `--config-smoke` | config kanalını (oturum+eşleme) dener ve çıkar | hayır | hayır | — |
+
+¹ **Neden bu üçü FNo yakmıyor (ölçüldü):** `--ticket`/`--void`/`--cancel-ticket` açık fiş var mı
+diye `FP3_Start` **probe**'u yapar; fiş yoksa probe bir fiş açar ve hemen `Close` eder. Ama
+**`TicketHeader` ÇAĞRILMAZ** ve mali numara orada veriliyor. Kanıt: 2026-09-09'da FNo 4
+(`--capability-probe`) ile FNo 5 (sonraki gerçek fiş) arasında `--ticket` koştu ve **arada numara
+atlanmadı**. Yoklamalar ise `TicketHeader` çağırdığı için numara **tüketir**.
+
+⚠️ `--pair` dışındaki komutlar **kendi süreçlerinde** çalışır ve eşleşme süreç-bağlı olduğundan
+**çalışan ajanın durdurulması gerekir**. Ajan çalışırken ikinci bir süreç cihazla konuşamaz.
+
+---
+
 ## Cihaz olguları (ölçüldü, belgede yok)
 
 Bunlar üretici belgesinde yazmıyor; sahada ölçülüp burada kayda geçti.
 
-- **Mali fiş numarası (`FNo`) fiş AÇILIRKEN verilir**, kapanırken değil: başarılı bir
-  `ItemSale`'in kendi yanıtı `ZNo`/`FNo` taşır.
+- **Mali fiş numarası (`FNo`) `TicketHeader`'da verilir**, `Start`'ta ya da kapanışta değil:
+  başarılı bir `ItemSale`'in kendi yanıtı `ZNo`/`FNo` taşır. Yalnız `Start`+`Close` yapan bir
+  probe (bkz. operatör komutları ¹) numara **tüketmez** — ölçüldü.
 - **Yazdırılmadan iptal edilen fiş de `FNo` TÜKETİR.** 2026-09-09, ZNo 87 içinde üç kez
   ölçüldü: 3 (satış) → 4 (`--capability-probe`) → 5 (iptal edilen fiş) → 6 (satış).
   **Sayaçtaki boşluk bir kayıp değil, iptal edilmiş fişlerin izidir.**
