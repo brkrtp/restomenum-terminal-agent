@@ -165,6 +165,90 @@ public class LocalSaleHandlerTests : IDisposable
         }
     }
 
+    // ── W39: ESKİ komutta ilk gecikme ATLANIR (terminal kilidi boşuna tutulmasın) ──
+
+    /// <summary>Uykuları ölçen politika — gerçekten beklemeden, çağrıları kaydederek.</summary>
+    private static (RecoveryPolicy Politika, List<TimeSpan> Uykular) OlcenPolitika()
+    {
+        var uykular = new List<TimeSpan>();
+        return (new RecoveryPolicy
+        {
+            InitialDelay = TimeSpan.FromSeconds(30),
+            RetryDelay = TimeSpan.FromSeconds(5),
+            MaxDelay = TimeSpan.FromSeconds(20),
+            MaxAttempts = 2,
+            InitialDelaySkipAge = TimeSpan.FromMinutes(2),
+            Sleep = (d, _) => { uykular.Add(d); return Task.CompletedTask; },
+        }, uykular);
+    }
+
+    private async Task<List<TimeSpan>> KurtarmaUykulari(long yasMs)
+    {
+        var (politika, uykular) = OlcenPolitika();
+        var alindi = _clock.ServerNow() - yasMs;
+        _store.Save("svc-A", Pay, "term-01", _clock.ServerNow() + 600_000, now: alindi);
+        // Gerçek yol: terminale gönderildi, sonuç belirsiz kaldı. Doğrudan RECEIVED→UNKNOWN
+        // geçişi durum makinesinde yok; RECEIVED kalsaydı kurtarma satışı YENİDEN çalıştırırdı.
+        _store.Advance("svc-A", CommandState.RECEIVED, CommandState.SENT_TO_TERMINAL);
+        _store.Advance("svc-A", CommandState.SENT_TO_TERMINAL, CommandState.UNKNOWN);
+
+        var sim = new SimulatorTransport();
+        var orch = new AgentOrchestrator(_store, sim, _clock, politika);
+        var h = new LocalSaleHandler(new FakeAmounts { Result = new PaymentDetailResult.Ok(Detail()) },
+            orch, _store, new FakeResolver(), new FakePaymentMethods(), new FakeNotifier(), _outbox, sim);
+
+        await h.RecoverPendingAsync();
+        Assert.NotEmpty(uykular);   // tur gerçekten koştu
+        return uykular;
+    }
+
+    [Fact]
+    public async Task ESKI_komutta_ilk_yoklama_GECIKMESIZ()
+    {
+        // ← ÇİVİ: kurtarma turu terminal kilidini alıp uyuyor; o sırada gelen satış bekliyor.
+        // Sahada bir satış 18,7 sn bekledi ve cihaz o süre boyunca BOŞTU. Saatler önce
+        // başarısız olmuş bir komut için "cihaz yerleşsin" beklemesinin gerekçesi yok.
+        var uykular = await KurtarmaUykulari(yasMs: 10 * 60 * 1000);   // 10 dakikalık komut
+
+        Assert.Equal(TimeSpan.Zero, uykular[0]);                        // ← ÇİVİ
+    }
+
+    [Theory]
+    [InlineData(1, 5)]
+    [InlineData(2, 10)]
+    [InlineData(3, 20)]
+    [InlineData(4, 20)]     // MaxDelay'de sabitleniyor
+    public void Sonraki_turlarin_kadansi_DEGISMEDI(int deneme, int beklenenSaniye)
+    {
+        // ← ÇİVİ: W39 YALNIZ ilk gecikmeyi kaldırıyor. Sonraki turların eğrisine dokunulmadı;
+        // dokunulsaydı cihaza baskı artardı ve bu W39'un amacının tersi olurdu.
+        var p = new RecoveryPolicy();
+        Assert.Equal(beklenenSaniye, (int)p.DelayFor(deneme).TotalSeconds);
+        Assert.Equal(beklenenSaniye, (int)p.WithoutInitialDelay().DelayFor(deneme).TotalSeconds);
+    }
+
+    [Fact]
+    public void WithoutInitialDelay_YALNIZ_ilk_gecikmeyi_sifirlar()
+    {
+        var p = new RecoveryPolicy();
+        var y = p.WithoutInitialDelay();
+        Assert.Equal(TimeSpan.Zero, y.DelayFor(0));
+        Assert.Equal(TimeSpan.FromSeconds(30), p.DelayFor(0));   // özgün politika bozulmadı
+        Assert.Equal(p.MaxAttempts, y.MaxAttempts);
+        Assert.Equal(p.MaxDelay, y.MaxDelay);
+        Assert.Equal(p.InitialDelaySkipAge, y.InitialDelaySkipAge);
+    }
+
+    [Fact]
+    public async Task TAZE_komutta_ilk_gecikme_KORUNUR()
+    {
+        // ← ÇİVİ: çökme sonrası açılışta komut saniyeler önce gelmiş olabilir; orada cihazın
+        // yerleşmesi GEREKİYOR. Gecikmeyi her yerde kaldırmak bunu bozardı.
+        var uykular = await KurtarmaUykulari(yasMs: 5_000);             // 5 saniyelik komut
+
+        Assert.Equal(TimeSpan.FromSeconds(30), uykular[0]);             // ← ÇİVİ
+    }
+
     // ── W34: PLATFORM NİHAİ DEDİYSE YOKLAMA KAPANIR ─────────────────────────────
 
     [Fact]

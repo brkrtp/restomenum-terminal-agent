@@ -61,6 +61,35 @@ public sealed class RecoveryPolicy
     }
 
     /// <summary>Testte anında çalışan politika — bekleme yok, davranış aynı.</summary>
+    /// <summary>
+    /// <see cref="InitialDelay"/>'in ATLANDIĞI yaş eşiği (W39). Komut bu süreden eskiyse cihazın
+    /// "yerleşmesini" beklemenin anlamı yok — o yerleşme çoktan oldu.
+    /// </summary>
+    public TimeSpan InitialDelaySkipAge { get; init; } = TimeSpan.FromMinutes(2);
+
+    /// <summary>
+    /// İlk gecikmesi olmayan kopya (W39) — <b>yalnız ESKİ komutların</b> kurtarma turunda.
+    ///
+    /// <para><b>Neden gerekli, ölçüldü (2026-09-08 13:18):</b> kurtarma turu terminal kilidini
+    /// alıp <see cref="InitialDelay"/> boyunca UYUYOR; o sırada gelen canlı satış sırada bekliyor.
+    /// Sahada bir satış <b>18,7 saniye</b> bekledi ve o süre boyunca cihaz tamamen BOŞTU (GMP
+    /// izinde tek çağrı yok). 30 saniyelik bekleme ödemeden HEMEN SONRAKİ kurtarma için doğru —
+    /// cihazın yerleşmesi gerekiyor — ama saatler önce başarısız olmuş bir komut için yalnız
+    /// kasayı bekletiyor.</para>
+    ///
+    /// <para>Sonraki turların kadansı (5 sn → 20 sn) ve <see cref="MaxAttempts"/> DEĞİŞMEZ:
+    /// değişen tek şey ilk yoklamanın ne zaman yapıldığı.</para>
+    /// </summary>
+    public RecoveryPolicy WithoutInitialDelay() => new()
+    {
+        InitialDelay = TimeSpan.Zero,
+        RetryDelay = RetryDelay,
+        MaxDelay = MaxDelay,
+        MaxAttempts = MaxAttempts,
+        Sleep = Sleep,
+        InitialDelaySkipAge = InitialDelaySkipAge,
+    };
+
     public static RecoveryPolicy Immediate => new()
     {
         InitialDelay = TimeSpan.Zero,

@@ -54,6 +54,9 @@ public sealed class AgentOrchestrator
     private readonly ClockOffset _clock;
     private readonly RecoveryPolicy _recovery;
 
+    /// <summary>Kurulumdaki kurtarma politikası — çağıran tur başına türev üretebilsin diye (W39).</summary>
+    public RecoveryPolicy Recovery => _recovery;
+
     public AgentOrchestrator(
         CommandStore store, ITerminalTransport transport, ClockOffset clock, RecoveryPolicy? recovery = null)
     {
@@ -90,18 +93,24 @@ public sealed class AgentOrchestrator
     }
 
     /// <summary>Komutu işler. Aynı <c>CommandId</c> ile ikinci çağrı terminale GİTMEZ.</summary>
-    public async Task<AgentOutcome> HandleAsync(SaleRequest req, long expiresAt, CancellationToken ct = default)
+    /// <param name="turPolitikasi">
+    /// Bu çağrıya özgü kurtarma politikası (W39). <c>null</c> = kurulumdaki politika. Yalnız
+    /// arka plan kurtarması, ESKİ komutlarda ilk gecikmeyi atlamak için kullanıyor.
+    /// </param>
+    public async Task<AgentOutcome> HandleAsync(SaleRequest req, long expiresAt,
+        CancellationToken ct = default, RecoveryPolicy? turPolitikasi = null)
     {
         // ── 1. ATOMİK KAYIT (§12.2/1, /2) — yazılmadan hiçbir şey yapılmaz ─────────
         var saved = _store.Save(req.CommandId, req.PaymentId, req.TerminalId, expiresAt);
         if (saved is SaveResult.Duplicate dup)
-            return await HandleDuplicateAsync(dup.Command, req, ct);
+            return await HandleDuplicateAsync(dup.Command, req, ct, turPolitikasi);
 
-        return await RunAsync(req, expiresAt, ct);
+        return await RunAsync(req, expiresAt, ct, turPolitikasi);
     }
 
     /// <summary>Kaydedilmiş bir komutu çalıştırır — saat, süre, gönderim, sonuç.</summary>
-    private async Task<AgentOutcome> RunAsync(SaleRequest req, long expiresAt, CancellationToken ct)
+    private async Task<AgentOutcome> RunAsync(SaleRequest req, long expiresAt, CancellationToken ct,
+        RecoveryPolicy? turPolitikasi = null)
     {
         // ── 2. SAAT (§5.3) — offset yoksa TAHMİN YOK ──────────────────────────────
         var expired = _clock.IsExpired(expiresAt);
@@ -122,16 +131,18 @@ public sealed class AgentOrchestrator
         {
             // Yarış: başka bir iş parçacığı aynı komutu ilerletmiş. Kendi başımıza gönderemeyiz.
             var current = _store.Read(req.CommandId)!;
-            return await ResolveAsync(current, req, "eşzamanlı ilerletme — durum başkası tarafından değişti", ct);
+            return await ResolveAsync(current, req, "eşzamanlı ilerletme — durum başkası tarafından değişti", ct,
+                turPolitikasi: turPolitikasi);
         }
 
         var result = await _transport.SaleAsync(req, ct);
-        return await ApplyAsync(req, result, ct);
+        return await ApplyAsync(req, result, ct, turPolitikasi);
     }
 
     /// <summary>Terminal sonucunu duruma çevirir.</summary>
     private async Task<AgentOutcome> ApplyAsync(
-        SaleRequest req, TransportResult result, CancellationToken ct)
+        SaleRequest req, TransportResult result, CancellationToken ct,
+        RecoveryPolicy? turPolitikasi = null)
     {
         switch (result.Outcome)
         {
@@ -151,7 +162,7 @@ public sealed class AgentOrchestrator
                 // BELİRSİZ — hepsi AYNI yola girer: terminale sor. Varsayım yok.
                 _store.Advance(req.CommandId, CommandState.SENT_TO_TERMINAL, CommandState.UNKNOWN);
                 var current = _store.Read(req.CommandId)!;
-                return await ResolveAsync(current, req, $"transport={result.Outcome}", ct, result);
+                return await ResolveAsync(current, req, $"transport={result.Outcome}", ct, result, turPolitikasi);
         }
     }
 
@@ -170,14 +181,16 @@ public sealed class AgentOrchestrator
     /// bilmiyoruz.
     /// </param>
     private async Task<AgentOutcome> ResolveAsync(
-        StoredCommand cmd, SaleRequest req, string note, CancellationToken ct, TransportResult? ilk = null)
+        StoredCommand cmd, SaleRequest req, string note, CancellationToken ct, TransportResult? ilk = null,
+        RecoveryPolicy? turPolitikasi = null)
     {
         PaymentProbe? sonuc = null;
         string? sonHata = null;
 
-        for (var deneme = 0; deneme < _recovery.MaxAttempts; deneme++)
+        var politika = turPolitikasi ?? _recovery;
+        for (var deneme = 0; deneme < politika.MaxAttempts; deneme++)
         {
-            await _recovery.Sleep(_recovery.DelayFor(deneme), ct);
+            await politika.Sleep(politika.DelayFor(deneme), ct);
             try
             {
                 // "Fiş ödendi mi" DEĞİL, "BENİM ödemem işlendi mi". Artımlı modelde (Türkiye)
@@ -202,7 +215,7 @@ public sealed class AgentOrchestrator
         {
             // Sorgu bütçesi tükendi. **Tahmin edilmez** — insana gider.
             return new AgentOutcome(AgentDecision.Unresolved, cmd.State,
-                Note: $"{note}; {_recovery.MaxAttempts} denemede terminal cevap vermedi ({sonHata})");
+                Note: $"{note}; {politika.MaxAttempts} denemede terminal cevap vermedi ({sonHata})");
         }
 
         if (sonuc.Verdict == ProbeVerdict.Landed)
@@ -264,7 +277,8 @@ public sealed class AgentOrchestrator
     /// Tekrar gelen komut. **Terminal ÇAĞRILMAZ** (§12.2/3) — kesin sonuç saklıysa replay edilir,
     /// değilse terminale sorulur. "Atla" demek güvenli değildir (§8.3a/2).
     /// </summary>
-    private async Task<AgentOutcome> HandleDuplicateAsync(StoredCommand stored, SaleRequest req, CancellationToken ct)
+    private async Task<AgentOutcome> HandleDuplicateAsync(StoredCommand stored, SaleRequest req,
+        CancellationToken ct, RecoveryPolicy? turPolitikasi = null)
     {
         if (stored.State.IsFinal())
         {
@@ -280,9 +294,10 @@ public sealed class AgentOrchestrator
         // Para hareket etmediği için çalıştırmak GÜVENLİ; terminale sormak ise gereksiz bir tur ve
         // "açık fiş yok" cevabıyla komutu boşuna geri çevirirdi.
         if (stored.State == CommandState.RECEIVED)
-            return await RunAsync(req, stored.ExpiresAt, ct);
+            return await RunAsync(req, stored.ExpiresAt, ct, turPolitikasi);
 
-        return await ResolveAsync(stored, req, "tekrar gelen komut, uçuşta", ct);
+        return await ResolveAsync(stored, req, "tekrar gelen komut, uçuşta", ct,
+            turPolitikasi: turPolitikasi);
     }
 
     /// <summary>Sonucu saklanabilir hâle getirir. **Kart verisi TAŞIMAZ** (§12.3).</summary>

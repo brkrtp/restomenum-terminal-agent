@@ -131,7 +131,24 @@ public sealed class LocalSaleHandler
             {
                 // Tutar/kalem probe'da kullanılmaz: HandleAsync dedupe → HandleDuplicate → terminale sorar.
                 var probe = new SaleRequest(k.CommandId, k.PaymentId, k.TerminalId, 0, "", 0);
-                outcome = await _orch.HandleAsync(probe, k.ExpiresAt, ct);
+
+                // ── W39: ESKİ komutta ilk gecikmeyi ATLA ─────────────────────────────
+                // Kurtarma turu terminal kilidini alıp politikanın ilk gecikmesi boyunca UYUYOR;
+                // o sırada gelen canlı satış sırada bekliyor. Sahada ölçüldü (13:18): bir satış
+                // 18,7 saniye bekledi ve o süre boyunca cihaz tamamen boştu.
+                //
+                // 30 saniyelik bekleme ödemeden HEMEN SONRAKİ kurtarma için doğru — cihazın
+                // yerleşmesi gerekiyor. Saatler önce başarısız olmuş bir komut için o gerekçe
+                // yok; orada bekleme yalnız kasayı geciktiriyor.
+                // Yaş ölçüsü `ReceivedAt`: komut ne zaman geldi. Uçuştaki kurtarma (ödemeden
+                // hemen sonra) buradan GEÇMİYOR — o `ApplyAsync → ResolveAsync` yolunda ve 30 sn
+                // gecikmesini aynen koruyor. Buraya yalnız arka plan/açılış turu düşüyor; orada
+                // "saniyeler önce gelmiş" tek gerçek vaka çökme sonrası açılıştır ve o hâlde
+                // gecikme korunur.
+                var yas = _now().ToUnixTimeMilliseconds() - k.ReceivedAt;
+                var eski = yas >= (long)_orch.Recovery.InitialDelaySkipAge.TotalMilliseconds;
+                outcome = await _orch.HandleAsync(probe, k.ExpiresAt, ct,
+                    turPolitikasi: eski ? _orch.Recovery.WithoutInitialDelay() : null);
             }
             catch (Exception e)
             {
