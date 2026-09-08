@@ -125,6 +125,15 @@ public sealed class AgentWorker : BackgroundService
             using (var reader = new StreamReader(ctx.Request.InputStream, ctx.Request.ContentEncoding ?? Encoding.UTF8))
                 body = await reader.ReadToEndAsync(ct);
 
+            // W45 — REDDEDİLEN isteğin KAYNAĞI. Kabul edilenler için bu bilgi W18'de eklenmişti
+            // ([istek] satırı), reddedilenler dışarıda kalmıştı: 18:57:53'te gelen bozuk isteğin
+            // kimden geldiğini SÖYLEYEMEDİK. Yalnız reddetme dallarında kullanılıyor — kabul edilen
+            // istek yolunda tek bir satır bile değişmiyor.
+            // ⚠️ GÖVDE YOK: `IstekKaynagi.Tanimla`'nın gövde parametresi bile yok. Reddedilmiş bir
+            // gövde de kart/kişisel veri taşıyabilir; biçim bozukluğu içeriği zararsız yapmaz.
+            string Kaynak() => IstekKaynagi.Tanimla(
+                ctx.Request.RemoteEndPoint?.ToString(), ctx.Request.UserAgent, ctx.Request.ContentLength64);
+
             // KATEGORİYE GÖRE YOL AYRIMI. Zarfın başındaki `MessageCategory` okunur ve iki ayrı
             // ayrıştırıcıdan biri seçilir. Ödeme yolu paranın geçtiği yol ve çalışıyor; iptali oraya
             // `if` ile eklemek, tek bir hatanın satışı da bozması demekti.
@@ -133,7 +142,8 @@ public sealed class AgentWorker : BackgroundService
                 var iptal = ReversalRequestParser.Parse(body);
                 if (iptal is ReversalParseResult.Invalid ig)
                 {
-                    _log.LogWarning("geçersiz ReversalRequest: {Reason} — {Detail}", ig.Reason, ig.Detail);
+                    _log.LogWarning("geçersiz ReversalRequest: {Reason} — {Detail} [{Kaynak}]",
+                        ig.Reason, ig.Detail, Kaynak());
                     Respond(ctx, 400, $"{{\"error\":\"{ig.Reason}\"}}");
                     return;
                 }
@@ -147,7 +157,8 @@ public sealed class AgentWorker : BackgroundService
             var parse = SaleToPoiRequestParser.Parse(body);
             if (parse is SaleToPoiParseResult.Invalid inv)
             {
-                _log.LogWarning("geçersiz SaleToPOIRequest: {Reason} — {Detail}", inv.Reason, inv.Detail);
+                _log.LogWarning("geçersiz SaleToPOIRequest: {Reason} — {Detail} [{Kaynak}]",
+                    inv.Reason, inv.Detail, Kaynak());
                 // Kasa HTTP koduna bakmaz; yine de biçim hatasında 400 net. (Gerçek kasadan beklenmez.)
                 Respond(ctx, 400, $"{{\"error\":\"{inv.Reason}\"}}");
                 return;
