@@ -42,19 +42,19 @@ public static class WindowsCapabilityProbe
         var rapor = CapabilityProbe.Run(services.GetRequiredService<IGmpWrapper>(),
             (m, d) => log.LogWarning("{Mesaj} {Detay}", m, d));
 
-        if (rapor.Status == CapabilityProbeStatus.TicketAlreadyOpen)
+        if (rapor.Status == ProbeStatus.TicketAlreadyOpen)
         {
             log.LogError("terminalde AÇIK fiş var — yoklama YAPILMADI. Önce o fişi sonuçlandırın " +
                 "(`--ticket` ile bakın, gerekirse `--void`).");
             return false;
         }
-        if (rapor.Status == CapabilityProbeStatus.SetupFailed)
+        if (rapor.Status == ProbeStatus.SetupFailed)
         {
             log.LogError("yoklama fişi açılamadı: {Adim} rc={Rc} — hiçbir tip ölçülmedi.",
                 rapor.FailedStep, rapor.FailedRc);
             return false;
         }
-        if (rapor.Status == CapabilityProbeStatus.HandleLost)
+        if (rapor.Status == ProbeStatus.HandleLost)
             log.LogError("tanıtıcı ölçüm sırasında geçersizleşti ({Adim} rc={Rc}) — KALAN TİPLER ÖLÇÜLMEDİ.",
                 rapor.FailedStep, rapor.FailedRc);
 
@@ -71,6 +71,6 @@ public static class WindowsCapabilityProbe
             kabuller.Count == 0 ? "(yok)" : string.Join(", ", kabuller));
         log.LogWarning("Bu araç beyanı DEĞİŞTİRMEZ — `AgentCapabilities.Declared` elle, bu ölçüme " +
             "dayanarak güncellenir. Ölçülmemiş yetenek beyan edilmez.");
-        return rapor.Status == CapabilityProbeStatus.Completed;
+        return rapor.Status == ProbeStatus.Completed;
     }
 }

@@ -106,9 +106,53 @@ public sealed partial class GmpWrapper : IGmpWrapper
             pluPriceIndex  = 0,
             name      = item.Name,
             barcode   = "",
+            // İNDİRİM: cihazın kendi kalem yapısında zaten var (`promotion`), ek tur gerekmiyor.
+            // İndirim YOKKEN alan `null` KALIR — bugünkü davranışın ta kendisi ve izde de öyle
+            // görünüyor (`Index:19 - Type:Null - Name: promotion`). Boş bir promotion nesnesi
+            // göndermek, cihaza "0 TL indirim var" demek olurdu ve fişe satır bastırabilirdi.
+            promotion = item.DiscountMinor > 0
+                ? new promotion
+                {
+                    type = (byte)EItemPromotionType.ITEM_PROMOTION_DISCOUNT,
+                    amount = checked((int)item.DiscountMinor),
+                    ticketMsg = item.DiscountText ?? "",
+                }
+                : null,
         };
         var stTicket = new ST_TICKET();
         uint rc = Json_GMPSmartDLL.FP3_ItemSale(h, handle, ref st, ref stTicket, TimeoutDefault);
+        ticket = Map(stTicket);
+        return rc;
+    }
+
+    /// <summary>TEŞHİS (W60): <c>FP3_Minus</c> — tutar indirimi, kaleme adreslenir.</summary>
+    public GmpResult Minus(ulong handle, long amountMinor, string text, int indexOfItem, out GmpTicket ticket)
+    {
+        ticket = default;
+        uint h = AcquireInterface();
+        if (h == 0) return GmpCodes.PortNotOpen;
+
+        var stTicket = new ST_TICKET();
+        uint rc = Json_GMPSmartDLL.FP3_Minus(h, handle, checked((int)amountMinor), text,
+            ref stTicket, checked((ushort)indexOfItem), TimeoutDefault);
+        ticket = Map(stTicket);
+        return rc;
+    }
+
+    /// <summary>TEŞHİS (W60): <c>FP3_Dec</c> — oran indirimi. Oran cihazda <c>byte</c>: TAM SAYI yüzde.</summary>
+    public GmpResult Dec(ulong handle, int ratePercent, string text, int indexOfItem,
+        out long changedMinor, out GmpTicket ticket)
+    {
+        changedMinor = 0;
+        ticket = default;
+        uint h = AcquireInterface();
+        if (h == 0) return GmpCodes.PortNotOpen;
+
+        var stTicket = new ST_TICKET();
+        int degisen = 0;
+        uint rc = Json_GMPSmartDLL.FP3_Dec(h, handle, checked((byte)ratePercent), text,
+            ref stTicket, checked((ushort)indexOfItem), ref degisen, TimeoutDefault);
+        changedMinor = degisen;
         ticket = Map(stTicket);
         return rc;
     }
@@ -495,8 +539,12 @@ public sealed partial class GmpWrapper : IGmpWrapper
         // Bozukluğun GERÇEK ölçütü sayacın struct kapasitesini (24) aşmasıdır — orada sayı
         // bellek çöpüdür. Dizinin `count`'tan kısa olması bozukluk değil, "bu yanıtta yalnız
         // şu kadarı var" demektir.
+        long indirim = t.TotalReceiptDiscount;
+        long kdv = t.TotalReceiptTax;
+
         if (count > 0 && (payments is null || count > PaymentWindow.Capacity))
-            return new GmpTicket(total, paid, -1, 0, null, null);
+            return new GmpTicket(total, paid, -1, 0, null, null,
+                TotalDiscountMinor: indirim, TotalTaxMinor: kdv);
 
         var satirlar = new List<GmpPaymentLine>();
         int lastType = 0;
@@ -572,7 +620,8 @@ public sealed partial class GmpWrapper : IGmpWrapper
         // Liste ancak dizide fişin TAMAMI varsa "tam" sayılır: hem sayaç kadar dolu kayıt
         // okunmuş olmalı hem de dizi o kadarını taşıyabilmiş olmalı.
         return new GmpTicket(total, paid, count, lastType, rrn, last4, errCode, errText, appErrCode,
-            appErrText, satirlar, PaymentsAreComplete: dolu == count && uzunluk >= count);
+            appErrText, satirlar, PaymentsAreComplete: dolu == count && uzunluk >= count,
+            TotalDiscountMinor: indirim, TotalTaxMinor: kdv);
     }
 
     private static bool Bos(string? s) => string.IsNullOrWhiteSpace(s);

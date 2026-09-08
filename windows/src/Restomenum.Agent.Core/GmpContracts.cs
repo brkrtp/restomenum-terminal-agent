@@ -267,7 +267,22 @@ public readonly record struct GmpTicket(
     /// <para>Bu ayrım şart: doldurulmamış bir kaydı "0 TL'lik ödeme" saymak, deftere olmayan
     /// satırlar yazdırırdı. Boş kayıt "ödeme yok" değil, "bu çağrıda gelmedi" demek.</para>
     /// </summary>
-    bool PaymentsAreComplete = false)
+    bool PaymentsAreComplete = false,
+
+    /// <summary>
+    /// <c>ST_TICKET.TotalReceiptDiscount</c> — fişteki indirim toplamı (kuruş).
+    ///
+    /// <para><b>Neden <see cref="TotalAmountMinor"/>'dan AYRI:</b> cihazın fiş toplamının indirimi
+    /// düşülmüş (net) mi yoksa düşülmemiş (brüt) mi döndüğü belgede YOK. İkisini tek alana
+    /// katlasaydık ölçemezdik. <c>DevamDogrula</c>'nın tam-eşitlik kıyası bu ayrıma bağlı:
+    /// cihaz net, platform brüt gönderirse indirimli her adisyonda ikinci kısmi ödeme
+    /// <c>TICKET_SALE_MISMATCH</c> ile reddedilirdi.</para>
+    /// </summary>
+    long TotalDiscountMinor = 0,
+
+    /// <summary><c>ST_TICKET.TotalReceiptTax</c> — fişteki KDV toplamı (kuruş). İndirimin matrahı
+    /// düşürüp düşürmediği yalnız bu alanın indirim öncesi/sonrası değerinden okunabilir.</summary>
+    long TotalTaxMinor = 0)
 {
     public bool IsFullyPaid => TotalAmountMinor > 0 && PaidAmountMinor >= TotalAmountMinor;
     public long RemainingMinor => Math.Max(0, TotalAmountMinor - PaidAmountMinor);
@@ -404,7 +419,20 @@ public static class GmpTicketTypes
 }
 
 /// <summary>Fişe eklenecek kalem.</summary>
-public readonly record struct GmpItem(string Name, long UnitPriceMinor, int Quantity, int DepartmentNo);
+public readonly record struct GmpItem(string Name, long UnitPriceMinor, int Quantity, int DepartmentNo,
+    /// <summary>
+    /// Kalem indirimi (kuruş). <b>0 = indirim yok</b> ve bu durumda cihaza giden
+    /// <c>ST_ITEM.promotion</c> alanı <c>null</c> kalır — bugünkü davranışın ta kendisi.
+    ///
+    /// <para>Neden kalemin İÇİNDE: cihazın <c>ST_ITEM</c> yapısında zaten
+    /// <c>promotion { type, amount, ticketMsg }</c> alanı var (<c>GmpInterop.cs:762</c>) ve biz onu
+    /// bugün <c>null</c> gönderiyoruz. Ayrı bir <c>FP3_Minus</c> turu kalem başına ~350-500 ms
+    /// eklerdi; indirim zaten gönderdiğimiz gövdede taşınabiliyor.</para>
+    /// </summary>
+    long DiscountMinor = 0,
+    /// <summary>Fişe basılacak indirim metni (<c>promotion.ticketMsg</c>), ör. "%10 İndirim".
+    /// Yalnız <see cref="DiscountMinor"/> &gt; 0 iken anlamlı.</summary>
+    string? DiscountText = null);
 
 /// <summary>Ödeme isteği.</summary>
 /// <param name="BankBkmId">
@@ -585,6 +613,26 @@ public interface IGmpWrapper
     /// düşer — yüzeyde olmaması pahalı.</para>
     /// </summary>
     GmpResult SetDepartments(string departmentsJson, string supervisorPassword);
+
+    /// <summary>
+    /// <c>FP3_Minus</c> — TUTAR indirimi (kuruş). <paramref name="indexOfItem"/> kalemi adresler.
+    ///
+    /// <para><b>Yalnız TEŞHİS için</b> (<c>--discount-probe</c>, W60): satış yolu indirimi
+    /// <see cref="GmpItem.DiscountMinor"/> ile kalemin İÇİNDE gönderiyor, ek tur atmıyor. Bu çağrı
+    /// "indeks 0 bütün fişe mi uygulanır" gibi belgelenmemiş soruları ÖLÇMEK için var.</para>
+    /// </summary>
+    GmpResult Minus(ulong handle, long amountMinor, string text, int indexOfItem, out GmpTicket ticket);
+
+    /// <summary>
+    /// <c>FP3_Dec</c> — ORAN indirimi. <paramref name="ratePercent"/> cihazda <b><c>byte</c></b>
+    /// (0-255), yani <b>tam sayı yüzde</b>; %12,5 gibi kesirli oran İFADE EDİLEMEZ. Cihazın
+    /// hesapladığı tutar <paramref name="changedMinor"/> ile geri döner.
+    ///
+    /// <para><b>Yalnız TEŞHİS için</b> (W60). Satış yolu oranı DEĞİL tutarı gönderir — tam da bu
+    /// <c>byte</c> sınırı yüzünden.</para>
+    /// </summary>
+    GmpResult Dec(ulong handle, int ratePercent, string text, int indexOfItem,
+        out long changedMinor, out GmpTicket ticket);
 
     /// <summary>Kurulu departmanları okur — kurulum doğrulaması ve teşhis için.</summary>
     GmpResult GetDepartments(out string departmentsJson);

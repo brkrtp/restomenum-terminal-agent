@@ -43,7 +43,10 @@ public class GmpTerminalTransportTests
         public GmpResult OptionFlags(ulong h, GmpEchoFlags f)
         { Calls.Add("OptionFlags"); return new GmpResult(StaleHandles.Contains(h) ? GmpCodes.InvalidHandle
             : Codes.TryGetValue("OptionFlags", out var c) ? c : GmpCodes.Ok); }
-        public GmpResult ItemSale(ulong h, GmpItem i, out GmpTicket tk) { tk = Ticket; return Kod("ItemSale"); }
+        /// <summary>Cihaza GIDEN kalemler — indirimin gercekten gonderilip gonderilmedigi burada gorulur.</summary>
+        public List<GmpItem> ItemSales { get; } = new();
+        public GmpResult ItemSale(ulong h, GmpItem i, out GmpTicket tk)
+        { ItemSales.Add(i); tk = Ticket; return Kod("ItemSale"); }
         /// <summary>Cihaza GİDEN ödeme isteği — banka seçiminin taşınıp taşınmadığı burada görülür.</summary>
         public GmpPaymentRequest? LastPaymentRequest;
         /// <summary>TUM odeme istekleri sirasiyla (W57 yoklamasi dort tipi arka arkaya deniyor).</summary>
@@ -67,6 +70,15 @@ public class GmpTerminalTransportTests
         public GmpResult PrintUserMessage(ulong h) => Kod("PrintUserMessage");
         public GmpResult PrintMF(ulong h)
         { Calls.Add("PrintMF"); return new GmpResult(PrintMfFailures-- > 0 ? 1u : GmpCodes.Ok); }
+        /// <summary>W60 yoklamasinin denedigi indirim cagrilari — istekler SIRAYLA kaydedilir.</summary>
+        public List<(long Amount, string Text, int Index)> MinusCalls { get; } = new();
+        public List<(int Rate, string Text, int Index)> DecCalls { get; } = new();
+        /// <summary>`Dec`in dondurecegi hesaplanmis tutar (cihaz kurusa kendi yuvarlar).</summary>
+        public long DecChanged = 0;
+        public GmpResult Minus(ulong h, long amountMinor, string text, int indexOfItem, out GmpTicket tk)
+        { MinusCalls.Add((amountMinor, text, indexOfItem)); tk = Ticket; return Kod("Minus"); }
+        public GmpResult Dec(ulong h, int ratePercent, string text, int indexOfItem, out long changedMinor, out GmpTicket tk)
+        { DecCalls.Add((ratePercent, text, indexOfItem)); changedMinor = DecChanged; tk = Ticket; return Kod("Dec"); }
         public GmpResult VoidAll(ulong h, out GmpTicket tk) { var r = Kod("VoidAll"); tk = Ticket; return r; }
         public GmpResult VoidPayment(ulong h, int i) => Kod("VoidPayment");
         public GmpResult Close(ulong h) => Kod("Close");

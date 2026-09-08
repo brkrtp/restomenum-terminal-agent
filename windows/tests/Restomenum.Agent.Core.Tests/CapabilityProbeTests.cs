@@ -55,7 +55,7 @@ public class CapabilityProbeTests
 
         var r = CapabilityProbe.Run(gmp);
 
-        Assert.Equal(CapabilityProbeStatus.SetupFailed, r.Status);
+        Assert.Equal(ProbeStatus.SetupFailed, r.Status);
         Assert.Equal("TicketHeader", r.FailedStep);
         Assert.Contains("VoidAll", gmp.Calls);
         Assert.Contains("Close", gmp.Calls);
@@ -72,7 +72,7 @@ public class CapabilityProbeTests
 
         var r = CapabilityProbe.Run(gmp);
 
-        Assert.Equal(CapabilityProbeStatus.TicketAlreadyOpen, r.Status);
+        Assert.Equal(ProbeStatus.TicketAlreadyOpen, r.Status);
         Assert.DoesNotContain("VoidAll", gmp.Calls);
         Assert.DoesNotContain("Close", gmp.Calls);
         Assert.DoesNotContain("TicketHeader", gmp.Calls);
@@ -120,7 +120,7 @@ public class CapabilityProbeTests
 
         var r = CapabilityProbe.Run(gmp);
 
-        Assert.Equal(CapabilityProbeStatus.HandleLost, r.Status);
+        Assert.Equal(ProbeStatus.HandleLost, r.Status);
         Assert.Equal(2, r.Results.Count);          // ← ÇİVİ: dört değil, İKİ
         Assert.Contains("VoidAll", gmp.Calls);     // temizlik yine de koştu
     }

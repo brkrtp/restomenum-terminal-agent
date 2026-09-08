@@ -4,8 +4,12 @@ namespace Restomenum.Agent.Core;
 /// burada yorumlanmaz.</summary>
 public readonly record struct CapabilityProbeResult(int PaymentType, string Op, string Name, uint Rc, bool Accepted);
 
-/// <summary>Yoklama neden yapılamadı / nerede durdu.</summary>
-public enum CapabilityProbeStatus
+/// <summary>
+/// Bir cihaz yoklamasının nerede durduğu. <b>Yoklamaların ORTAK kümesi</b> (<c>--capability-probe</c>,
+/// <c>--discount-probe</c>): her yoklamaya ayrı bir enum yazmak, aynı durumların iki yerde
+/// tanımlanıp zamanla ıraksaması demek olurdu.
+/// </summary>
+public enum ProbeStatus
 {
     /// <summary>Fiş açıldı, adaylar ölçüldü, fiş temizlendi.</summary>
     Completed,
@@ -19,7 +23,7 @@ public enum CapabilityProbeStatus
 
 /// <summary>Yoklamanın tümü: durum + ölçülenler + temizliğin sonucu.</summary>
 public readonly record struct CapabilityProbeReport(
-    CapabilityProbeStatus Status,
+    ProbeStatus Status,
     IReadOnlyList<CapabilityProbeResult> Results,
     string? FailedStep,
     uint FailedRc,
@@ -82,10 +86,10 @@ public static class CapabilityProbe
         if (sr.Code == GmpCodes.AlreadyDone)
         {
             yaz("[yoklama] terminalde AÇIK fiş var — DOKUNULMADI", new { handle });
-            return new(CapabilityProbeStatus.TicketAlreadyOpen, sonuclar, "Start", sr.Code, 0, 0, false);
+            return new(ProbeStatus.TicketAlreadyOpen, sonuclar, "Start", sr.Code, 0, 0, false);
         }
         if (!sr.Ok)
-            return new(CapabilityProbeStatus.SetupFailed, sonuclar, "Start", sr.Code, 0, 0, false);
+            return new(ProbeStatus.SetupFailed, sonuclar, "Start", sr.Code, 0, 0, false);
 
         // Fiş buradan itibaren AÇIK: ölçüm nerede biterse bitsin temizlik AYNI yerden geçer.
         var (durum, hataAdim, hataRc) = Olc(gmp, handle, sonuclar, yaz);
@@ -102,19 +106,19 @@ public static class CapabilityProbe
 
     /// <summary>Fiş açıkken yapılan ölçüm. Ayrı metot: temizlik çağrısı TEK yerde kalsın, erken
     /// dönüşlerden biri onu atlayamasın.</summary>
-    private static (CapabilityProbeStatus Durum, string? Adim, uint Rc) Olc(
+    private static (ProbeStatus Durum, string? Adim, uint Rc) Olc(
         IGmpWrapper gmp, ulong handle, List<CapabilityProbeResult> sonuclar, Action<string, object?> yaz)
     {
         var r = gmp.TicketHeader(handle, GmpTicketTypes.Sale);
-        if (!r.Ok) return (CapabilityProbeStatus.SetupFailed, "TicketHeader", r.Code);
+        if (!r.Ok) return (ProbeStatus.SetupFailed, "TicketHeader", r.Code);
 
         // `GetTicket`in ödeme detayını eksik döndürmemesi için — satış yolundaki ile aynı sözleşme.
         r = gmp.OptionFlags(handle, GmpEchoFlags.Reload);
-        if (!r.Ok) return (CapabilityProbeStatus.SetupFailed, "OptionFlags", r.Code);
+        if (!r.Ok) return (ProbeStatus.SetupFailed, "OptionFlags", r.Code);
 
         // Departman 0: her cihazda var olan ilk bölüm. Fiş nasılsa iptal edilecek.
         r = gmp.ItemSale(handle, new GmpItem("YOKLAMA", ItemAmountMinor, 1, 0), out _);
-        if (!r.Ok) return (CapabilityProbeStatus.SetupFailed, "ItemSale", r.Code);
+        if (!r.Ok) return (ProbeStatus.SetupFailed, "ItemSale", r.Code);
 
         foreach (var (tip, op, ad) in Candidates)
         {
@@ -128,9 +132,9 @@ public static class CapabilityProbe
 
             // Tanıtıcı geçersizleştiyse devam etmek ölçüm değil gürültü üretir.
             if (pr.Code is GmpCodes.InvalidHandle or GmpCodes.NoHandle)
-                return (CapabilityProbeStatus.HandleLost, "Payment", pr.Code);
+                return (ProbeStatus.HandleLost, "Payment", pr.Code);
         }
 
-        return (CapabilityProbeStatus.Completed, null, 0u);
+        return (ProbeStatus.Completed, null, 0u);
     }
 }
