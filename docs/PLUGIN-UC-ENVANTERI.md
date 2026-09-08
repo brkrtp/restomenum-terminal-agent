@@ -291,6 +291,16 @@ Bunlar üretici belgesinde yazmıyor; sahada ölçülüp burada kayda geçti.
   dept 10 (%10) 891 kuruşluk kalem → `TotalReceiptTax` **81** = 891×10/110.
 - **`bankBkmId = 0` = "cihaz seçsin"** ve cihaz aynı fişte art arda iki denemede **farklı**
   banka seçebiliyor (GARANTİ 62 → AKBANK 46).
+- **Kart ödemesinde `bankBkmId = 0` gönderilirse cihaz OPERATÖRDEN banka seçimi ister.**
+  Ekranda "BANKA SEÇİMİ İÇİN GİRİŞ TUŞUNA BASINIZ" çıkar; basılmazsa `FP3_Payment` uzun
+  süre bloke olur (ölçüm: 10,9 sn ve 31,7 sn) ve başarısız döner. Cihazın fişe yazdığı
+  kayıt: `ErrorCode = D00A`, `AppErrorMsg = "İŞLEM ONAYLANMADI"`, tutar **0**.
+  **Bu bir BANKA REDDİ DEĞİLDİR** — kasada "Banka reddetti" demek yanlış teşhis olur.
+  (Cihazda dört banka uygulaması kurulu; hangisinin kullanılacağı seçilmeden ilerlemiyor.)
+  `bankBkmId` dolu gönderilirse seçim ekranının açılmayacağı **hipotezdir, ölçülmedi**.
+- **`2085` ile `2086` ayrımı** "cihazda ayrıntılı hata kaydı VAR mı" demek
+  (`..._AND_NO_MORE_ERROR_CODE` / `..._AND_MORE_ERROR_CODE`); ikisi de "ödeme başarısız".
+  Ayrıntı varsa `GetTicket`'taki başarısız satırdan (`ST_PaymentErrMessage`) okunur.
 - **Kurulu ödeme uygulamaları ≠ desteklenen ödeme tipleri.** `FP3_GetPaymentApplicationInfo`
   yalnız **banka kartı** uygulamalarını listeler. Hediye çeki / puan / havale / çek
   uygulama gerektirmiyor (DLL tablosunda "(Uygulama varsa)" notu yalnız yemek çeki ve
