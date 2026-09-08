@@ -535,6 +535,27 @@ public sealed class LocalSaleHandler : IDeviceIdleGate
             return reddi;
         }
 
+        // ── W61: BANKA KİMLİĞİ YALNIZ BANKA BACAĞI OLAN TİPTE TAŞINIR ────────────────
+        // `bankBkmId` zarftan geliyor ve ayrıştırıcıda YALNIZ aralık doğrulanıyor
+        // (`SaleToPoiRequestParser.cs:88` — > 0 ve cihaz alanına sığıyor mu). Tip ile çapraz
+        // kontrol YOKTU: `{tip: 32 hediye çeki, bankBkmId: 46}` cihaza 46 ile giderdi ve cihazın
+        // ne yapacağı ÖLÇÜLMEDİ — banka bacağı olmayan bir ödemede banka seçmeye çalışması
+        // mümkün.
+        //
+        // REDDETMİYORUZ: kasanın göndermemesi gereken bir alan yüzünden satışı düşürmek, kasayı
+        // manuel ödemeye indirir (kullanıcının değişmez şartı). GÖRÜNÜR ŞEKİLDE YOK SAYIYORUZ:
+        // değer düşer, sebebi loga yazılır. Loga yalnız yöntem kimliği ve tip girer — kart/kimlik
+        // verisi YOK.
+        var bankBkmId = req.BankBkmId;
+        if (bankBkmId is int gelenBkm && !GmpPaymentTypes.HasBankLeg(gmpPaymentType.Value))
+        {
+            _log("[yerel] banka kimliği YOK SAYILDI — bu ödeme tipinin banka bacağı yok", new
+            {
+                req.PaymentId, d.PaymentMethodId, tip = gmpPaymentType.Value, gelenBkm,
+            });
+            bankBkmId = null;
+        }
+
         // 4. SaleRequest kur + orkestratör (dedupe/durum-makinesi/UNKNOWN korunur; CommandId = ServiceID).
         var sale = new SaleRequest(
             CommandId: req.ServiceId, PaymentId: req.PaymentId, TerminalId: req.PoiId,
@@ -545,7 +566,8 @@ public sealed class LocalSaleHandler : IDeviceIdleGate
             // açık fişi "başka satış" sayar. Emin olmadan fişe ödeme eklemeyiz.
             SaleSessionId: req.SaleSessionId, SaleTotalMinor: d.SaleTotalAmountMinor,
             // Bankayı KASİYER seçer, biz taşırız. Zarfta yoksa cihaz seçer (bugünkü davranış).
-            BankBkmId: req.BankBkmId);
+            // W61: banka bacağı olmayan tipte bu değer yukarıda düşürülmüş olur.
+            BankBkmId: bankBkmId);
 
         var eslemeMs = (long)(_now() - tEsleme).TotalMilliseconds;
 

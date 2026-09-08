@@ -132,6 +132,66 @@ public class LocalSaleHandlerTests : IDisposable
         return (h, sim, notifier);
     }
 
+    // ── W61: BANKA KİMLİĞİ YALNIZ BANKA BACAĞI OLAN TİPTE ───────────────────────
+
+    private static SaleToPoiRequest ReqBanka(int bkm, string serviceId = "svc-bkm") =>
+        new(serviceId, "kasa-1", "term-01", Pay, "1042", DateTimeOffset.UtcNow, BankBkmId: bkm);
+
+    [Fact]
+    public async Task Banka_bacagi_YOKSA_bankBkmId_DUSURULUR()
+    {
+        // ← ÇİVİ: `bankBkmId` zarftan geliyor ve ayrıştırıcıda YALNIZ aralık doğrulanıyor; tip ile
+        // çapraz kontrol yoktu. `{tip: 32 hediye çeki, bankBkmId: 46}` cihaza 46 ile giderdi ve
+        // cihazın banka bacağı olmayan bir ödemede banka seçmeye çalışması mümkün — ölçülmedi.
+        var (h, sim, _) = Kur(new PaymentDetailResult.Ok(Detail(pmId: "11-gift")),
+            paymentType: GmpPaymentTypes.GiftVoucher);
+
+        await h.HandleAsync(ReqBanka(46));
+
+        Assert.Null(sim.SaleCalls[0].BankBkmId);   // ← ÇİVİ: cihaza GİTMEDİ
+    }
+
+    [Fact]
+    public async Task Banka_bacagi_dusurulunce_GORUNUR_log_yazilir()
+    {
+        // ← ÇİVİ: sessizce düşürmek, kasanın yanlış alan gönderdiğini kimsenin fark etmemesi
+        // demek. Loga yalnız yöntem kimliği ve tip girer — kart/kimlik verisi YOK.
+        var (h, _, _) = Kur(new PaymentDetailResult.Ok(Detail(pmId: "11-gift")),
+            paymentType: GmpPaymentTypes.GiftVoucher);
+
+        await h.HandleAsync(ReqBanka(46));
+
+        var veri = LogVeri("banka kimliği YOK SAYILDI");
+        Assert.NotNull(veri);
+        Assert.Equal(46, Alan<int>(veri, "gelenBkm"));
+        Assert.Equal(GmpPaymentTypes.GiftVoucher, Alan<int>(veri, "tip"));
+    }
+
+    [Fact]
+    public async Task KARTTA_bankBkmId_AYNEN_tasinir()
+    {
+        // ← ÇİVİ: düşürme kuralı kartı da yakalarsa kasiyerin SEÇTİĞİ banka kaybolur ve cihaz
+        // kendi seçer — sahada ölçüldü ki cihaz aynı fişte iki denemede FARKLI banka seçebiliyor.
+        var (h, sim, _) = Kur(new PaymentDetailResult.Ok(Detail(pmId: "11-credit")),
+            paymentType: GmpPaymentTypes.Card);
+
+        await h.HandleAsync(ReqBanka(62));
+
+        Assert.Equal(62, sim.SaleCalls[0].BankBkmId);
+    }
+
+    [Fact]
+    public async Task Banka_bacagi_YOKSA_ama_bkm_de_YOKSA_log_YAZILMAZ()
+    {
+        // Gürültü yok: düşürülecek bir şey olmadığında uyarı da olmamalı, yoksa her nakit satışta
+        // anlamsız bir satır birikir ve gerçek uyarı içinde kaybolur.
+        var (h, _, _) = Kur(new PaymentDetailResult.Ok(Detail()), paymentType: GmpPaymentTypes.Cash);
+
+        await h.HandleAsync(Req());
+
+        Assert.Null(LogVeri("banka kimliği YOK SAYILDI"));
+    }
+
     private static JsonElement Resp(string json) =>
         JsonDocument.Parse(json).RootElement.GetProperty("SaleToPOIResponse").GetProperty("PaymentResponse").GetProperty("Response");
 
