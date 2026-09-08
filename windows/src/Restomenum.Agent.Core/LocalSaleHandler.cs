@@ -123,7 +123,17 @@ public sealed class LocalSaleHandler : IDeviceIdleGate
         if (atlanan > 0)
             _log("[yerel] açılış kurtarması — yaş sınırı", new { atlanan, saat = UnknownKurtarmaSaati });
 
-        var pending = _store.Pending(unknownEsigi: esik);
+        // W62: BU SÜREÇTE ŞU AN İŞLENEN komutlar kurtarılmaz. Onların sonucu birazdan asıl satış
+        // yolundan gidecek; kurtarmanın araya girmesi hem çift bildirim riski hem de hâlâ koşan bir
+        // komutun yoklamasını KAPATMA riski (canlı görüldü, 2026-09-09 01:44).
+        var hepsi = _store.Pending(unknownEsigi: esik);
+        var pending = hepsi.Where(k => !_ucusta.ContainsKey(k.CommandId)).ToList();
+        if (hepsi.Count != pending.Count)
+            _log("[yerel] kurtarma — UÇUŞTAKİ komutlar atlandı", new
+            {
+                atlanan = hepsi.Count - pending.Count,
+                komutlar = string.Join(",", hepsi.Where(k => _ucusta.ContainsKey(k.CommandId)).Select(k => k.CommandId)),
+            });
         if (pending.Count == 0) return;
         _log("[yerel] açılış kurtarması", new { adet = pending.Count });
 
@@ -416,7 +426,33 @@ public sealed class LocalSaleHandler : IDeviceIdleGate
     }
 
     /// <summary>Bir SaleToPOIRequest'i uçtan uca işler; kasaya dönecek <c>SaleToPOIResponse</c> JSON'unu verir.</summary>
+    /// <summary>
+    /// <b>W62 — bu SÜREÇTE şu an işlenen komutlar.</b> Kurtarma turu bunları ATLAR.
+    ///
+    /// <para><b>Neden gerekli (sahada ölçüldü, 2026-09-09 01:44):</b> satış yolu terminal kilidini
+    /// yalnız CİHAZ çağrısı boyunca tutuyor ve bildirimden ÖNCE bırakıyor. Kurtarma turu o
+    /// boşlukta kilidi aldı ve hâlâ uçuşta olan komutun (<c>039755a185</c>) adına P4 gönderdi —
+    /// gerçek sonuçtan <b>184 ms önce</b>. O tur zarar vermedi çünkü platform <c>stale</c> dedi,
+    /// ama aynı turda komutun <b>yoklaması KAPATILDI</b> (<c>recovery_closed_at</c>). Satış o an
+    /// çökseydi komut <c>UNKNOWN</c> kalır <b>ve</b> kapatılmış olurdu → bir daha hiç yoklanmaz →
+    /// sessiz kayıp. Tam da W34'ün önlemek için var olduğu şeyin tersi.</para>
+    ///
+    /// <para><b>Neden kilidi bildirime kadar uzatmadık:</b> o zaman kurtarma ve iptal, satışın
+    /// BULUT turunu da beklerdi. Kilit cihazı korumak için var; defteri korumanın yolu cihazı
+    /// daha uzun meşgul etmek değil.</para>
+    /// </summary>
+    private readonly System.Collections.Concurrent.ConcurrentDictionary<string, byte> _ucusta = new();
+
     public async Task<string> HandleAsync(SaleToPoiRequest req, CancellationToken ct = default)
+    {
+        _ucusta[req.ServiceId] = 0;
+        // `finally`: satış hangi yoldan çıkarsa çıksın (ret, istisna, iptal) kayıt kümeden DÜŞER.
+        // Düşmezse o komut bir daha ASLA kurtarılamaz — koruma, koruduğu şeyi yok ederdi.
+        try { return await IsleAsync(req, ct); }
+        finally { _ucusta.TryRemove(req.ServiceId, out _); }
+    }
+
+    private async Task<string> IsleAsync(SaleToPoiRequest req, CancellationToken ct)
     {
         // ── W51: CİHAZ ÖNCESİ AŞAMALARIN SÜRESİ ─────────────────────────────────────
         // Ölçüm 2026-09-08 22:45:08: bir satış uçtan uca 20,2 sn sürdü, cihaz tarafı 7,8 sn'ydi.

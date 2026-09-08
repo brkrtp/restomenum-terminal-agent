@@ -132,6 +132,65 @@ public class LocalSaleHandlerTests : IDisposable
         return (h, sim, notifier);
     }
 
+    // ── W62: KURTARMA UÇUŞTAKİ KOMUTA DOKUNMAZ ──────────────────────────────────
+
+    [Fact]
+    public async Task Kurtarma_UCUSTAKI_komutu_ATLAR()
+    {
+        // ← ÇİVİ: sahada görüldü (2026-09-09 01:44). Satış yolu terminal kilidini yalnız CİHAZ
+        // çağrısı boyunca tutuyor; kurtarma turu bildirimden önceki boşlukta kilidi alıp hâlâ
+        // uçuşta olan komutun adına P4 gönderdi ve o komutun YOKLAMASINI KAPATTI. O an satış
+        // çökseydi komut UNKNOWN + kapatılmış kalırdı — bir daha hiç yoklanmaz, sessiz kayıp.
+        var (h, sim, _) = Kur(new PaymentDetailResult.Ok(Detail()));
+
+        // Cihaz çağrısı SÜRERKEN kurtarma turunu başlat: satış hâlâ uçuşta.
+        sim.Delay = TimeSpan.FromMilliseconds(300);
+        var satis = h.HandleAsync(Req("svc-ucusta"));
+        await Task.Delay(120);
+        await h.RecoverPendingAsync();
+        await satis;
+
+        var veri = LogVeri("UÇUŞTAKİ komutlar atlandı");
+        Assert.NotNull(veri);
+        Assert.Equal(1, Alan<int>(veri, "atlanan"));
+        Assert.Contains("svc-ucusta", Alan<string>(veri, "komutlar"));
+    }
+
+    [Fact]
+    public async Task Satis_BITINCE_komut_yeniden_kurtarilabilir()
+    {
+        // ← ÇİVİ: koruma kalıcı olsaydı, koruduğu şeyi yok ederdi — bir kez işlenen komut bir daha
+        // ASLA kurtarılamazdı. `finally` her çıkış yolunda kümeden düşürmeli.
+        var (h, _, _) = Kur(new PaymentDetailResult.Ok(Detail()));
+
+        await h.HandleAsync(Req("svc-biten"));
+        _loglar.Clear();
+        await h.RecoverPendingAsync();
+
+        Assert.Null(LogVeri("UÇUŞTAKİ komutlar atlandı"));   // artık uçuşta değil
+    }
+
+    [Fact]
+    public async Task Satis_PATLASA_da_komut_kumeden_DUSER()
+    {
+        // ← ÇİVİ: istisna yolunda küme temizlenmezse komut sonsuza kadar "uçuşta" görünür ve
+        // kurtarma onu bir daha hiç ele almaz. Tam da kaçındığımız sessiz kayıp.
+        var patlayan = new FakeAmounts { Result = new PaymentDetailResult.Ok(Detail()) };
+        patlayan.Sirasinda = () => throw new InvalidOperationException("tutar ucu patladı");
+        var orch = new AgentOrchestrator(_store, new SimulatorTransport(), _clock, RecoveryPolicy.Immediate);
+        _loglar.Clear();
+        var h = new LocalSaleHandler(patlayan, orch, _store, new FakeResolver(), new FakePaymentMethods(),
+            new FakeNotifier(), _outbox, new SimulatorTransport(),
+            now: () => DateTimeOffset.FromUnixTimeMilliseconds(_saatMs),
+            log: (m, o) => _loglar.Add((m, o)));
+
+        await Assert.ThrowsAsync<InvalidOperationException>(() => h.HandleAsync(Req("svc-patlak")));
+        _loglar.Clear();
+        await h.RecoverPendingAsync();
+
+        Assert.Null(LogVeri("UÇUŞTAKİ komutlar atlandı"));
+    }
+
     // ── W61: BANKA KİMLİĞİ YALNIZ BANKA BACAĞI OLAN TİPTE ───────────────────────
 
     private static SaleToPoiRequest ReqBanka(int bkm, string serviceId = "svc-bkm") =>
