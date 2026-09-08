@@ -65,6 +65,20 @@ public class OlcenSessionProviderTests
     }
 
     [Fact]
+    public async Task Omur_OLCULEMEZSE_eksi_bir_sifir_DEGIL()
+    {
+        // ← ÇİVİ (W53): ömür YALNIZ taze alımda ve yalnız gerçek sağlayıcıdan yazılır. Sahte
+        // sağlayıcıda sayaç okunamıyor → "ölçülmedi" (-1). 0 yazmak "sunucu 0 sn dedi" olurdu ve
+        // önbellek mantığı bunu "hemen süresi dolmuş" diye okurdu.
+        OlcenSessionProvider.Sifirla();
+        var o = new OlcenSessionProvider(new SahteOturum());
+
+        await o.AcquireAsync();
+
+        Assert.Equal(-1, OlcenSessionProvider.Son!.OmurSn);
+    }
+
+    [Fact]
     public async Task HTTP_sayaci_OKUNAMAZSA_eksi_bir_sifir_DEGIL()
     {
         // ← ÇİVİ: iç uygulama sayaç vermiyorsa (testteki sahte gibi) "0 istek gitti" demek YANLIŞ

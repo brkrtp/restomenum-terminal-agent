@@ -570,6 +570,7 @@ public sealed class LocalSaleHandler
             oturumMs = oturum?.ToplamMs ?? -1,          // -1 = ölçülmedi (0 ile karıştırılmasın)
             oturumCagri = oturum?.Cagri ?? 0,
             oturumHttp = oturum?.HttpDeneme ?? -1,      // Cagri'dan büyükse içeride tekrar olmuş
+            jetonOmurSn = oturum?.OmurSn ?? -1,         // W53: sunucunun bildirdiği ömür; -1 = taze alım yok
             cihazMs,
             bildirimMs,                                  // sonuç + kapanış bildirimleri
             toplamMs = (long)(_now() - tBas).TotalMilliseconds,
