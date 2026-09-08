@@ -63,6 +63,9 @@ public static class PaymentDetailParser
                             // Ayrıştırıcı okur, `LocalSaleHandler` karar verir ve gerekirse cihaza
                             // GİTMEDEN reddeder. "Bozuk"u "yok" saymak, sözleşme ihlalini sessizce
                             // indirimsiz satışa çevirmek olurdu.
+                            //
+                            // Birim: `ItemAmount` ile AYNI (ana birim ondalık, `Exponent` ile kuruşa).
+                            // Ham değer de saklanıyor çünkü KURUŞ ALTI sapma yalnız ondan görülür.
                             if (iext.TryGetProperty("DiscountAmount", out var dEl))
                             {
                                 if (dEl.ValueKind == JsonValueKind.Number && dEl.TryGetDecimal(out var dVal))
@@ -82,6 +85,7 @@ public static class PaymentDetailParser
                             CategoryId: catId,
                             LineId: lineId,
                             DiscountAmountRaw: indirimHam,
+                            DiscountMinor: indirimHam is decimal dh ? Money.ToMinor(dh, exponent) : 0,
                             DiscountMalformed: indirimBozuk));
                     }
                 }

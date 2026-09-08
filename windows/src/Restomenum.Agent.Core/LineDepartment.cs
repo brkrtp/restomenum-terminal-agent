@@ -57,7 +57,7 @@ public static class FiscalLineBuilder
         var qty = item.Quantity;
         // İndirim de SATIR TOPLAMIDIR (sözleşme: `0 < DiscountAmount ≤ ItemAmount`, ikisi de satır).
         // Doğrulaması `LocalSaleHandler.IndirimDogrula`da yapıldı; buraya yalnız geçerli değer gelir.
-        var indirim = item.DiscountAmountRaw is decimal ham && ham > 0 ? (long)ham : 0L;
+        var indirim = item.DiscountMinor > 0 ? item.DiscountMinor : 0L;
 
         if (qty <= 1 || total <= 0)
         {

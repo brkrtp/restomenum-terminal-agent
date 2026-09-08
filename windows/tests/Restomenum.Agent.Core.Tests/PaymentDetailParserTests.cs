@@ -46,20 +46,22 @@ public class PaymentDetailParserTests
 
     // ── W63: DiscountAmount HAM okunur, burada YARGILANMAZ ──────────────────────
 
-    [Fact]
-    public void DiscountAmount_HAM_okunur()
+    [Theory]
+    [InlineData("0.99", 99)]        // ← ÇİVİ: kuruş altı DEĞİL, 99 kuruş
+    [InlineData("300", 30000)]      // ← ÇİVİ: 300 LİRA = 30000 kuruş (300 kuruş DEĞİL)
+    [InlineData("2.4", 240)]
+    public void DiscountAmount_ItemAmount_ile_AYNI_birimde(string yazi, long beklenenKurus)
     {
-        // ← ÇİVİ: ayrıştırıcının işi OKUMAK. Değeri burada kuruşa çevirmek ya da doğrulamak, aynı
-        // kuralı iki yerde (ayrıştırıcı + işleyici) tanımlamak olurdu.
-        // ⚠️ Birim asimetrisi: `ItemAmount` ANA birimde (240 → 24000 kuruş), `DiscountAmount` ise
-        // sözleşmeye göre doğrudan KURUŞ. Bu yüzden 300, 30000 değil 300 olarak kalıyor.
-        var body = TrBody.Replace("\"CategoryId\":\"e2e-cat\"", "\"CategoryId\":\"e2e-cat\",\"DiscountAmount\":300");
+        // ← ÇİVİ: aynı nesnede iki farklı para birimi OLMAZ. `DiscountAmount` da `ItemAmount` gibi
+        // ANA birimde gelir ve `Exponent` ile kuruşa çevrilir. İlk okumamda "doğrudan kuruş"
+        // sanmıştım; öyle olsaydı 300 değeri 100 KAT sapardı ve bunu hiçbir kapı yakalamazdı.
+        var body = TrBody.Replace("\"CategoryId\":\"e2e-cat\"", "\"CategoryId\":\"e2e-cat\",\"DiscountAmount\":" + yazi);
         var r = Assert.IsType<PaymentDetailResult.Ok>(PaymentDetailParser.Parse(200, body));
 
         var item = Assert.Single(r.Detail.Items);
-        Assert.Equal(300m, item.DiscountAmountRaw);
+        Assert.Equal(beklenenKurus, item.DiscountMinor);
         Assert.False(item.DiscountMalformed);
-        Assert.Equal(24000, item.ItemAmountMinor);        // ← ÇİVİ: ItemAmount hâlâ ANA birimden çevriliyor
+        Assert.Equal(24000, item.ItemAmountMinor);        // ItemAmount da aynı yoldan çevriliyor
     }
 
     [Fact]
@@ -77,14 +79,17 @@ public class PaymentDetailParserTests
     }
 
     [Fact]
-    public void DiscountAmount_ONDALIK_gelirse_HAM_tasinir_reddi_isleyici_verir()
+    public void KURUS_ALTI_deger_HAM_tasinir_reddi_isleyici_verir()
     {
-        // Ayrıştırıcı reddetmez; ondalık değeri olduğu gibi taşır ki işleyici "ondalık" diyebilsin.
-        // Kırpsaydı, reddedilmesi gereken bir gövde sessizce geçerli hâle gelirdi.
-        var body = TrBody.Replace("\"CategoryId\":\"e2e-cat\"", "\"CategoryId\":\"e2e-cat\",\"DiscountAmount\":100.5");
+        // ← ÇİVİ: ayrıştırıcı reddetmez ama HAM değeri de saklar. `Money.ToMinor(0.995, 2)` = 100
+        // (yukarı yuvarlar); yalnız kuruş alanına baksaydık sapma GÖRÜNMEZ olurdu ve müşteriden
+        // yarım kuruş fazla alınırdı. İşleyici ham ile çevrilmişi karşılaştırıp reddediyor.
+        var body = TrBody.Replace("\"CategoryId\":\"e2e-cat\"", "\"CategoryId\":\"e2e-cat\",\"DiscountAmount\":0.995");
         var r = Assert.IsType<PaymentDetailResult.Ok>(PaymentDetailParser.Parse(200, body));
 
-        Assert.Equal(100.5m, Assert.Single(r.Detail.Items).DiscountAmountRaw);
+        var item = Assert.Single(r.Detail.Items);
+        Assert.Equal(0.995m, item.DiscountAmountRaw);     // ← ÇİVİ: ham DURUYOR
+        Assert.Equal(100, item.DiscountMinor);            // çeviri yuvarladı — sapma buradan görünmez
     }
 
     [Fact]

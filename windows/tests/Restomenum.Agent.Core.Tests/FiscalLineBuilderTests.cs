@@ -17,7 +17,8 @@ public class FiscalLineBuilderTests
     private static SaleLine Indirimli(long itemAmount, int qty, long indirim) =>
         new(ItemId: 0, ProductCode: "p1", ProductLabel: "Ürün", Quantity: qty,
             ItemAmountMinor: itemAmount, TaxCode: "10", CategoryId: "c1", LineId: "l1",
-            DiscountAmountRaw: indirim);
+            // Builder KURUŞ alanını kullanır; ham değer yalnız kuruş-altı sapma denetimi için var.
+            DiscountAmountRaw: Money.ToWire(indirim, 2), DiscountMinor: indirim);
 
     // ── W63: SATIR İNDİRİMİNİN KURUŞ DAĞITIMI ───────────────────────────────────
 

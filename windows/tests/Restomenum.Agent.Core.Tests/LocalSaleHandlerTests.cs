@@ -134,21 +134,24 @@ public class LocalSaleHandlerTests : IDisposable
 
     // ── W63: SATIR İNDİRİMİ KAPISI ──────────────────────────────────────────────
 
+    /// <summary><paramref name="indirim"/> ANA birimde (ör. 3.00 = 300 kuruş) — `ItemAmount` ile aynı
+    /// eksende. Ayrıştırıcının yaptığı çeviri burada elle yapılıyor ki işleyicinin kapısı sınansın.</summary>
     private static PaymentDetail Indirimli(decimal? indirim, bool bozuk = false, long tutar = 24000) =>
         new(Pay, "1042", "TRY", 2, tutar, tutar, "TR", "ACCEPTED",
             DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() + 600_000, "fullSale",
-            new List<SaleLine> { new(0, "p1", "Adana", 2, tutar, "10", "c1", "l1", indirim, bozuk) },
+            new List<SaleLine> { new(0, "p1", "Adana", 2, tutar, "10", "c1", "l1",
+                indirim, indirim is decimal h ? Money.ToMinor(h, 2) : 0, bozuk) },
             "11-cash");
 
     [Theory]
     [InlineData(-1)]        // negatif
-    [InlineData(24001)]     // satır toplamını AŞIYOR
-    public async Task GECERSIZ_indirim_terminale_GITMEDEN_reddedilir(int indirim)
+    [InlineData(240.01)]    // 24001 kuruş — satır toplamını (24000) AŞIYOR
+    public async Task GECERSIZ_indirim_terminale_GITMEDEN_reddedilir(double indirimAna)
     {
         // ← ÇİVİ: geçersiz bir indirimi kırpmak müşteriden yanlış tutar tahsil etmek, yok saymak
         // indirimi hiç uygulamamak olurdu. İkisi de GERİ ALINAMAZ mali kayıt üretir; tek doğru
         // davranış cihaza gitmeden reddetmek.
-        var (h, sim, _) = Kur(new PaymentDetailResult.Ok(Indirimli(indirim)));
+        var (h, sim, _) = Kur(new PaymentDetailResult.Ok(Indirimli((decimal)indirimAna)));
 
         var cevap = await h.HandleAsync(Req());
 
@@ -161,11 +164,12 @@ public class LocalSaleHandlerTests : IDisposable
     }
 
     [Fact]
-    public async Task ONDALIK_indirim_reddedilir()
+    public async Task KURUS_ALTI_sapma_reddedilir()
     {
-        // ← ÇİVİ: 100,5 kuruş diye bir şey yok. Yuvarlamak müşteriden yarım kuruş fazla ya da eksik
-        // almak demek — hangi yöne yuvarlarsak biri yanlış.
-        var (h, sim, _) = Kur(new PaymentDetailResult.Ok(Indirimli(100.5m)));
+        // ← ÇİVİ: 0,995 lira = 99,5 kuruş ve `Money.ToMinor` onu 100'e yuvarlar — müşteriden yarım
+        // kuruş FAZLA alınır. Hangi yöne yuvarlarsak yuvarlayalım biri yanlış; tek doğru davranış
+        // reddetmek. (Exponent 2 → en fazla iki ondalık basamak.)
+        var (h, sim, _) = Kur(new PaymentDetailResult.Ok(Indirimli(0.995m)));
 
         var cevap = await h.HandleAsync(Req());
 
@@ -192,7 +196,7 @@ public class LocalSaleHandlerTests : IDisposable
         // ← ÇİVİ: sözleşme `0 < x ≤ ItemAmount` — eşitlik DAHİL (tam ikram). Sınırı `<` yapmak
         // ikramı imkânsız kılardı. (Cihazın 990→0'ı kabul edip etmediği W60'ta ölçülecek; bugünkü
         // kapı SÖZLEŞMEYE uyar, ölçülmemiş cihaz davranışına değil.)
-        var (h, sim, _) = Kur(new PaymentDetailResult.Ok(Indirimli(24000)));
+        var (h, sim, _) = Kur(new PaymentDetailResult.Ok(Indirimli(240m)));   // 240 TL = 24000 kuruş
 
         await h.HandleAsync(Req());
 
@@ -219,7 +223,7 @@ public class LocalSaleHandlerTests : IDisposable
     {
         // ← ÇİVİ: alan taşınmazsa `LineDiscountMinor` yine ölü kalır ve indirim hiçbir yere ulaşmaz.
         // 24000 kuruş / 2 adet, indirim 300 → birim başına 150.
-        var (h, sim, _) = Kur(new PaymentDetailResult.Ok(Indirimli(300)));
+        var (h, sim, _) = Kur(new PaymentDetailResult.Ok(Indirimli(3m)));    // 3 TL = 300 kuruş
 
         await h.HandleAsync(Req());
 
@@ -589,12 +593,97 @@ public class LocalSaleHandlerTests : IDisposable
         Assert.Equal(CommandState.UNKNOWN, _store.Read("svc-A")!.State);   // ← ÇİVİ
     }
 
+    // ── W64: 409 ÇELİŞKİSİ DE NİHAİDİR ──────────────────────────────────────────
+
+    [Fact]
+    public async Task Conflict_409_gelince_komut_bir_daha_YOKLANMAZ()
+    {
+        // ← ÇİVİ (canlı vaka 2026-09-09 02:19–02:25): başarısız bir kart denemesi
+        // (`04cfa7cdd6`) HER 60 SANİYEDE kurtarmaya girdi, cihazda `OptionFlags`+`GetTicket`
+        // yaptı ve her turda 409 `plugin.payment.conflictingResult` aldı. Yedi tur,
+        // `recovery_closed_at` NULL — durma ihtimali YOK. Her tur terminal kilidini alıyor,
+        // yani gerçek satışla yarışıyor.
+        //
+        // 409 = "platform bu denemeyi BAŞKA bir sonuçla kapattı". `Superseded`'den tek farkı ret
+        // biçimi; gönderdiğimiz cevap asla kabul edilmeyecek.
+        _store.Save("svc-A", Pay, "term-01", _clock.ServerNow() + 600_000);
+        _store.Advance("svc-A", CommandState.RECEIVED, CommandState.UNKNOWN);
+
+        var sim = new SimulatorTransport();
+        var orch = new AgentOrchestrator(_store, sim, _clock, RecoveryPolicy.Immediate);
+        var h = new LocalSaleHandler(new FakeAmounts { Result = new PaymentDetailResult.Ok(Detail()) },
+            orch, _store, new FakeResolver(), new FakePaymentMethods(),
+            new FakeNotifier
+            {
+                Result = new NotifyResult(NotifyOutcome.Conflict, null, "plugin.payment.conflictingResult", 409, ""),
+            },
+            _outbox, sim);
+
+        await h.RecoverPendingAsync();
+        var ilkTur = sim.ReadTicketCalls + sim.ProbeCalls;
+        await h.RecoverPendingAsync();
+
+        Assert.True(ilkTur > 0, "ilk tur cihaza sormalı");
+        Assert.Equal(ilkTur, sim.ReadTicketCalls + sim.ProbeCalls);   // ← ÇİVİ: ikinci tur SORMADI
+        Assert.Empty(_store.Pending());
+        Assert.Equal(CommandState.UNKNOWN, _store.Read("svc-A")!.State);   // durum DEĞİŞMEDİ
+    }
+
+    [Theory]
+    [InlineData(NotifyOutcome.NetworkError)]
+    [InlineData(NotifyOutcome.RateLimited)]
+    public async Task GECICI_hata_yoklamayi_KAPATMAZ(NotifyOutcome sonuc)
+    {
+        // ← ÇİVİ: ayrım bu testin tamamı. 5xx / ağ hatası / 429 "platform ŞU AN cevap veremedi"
+        // demek — o kaydı kapatmak, geçici bir kesinti yüzünden gerçekten bildirilmemiş bir sonucu
+        // SESSİZCE gömmek olurdu. Yalnız 409 ve `Superseded` nihaidir.
+        _store.Save("svc-A", Pay, "term-01", _clock.ServerNow() + 600_000);
+        _store.Advance("svc-A", CommandState.RECEIVED, CommandState.UNKNOWN);
+
+        var sim = new SimulatorTransport();
+        var orch = new AgentOrchestrator(_store, sim, _clock, RecoveryPolicy.Immediate);
+        var h = new LocalSaleHandler(new FakeAmounts { Result = new PaymentDetailResult.Ok(Detail()) },
+            orch, _store, new FakeResolver(), new FakePaymentMethods(),
+            new FakeNotifier { Result = new NotifyResult(sonuc, null, null, 503, "") }, _outbox, sim);
+
+        await h.RecoverPendingAsync();
+
+        Assert.NotEmpty(_store.Pending());   // ← ÇİVİ: kuyrukta KALDI, yeniden denenecek
+    }
+
+    [Fact]
+    public async Task Yoklama_kapanisinda_SEBEP_loglanir()
+    {
+        // ← ÇİVİ: `Superseded` (bayat/sırasız) ile `Conflict` (409 çelişki) FARKLI sorunlara
+        // işaret ediyor. Tek satırda ayırt edilemezse, gece yarısı bir sahada "neden kapandı"
+        // sorusunun cevabı yok.
+        _store.Save("svc-A", Pay, "term-01", _clock.ServerNow() + 600_000);
+        _store.Advance("svc-A", CommandState.RECEIVED, CommandState.UNKNOWN);
+
+        var sim = new SimulatorTransport();
+        var orch = new AgentOrchestrator(_store, sim, _clock, RecoveryPolicy.Immediate);
+        _loglar.Clear();
+        var h = new LocalSaleHandler(new FakeAmounts { Result = new PaymentDetailResult.Ok(Detail()) },
+            orch, _store, new FakeResolver(), new FakePaymentMethods(),
+            new FakeNotifier
+            {
+                Result = new NotifyResult(NotifyOutcome.Conflict, null, "plugin.payment.conflictingResult", 409, ""),
+            },
+            _outbox, sim, log: (m, o) => _loglar.Add((m, o)));
+
+        await h.RecoverPendingAsync();
+
+        var veri = LogVeri("yoklama KAPATILDI");
+        Assert.NotNull(veri);
+        Assert.Equal("Conflict", Alan<string>(veri, "nihaiSebep"));
+    }
+
     [Fact]
     public async Task Recorded_gelirse_yoklama_KAPANMAZ()
     {
-        // ← ÇİVİ: kapatma YALNIZ `Superseded`'a özgü. Normal bir bildirim kabul edildiğinde
-        // komut hâlâ çözülmemişse yoklanmaya devam etmeli, yoksa gerçek bir belirsizliği
-        // sessizce terk ederdik.
+        // ← ÇİVİ: kapatma YALNIZ platformun NİHAİ dediği hâllere özgü (`Superseded` + W64'ten
+        // sonra `Conflict`). Normal bir bildirim kabul edildiğinde komut hâlâ çözülmemişse
+        // yoklanmaya devam etmeli, yoksa gerçek bir belirsizliği sessizce terk ederdik.
         _store.Save("svc-A", Pay, "term-01", _clock.ServerNow() + 600_000);
         _store.Advance("svc-A", CommandState.RECEIVED, CommandState.UNKNOWN);
 

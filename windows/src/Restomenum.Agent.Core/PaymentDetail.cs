@@ -64,12 +64,21 @@ public sealed record SaleLine(
     /// ayrıştırıcı üçünü ayırt edilebilir bırakır, kararı <see cref="LocalSaleHandler"/> verir ve
     /// gerekirse cihaza GİTMEDEN reddeder.</para>
     ///
-    /// <para>⚠️ <b>Birim asimetrisi:</b> <c>ItemAmount</c> ANA birimde gelir (9.90) ve
-    /// <c>Money.ToMinor</c> ile kuruşa çevrilir; sözleşmeye göre <c>DiscountAmount</c> ise doğrudan
-    /// <b>KURUŞ tam sayısı</b>. Aynı nesnede iki farklı birim var; bu yüzden burada çevrilmiyor ve
-    /// tam sayı olması ayrıca doğrulanıyor.</para>
+    /// <para><b>Birim:</b> <c>ItemAmount</c> ile <b>AYNI</b> — ana birim ondalık (<c>0.99</c>),
+    /// <c>RestomenumExt.Exponent</c> ile kuruşa çevrilir. Aynı nesnede iki farklı birim OLMAZ.
+    /// (İlk sözleşme okumamda "doğrudan kuruş" sanmıştım; c5 düzeltti. Ham değer burada
+    /// saklanıyor çünkü <b>kuruş altı sapma</b> yalnız ondan görülebilir: <c>0.995</c> çevrildiğinde
+    /// 99,5 kuruş eder ve yuvarlamak müşteriden yarım kuruş fazla/eksik almak demektir.)</para>
     /// </summary>
     decimal? DiscountAmountRaw = null,
+
+    /// <summary>
+    /// <see cref="DiscountAmountRaw"/>'ın kuruş karşılığı — <c>ItemAmountMinor</c> ile aynı yoldan
+    /// (<c>Money.ToMinor</c>). <b>SATIR TOPLAMI</b> indirimidir, birim değil.
+    /// Alan yoksa <c>0</c>. Doğrulama <see cref="LocalSaleHandler"/>'da; buradaki değer ham değerin
+    /// birebir çevirisidir, kırpılmış hâli değil.
+    /// </summary>
+    long DiscountMinor = 0,
 
     /// <summary><c>DiscountAmount</c> alanı VAR ama sayı DEĞİL (string, null, nesne…). "Alan yok"tan
     /// ayrı tutuluyor: yokluk indirimsiz satıştır, bozukluk ise reddedilmesi gereken bir sözleşme

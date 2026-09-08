@@ -202,13 +202,32 @@ public sealed class LocalSaleHandler : IDeviceIdleGate
             //
             // Komutun DURUMU değişmiyor (`UNKNOWN` yerel gerçek olarak kalıyor); yalnız yoklama
             // kapanıyor. Aynı ServiceID tekrar gelirse tekilleme deposu onu yine bulur.
-            if (bildirim?.Outcome == NotifyOutcome.Superseded)
+            //
+            // ── W64: 409 ÇELİŞKİSİ DE NİHAİDİR ───────────────────────────────────────
+            // `Conflict` (409 `conflictingResult` vb.) "platform bu denemeyi BAŞKA bir sonuçla
+            // kapattı" demek. `Superseded`'den tek farkı ret biçimi; sonucu aynı: gönderdiğimiz
+            // cevap ASLA kabul edilmeyecek. Bugünkü hâlinde `RetryLater` kalıyor ve kayıt SONSUZA
+            // KADAR yoklanıyor.
+            //
+            // Sahada ölçüldü (2026-09-09 02:19–02:25): `04cfa7cdd6` her 60 saniyede bir kurtarmaya
+            // girdi, cihazda `OptionFlags`+`GetTicket` yaptı ve her turda 409
+            // `plugin.payment.conflictingResult` aldı — yedi tur, `recovery_closed_at` NULL, durma
+            // ihtimali YOK. Her tur terminal kilidini alıyor, yani gerçek satışla yarışıyor.
+            //
+            // ⚠️ YALNIZ 409. 5xx ve ağ hatası "platform şu an cevap veremedi" demek; onları
+            // kapatmak, geçici bir kesintide gerçekten bildirilmemiş bir sonucu sessizce gömmek
+            // olurdu. Ayrım bu satırın tamamı.
+            var nihai = bildirim?.Outcome is NotifyOutcome.Superseded or NotifyOutcome.Conflict;
+            if (nihai)
             {
                 _store.CloseRecovery(k.CommandId);
                 _log("[yerel] yoklama KAPATILDI — platform denemeyi nihai saydı", new
                 {
-                    k.CommandId, k.PaymentId, state = bildirim.State ?? "(yok)",
+                    k.CommandId, k.PaymentId, state = bildirim!.State ?? "(yok)",
                     reason = bildirim.Reason ?? "(yok)",
+                    // HANGİ nihailik: `Superseded` (bayat/sırasız) mı, `Conflict` (409) mü?
+                    // İkisi farklı sorunlara işaret ediyor ve tek satırda ayırt edilebilmeli.
+                    nihaiSebep = bildirim.Outcome.ToString(),
                 });
             }
         }
@@ -557,7 +576,7 @@ public sealed class LocalSaleHandler : IDeviceIdleGate
             // (ikisi de SATIR TOPLAMI). Geçersiz bir indirim sessizce kırpılamaz ya da yok
             // sayılamaz: kırpmak müşteriden yanlış tutar tahsil etmek, yok saymak indirimi
             // uygulamamak olurdu — ikisi de geri alınamaz mali kayıt üretir.
-            var indirimHatasi = IndirimDogrula(item);
+            var indirimHatasi = IndirimDogrula(item, d.Exponent);
             if (indirimHatasi is not null)
             {
                 var reddi = SaleToPoiResponseBuilder.BuildFailure(req, "PaymentRestriction",
@@ -694,19 +713,23 @@ public sealed class LocalSaleHandler : IDeviceIdleGate
     /// değer yüzünden satışı düşürüp kasayı manuel ödemeye indirmek olurdu (kullanıcının değişmez
     /// şartı). Negatif, ondalık ya da tutarı aşan değerler ise gerçekten reddedilir.</para>
     /// </summary>
-    private static string? IndirimDogrula(SaleLine item)
+    private static string? IndirimDogrula(SaleLine item, int exponent)
     {
         // "Alan var ama sayı değil" ≠ "alan yok". İlki sözleşme ihlali, ikincisi indirimsiz satış.
         if (item.DiscountMalformed) return "sayı değil";
         if (item.DiscountAmountRaw is not decimal ham) return null;   // alan yok → indirim yok
 
         if (ham < 0) return $"negatif ({ham})";
-        // Kuruş tam sayısı: 100.5 kuruş diye bir şey yok. Yuvarlamak, müşteriden yarım kuruş fazla
-        // ya da eksik almak demek — hangi yöne yuvarlarsak yuvarlayalım biri yanlış.
-        if (decimal.Truncate(ham) != ham) return $"ondalık ({ham}) — kuruş tam sayısı bekleniyor";
-        var indirim = (long)ham;
-        if (indirim > item.ItemAmountMinor)
-            return $"satır toplamını aşıyor (indirim {indirim} > tutar {item.ItemAmountMinor})";
+
+        // KURUŞ ALTI SAPMA. Değer ana birimde geliyor (`ItemAmount` gibi); `Exponent` ile kuruşa
+        // çevrildiğinde TAM olmalı. `0.995` → 99,5 kuruş eder ve `Money.ToMinor` onu 100'e
+        // yuvarlar — yani müşteriden yarım kuruş fazla alınır. Hangi yöne yuvarlarsak yuvarlayalım
+        // biri yanlış; tek doğru davranış reddetmek.
+        if (Money.ToWire(item.DiscountMinor, exponent) != ham)
+            return $"kuruş altı sapma ({ham}) — {exponent} ondalık basamak bekleniyor";
+
+        if (item.DiscountMinor > item.ItemAmountMinor)
+            return $"satır toplamını aşıyor (indirim {item.DiscountMinor} > tutar {item.ItemAmountMinor})";
         return null;
     }
 
