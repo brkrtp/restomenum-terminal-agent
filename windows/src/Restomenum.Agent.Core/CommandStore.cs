@@ -171,6 +171,16 @@ public sealed class CommandStore : ITicketSnapshotStore, IDisposable
                 cmd.ExecuteNonQuery();
             }
 
+            // YOKLAMA KAPANDI damgası (W34). Platform bir denemeyi nihai saydıysa (Superseded)
+            // cihaza sormaya devam etmenin faydası yok: sonuç ne çıkarsa çıksın kabul edilmiyor.
+            // Komutun DURUMU değişmez — `UNKNOWN` yerel gerçeğin ta kendisi ve doğru kalmalı;
+            // değişen şey yalnız "bir daha sorma". İkisi ayrı olgu, ayrı sütun.
+            if (!kolonlar.Contains("recovery_closed_at"))
+            {
+                cmd.CommandText = "ALTER TABLE commands ADD COLUMN recovery_closed_at INTEGER";
+                cmd.ExecuteNonQuery();
+            }
+
             // Anlik goruntuye satis oturumu: yoklamanin SAHIPLIK kaniti. Eski satirlarda NULL
             // kalir ve NULL "kanit yok" demektir - o kayitlarda Landed uretilemez (guvenli taraf).
             var snapKolon = new List<string>();
@@ -322,6 +332,7 @@ public sealed class CommandStore : ITicketSnapshotStore, IDisposable
             cmd.CommandText = """
                 SELECT * FROM commands
                  WHERE kind = 'sale'
+                   AND recovery_closed_at IS NULL
                    AND ( state IN ('RECEIVED','SENT_TO_TERMINAL')
                       OR (state = 'UNKNOWN' AND updated_at >= $esik) )
                  ORDER BY received_at ASC LIMIT $n
@@ -445,6 +456,30 @@ public sealed class CommandStore : ITicketSnapshotStore, IDisposable
             using var cmd = _conn.CreateCommand();
             cmd.CommandText = "SELECT terminal_id FROM open_ticket ORDER BY updated_at DESC LIMIT 1";
             return cmd.ExecuteScalar() as string;
+        }
+    }
+
+    /// <summary>
+    /// Bu komut için YOKLAMAYI kalıcı olarak kapatır (W34) — platform denemeyi nihai saydı.
+    ///
+    /// <para><b>Durum DEĞİŞMEZ.</b> Komut <c>UNKNOWN</c> kalır çünkü yerel gerçek budur: cihazda
+    /// ne olduğunu hâlâ bilmiyoruz. Kapanan şey yalnız "cihaza tekrar sor" davranışı. İkisini tek
+    /// alana bindirmek, bilmediğimiz bir şeyi biliyormuş gibi kaydetmek olurdu.</para>
+    ///
+    /// <para><b>Neden gerekli (ölçüldü 2026-09-08):</b> 7 çözülmemiş komut gece boyunca
+    /// <b>148 kez</b> yoklandı; hepsi <c>Superseded</c> döndü (134 <c>stale</c>, 14
+    /// <c>illegalTransition</c>), yani 148 turun tamamı boşa gitti. Her tur cihaza gidiyor ve
+    /// terminal kilidini alıyor — gece zararsız, servis saatinde gerçek satışı geciktirir.</para>
+    /// </summary>
+    public void CloseRecovery(string commandId, long? now = null)
+    {
+        lock (_gate)
+        {
+            using var cmd = _conn.CreateCommand();
+            cmd.CommandText = "UPDATE commands SET recovery_closed_at = $now WHERE command_id = $cid";
+            cmd.Parameters.AddWithValue("$cid", commandId);
+            cmd.Parameters.AddWithValue("$now", now ?? DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+            cmd.ExecuteNonQuery();
         }
     }
 

@@ -140,6 +140,77 @@ public class LocalSaleHandlerTests : IDisposable
         Assert.Equal(1, sim.ReadTicketCalls + sim.ProbeCalls);
     }
 
+    // ── W34: PLATFORM NİHAİ DEDİYSE YOKLAMA KAPANIR ─────────────────────────────
+
+    [Fact]
+    public async Task Superseded_gelince_komut_bir_daha_YOKLANMAZ()
+    {
+        // ← ÇİVİ (ölçüm 2026-09-08): 7 çözülmemiş komut gece boyunca 148 kez yoklandı ve
+        // 148'i de `Superseded` döndü — sıfır fayda, her tur cihaza gidip terminal kilidini
+        // aldı. `Superseded` = "sonuç bende kesinleşti, cevabını almıyorum"; sormaya devam
+        // etmenin bir sonucu olamaz.
+        _store.Save("svc-A", Pay, "term-01", _clock.ServerNow() + 600_000);
+        _store.Advance("svc-A", CommandState.RECEIVED, CommandState.UNKNOWN);
+
+        var sim = new SimulatorTransport();
+        var orch = new AgentOrchestrator(_store, sim, _clock, RecoveryPolicy.Immediate);
+        var notifier = new FakeNotifier
+        {
+            Result = new NotifyResult(NotifyOutcome.Superseded, "REVERSED", "stale", 200, ""),
+        };
+        var h = new LocalSaleHandler(new FakeAmounts { Result = new PaymentDetailResult.Ok(Detail()) },
+            orch, _store, new FakeResolver(), new FakePaymentMethods(), notifier, _outbox, sim);
+
+        await h.RecoverPendingAsync();
+        var ilkTur = sim.ReadTicketCalls + sim.ProbeCalls;
+        await h.RecoverPendingAsync();
+
+        Assert.True(ilkTur > 0, "ilk tur cihaza sormalı");
+        Assert.Equal(ilkTur, sim.ReadTicketCalls + sim.ProbeCalls);   // ← ÇİVİ: ikinci tur SORMADI
+        Assert.Empty(_store.Pending());                                // kuyruktan çıktı
+    }
+
+    [Fact]
+    public async Task Yoklama_kapansa_bile_komutun_DURUMU_UNKNOWN_kalir()
+    {
+        // ← ÇİVİ: "bir daha sorma" ile "ne olduğunu biliyorum" ayrı olgular. Durumu değiştirmek,
+        // bilmediğimiz bir şeyi biliyormuş gibi deftere yazmak olurdu.
+        _store.Save("svc-A", Pay, "term-01", _clock.ServerNow() + 600_000);
+        _store.Advance("svc-A", CommandState.RECEIVED, CommandState.UNKNOWN);
+
+        var sim = new SimulatorTransport();
+        var orch = new AgentOrchestrator(_store, sim, _clock, RecoveryPolicy.Immediate);
+        var h = new LocalSaleHandler(new FakeAmounts { Result = new PaymentDetailResult.Ok(Detail()) },
+            orch, _store, new FakeResolver(), new FakePaymentMethods(),
+            new FakeNotifier { Result = new NotifyResult(NotifyOutcome.Superseded, "REVERSED", "stale", 200, "") },
+            _outbox, sim);
+
+        await h.RecoverPendingAsync();
+
+        Assert.Equal(CommandState.UNKNOWN, _store.Read("svc-A")!.State);   // ← ÇİVİ
+    }
+
+    [Fact]
+    public async Task Recorded_gelirse_yoklama_KAPANMAZ()
+    {
+        // ← ÇİVİ: kapatma YALNIZ `Superseded`'a özgü. Normal bir bildirim kabul edildiğinde
+        // komut hâlâ çözülmemişse yoklanmaya devam etmeli, yoksa gerçek bir belirsizliği
+        // sessizce terk ederdik.
+        _store.Save("svc-A", Pay, "term-01", _clock.ServerNow() + 600_000);
+        _store.Advance("svc-A", CommandState.RECEIVED, CommandState.UNKNOWN);
+
+        var sim = new SimulatorTransport();
+        var orch = new AgentOrchestrator(_store, sim, _clock, RecoveryPolicy.Immediate);
+        var h = new LocalSaleHandler(new FakeAmounts { Result = new PaymentDetailResult.Ok(Detail()) },
+            orch, _store, new FakeResolver(), new FakePaymentMethods(),
+            new FakeNotifier { Result = new NotifyResult(NotifyOutcome.Recorded, "UNKNOWN", null, 200, "") },
+            _outbox, sim);
+
+        await h.RecoverPendingAsync();
+
+        Assert.NotEmpty(_store.Pending());   // ← ÇİVİ: kuyrukta KALDI
+    }
+
     // ── W30: `info` KASAYA VE DEFTERE ULAŞMALI ──────────────────────────────────
 
     [Fact]

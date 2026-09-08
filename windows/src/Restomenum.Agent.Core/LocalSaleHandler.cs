@@ -143,8 +143,26 @@ public sealed class LocalSaleHandler
             // Kasaya DÖNMÜYORUZ (çağrı bitti); yalnız platforma bildir. Exponent 2 (terminal sürüşü TR).
             var geri = new SaleToPoiRequest(k.CommandId, "", k.TerminalId, k.PaymentId, "", _now());
             var body = SaleToPoiResponseBuilder.BuildResult(geri, ToTransportResult(outcome), 2, _now());
-            await NotifyAsync(k.PaymentId, body, ct);
+            var bildirim = await NotifyAsync(k.PaymentId, body, ct);
             _log("[yerel] yarım komut çözüldü", new { k.CommandId, decision = outcome.Decision.ToString() });
+
+            // ── W34: PLATFORM NİHAİ DEDİYSE YOKLAMAYI KAPAT ──────────────────────────
+            // `Superseded` = "bu denemenin sonucu bende kesinleşti, gönderdiğin cevabı almıyorum".
+            // Sormaya devam etmek her turda cihaza gidip terminal kilidini almak demek ve sonucu
+            // hiçbir zaman kabul edilmeyecek. Ölçüldü (2026-09-08): 7 komut gece boyunca 148 kez
+            // yoklandı, 148'i de Superseded döndü — tam olarak sıfır fayda.
+            //
+            // Komutun DURUMU değişmiyor (`UNKNOWN` yerel gerçek olarak kalıyor); yalnız yoklama
+            // kapanıyor. Aynı ServiceID tekrar gelirse tekilleme deposu onu yine bulur.
+            if (bildirim?.Outcome == NotifyOutcome.Superseded)
+            {
+                _store.CloseRecovery(k.CommandId);
+                _log("[yerel] yoklama KAPATILDI — platform denemeyi nihai saydı", new
+                {
+                    k.CommandId, k.PaymentId, state = bildirim.State ?? "(yok)",
+                    reason = bildirim.Reason ?? "(yok)",
+                });
+            }
         }
     }
 
@@ -621,13 +639,14 @@ public sealed class LocalSaleHandler
     }
 
     /// <summary>Sonucu platforma bildir — dayanıklı ÖNCE (outbox), sonra POST. Ağ/429 → outbox'ta kalır, replay.</summary>
-    private async Task NotifyAsync(string paymentId, string body, CancellationToken ct)
+    private async Task<NotifyResult?> NotifyAsync(string paymentId, string body, CancellationToken ct)
     {
         var eid = paymentId + ":result";
         _outbox.Enqueue(eid, paymentId, OutboxKinds.Result, body, "");   // dayanıklı yazım ÖNCE (INSERT OR IGNORE)
         try
         {
-            var res = await _notifier.NotifyAsync(paymentId, body, ct);
+            NotifyResult res;
+            res = await _notifier.NotifyAsync(paymentId, body, ct);
             if (res.IsFinal) _outbox.Confirm(eid);
             else _outbox.MarkAttempt(eid);   // NetworkError/RateLimited → kalsın, arka plan replay eder
             if (res.IsProblem)
@@ -644,10 +663,12 @@ public sealed class LocalSaleHandler
                     // "yazıldı" ile "zaten yazılıydı" ayrımı: replay fırtınası ancak böyle görülür.
                     replayed = res.Replayed?.ToString() ?? "(yok)",
                 });
+            return res;
         }
         catch (Exception e) when (e is not OperationCanceledException)
         {
             _log("[yerel] bildirim gönderilemedi — outbox'ta kaldı (replay)", new { paymentId, error = e.Message });
+            return null;
         }
     }
 
