@@ -349,14 +349,40 @@ public sealed class LocalSaleHandler
         _outbox.Enqueue(eid, req.PaymentId ?? "", OutboxKinds.TicketCancel, govde, "");
         try
         {
+            // ── W46: BİLDİRİMİN AKIBETİ HER DURUMDA YAZILIR ───────────────────────
+            // Burada iki kör nokta vardı ve ikisi de sahada ısırdı (2026-09-08 19:13):
+            //   • BAŞARI hiç loglanmıyordu → "iptal ne zaman gitti" sorusu cevapsız kaldı;
+            //     kayıt `Confirm` ile silindiği için geriye dönüp bakılacak bir iz de yok.
+            //   • AĞ HATASI da loglanmıyordu (`IsProblem` false, `IsFinal` false) → bildirim
+            //     gitmemiş olmasına rağmen günlük SESSİZ. Sessizlik "gitti" ile "hiç denenmedi"yi
+            //     ayırt edilemez yapıyordu — [[veri-yok-veri-degisti-ayrimi]] ile aynı hata.
+            // Süre de yazılıyor: gecikmenin cihazda mı, bildirimde mi, panelde mi olduğunu
+            // ancak bu sayı ayırır.
+            var t0 = _now();
             var bildirim = await _notifier.NotifyTicketCancelAsync(govde, ct);
+            var sureMs = (long)(_now() - t0).TotalMilliseconds;
             if (bildirim.IsFinal) _outbox.Confirm(eid);
             else _outbox.MarkAttempt(eid);
             if (bildirim.IsProblem)
                 _log("[iptal] fiş iptali bildirimi SORUNU (alarm)", new
                 {
                     req.PaymentId, outcome = bildirim.Outcome.ToString(),
-                    bildirim.StatusCode, bildirim.Message,
+                    bildirim.StatusCode, bildirim.Message, sureMs,
+                });
+            else if (!bildirim.IsFinal)
+                _log("[iptal] fiş iptali bildirimi GİTMEDİ — outbox'ta kaldı (replay)", new
+                {
+                    req.PaymentId, ticketCancelId = req.TicketCancelId ?? "(yok)",
+                    outcome = bildirim.Outcome.ToString(), bildirim.StatusCode, sureMs,
+                });
+            else
+                _log("[iptal] fiş iptali bildirimi yazıldı", new
+                {
+                    req.PaymentId, ticketCancelId = req.TicketCancelId ?? "(yok)",
+                    outcome = bildirim.Outcome.ToString(), bildirim.StatusCode,
+                    state = bildirim.State ?? "(yok)",
+                    replayed = bildirim.Replayed?.ToString() ?? "(yok)",
+                    sureMs,
                 });
         }
         catch (Exception e) when (e is not OperationCanceledException)
@@ -547,14 +573,26 @@ public sealed class LocalSaleHandler
         });
         try
         {
+            var t0 = _now();
             var bildirim = await _notifier.NotifyTicketClosedAsync(govde, ct);
+            var sureMs = (long)(_now() - t0).TotalMilliseconds;
             if (bildirim.IsFinal) _outbox.Confirm(eid);
             else _outbox.MarkAttempt(eid);
             if (bildirim.IsProblem)
                 _log("[yerel] fiş kapandı bildirimi SORUNU (alarm)", new
                 {
                     req.PaymentId, fisId, outcome = bildirim.Outcome.ToString(),
-                    bildirim.StatusCode, bildirim.Message,
+                    bildirim.StatusCode, bildirim.Message, sureMs,
+                });
+            // W46: AĞ HATASI "yazıldı" diye loglanıyordu. `IsProblem` false + `IsFinal` false
+            // birlikte "gitmedi, kuyrukta kaldı" demek; alt daldaki başarı metnine düşüyordu.
+            // Alanlar doğruyu söylüyordu (outcome=NetworkError, statusCode=0) ama BAŞLIK yanlıştı
+            // ve günlüğü tarayan önce başlığı okur.
+            else if (!bildirim.IsFinal)
+                _log("[yerel] fiş kapandı bildirimi GİTMEDİ — outbox'ta kaldı (replay)", new
+                {
+                    req.PaymentId, fisId, outcome = bildirim.Outcome.ToString(),
+                    bildirim.StatusCode, sureMs,
                 });
             else
                 // BAŞARIYI DA YAZ. Bu yol W22'de atlanmıştı ve bedeli ölçüldü (2026-09-07 23:51):
@@ -567,6 +605,7 @@ public sealed class LocalSaleHandler
                     bildirim.StatusCode, state = bildirim.State ?? "(yok)",
                     replayed = bildirim.Replayed?.ToString() ?? "(yok)",
                     zatenYazilan = bildirim.AlreadyPosted?.ToString() ?? "(yok)",
+                    sureMs,
                 });
         }
         catch (Exception e) when (e is not OperationCanceledException)

@@ -508,22 +508,99 @@ public class ReversalTests : IDisposable
             Task.FromResult(new NotifyResult(NotifyOutcome.Recorded, "OK", null, 200, ""));
         /// <summary>İptal bildiriminin sonucu — testte ağ hatasına çevrilebilir.</summary>
         public NotifyResult TicketCancelResult = new(NotifyOutcome.Recorded, "OK", null, 200, "");
+        /// <summary>Çağrı SIRASINDA çalışır — testte sahte saati ilerletmek için (W46 süre ölçümü).</summary>
+        public Action? IptalSirasinda;
         public Task<NotifyResult> NotifyTicketCancelAsync(string body, CancellationToken ct = default)
-        { TicketCancelBodies.Add(body); return Task.FromResult(TicketCancelResult); }
+        { TicketCancelBodies.Add(body); IptalSirasinda?.Invoke(); return Task.FromResult(TicketCancelResult); }
         public List<string> TicketClosedBodies { get; } = new();
         public Task<NotifyResult> NotifyTicketClosedAsync(string body, CancellationToken ct = default)
         { TicketClosedBodies.Add(body); return Task.FromResult(new NotifyResult(NotifyOutcome.Recorded, "OK", null, 200, "")); }
     }
 
+    // ── W46: BİLDİRİMİN AKIBETİ HER DURUMDA GÜNLÜĞE YAZILIYOR ───────────────────
+
+    [Fact]
+    public async Task Iptal_bildirimi_BASARIDA_da_loglanir()
+    {
+        // ← ÇİVİ: 2026-09-08 19:13'te iptal başarıyla gitti ama günlükte tek satır yoktu; kayıt
+        // `Confirm` ile silindiği için "ne zaman gitti" sorusu KALICI olarak cevapsız kaldı.
+        var (h, sim) = Kur();
+        _store.Save("svc-orig", Pay, "term-01", _clock.ServerNow() + 60_000);
+        sim.WithTicket(new TicketState(HasOpenTicket: true, TotalAmountMinor: 990, PaidAmountMinor: 0));
+        var req = ((ReversalParseResult.Ok)ReversalRequestParser.Parse(
+            Zarf(scope: "ticket", oturum: "oturum-A"))).Request;
+
+        await h.HandleReversalAsync(req);
+
+        Assert.Contains(_loglar, l => l.Mesaj.Contains("fiş iptali bildirimi yazıldı"));
+        Assert.Equal("Recorded", LogAlani("bildirimi yazıldı", "outcome"));
+        Assert.Equal(200, LogAlani("bildirimi yazıldı", "StatusCode"));
+        Assert.Equal("OK", LogAlani("bildirimi yazıldı", "state"));
+    }
+
+    [Fact]
+    public async Task Iptal_bildiriminin_SURESI_gercekten_olculuyor()
+    {
+        // ← ÇİVİ: sabit 0 yazmak da "süre var" görüntüsü verirdi. Saat çağrı SIRASINDA ilerliyor;
+        // ölçüm gerçekten çağrıyı sarmalamıyorsa bu test kırılır.
+        var (h, sim) = Kur();
+        _store.Save("svc-orig", Pay, "term-01", _clock.ServerNow() + 60_000);
+        sim.WithTicket(new TicketState(HasOpenTicket: true, TotalAmountMinor: 990, PaidAmountMinor: 0));
+        _notifier.IptalSirasinda = () => _saatMs += 1_234;
+        var req = ((ReversalParseResult.Ok)ReversalRequestParser.Parse(
+            Zarf(scope: "ticket", oturum: "oturum-A"))).Request;
+
+        await h.HandleReversalAsync(req);
+
+        Assert.Equal(1_234L, LogAlani("bildirimi yazıldı", "sureMs"));
+    }
+
+    [Fact]
+    public async Task Iptal_bildirimi_AG_HATASINDA_da_loglanir_ve_SESSIZ_kalmaz()
+    {
+        // ← ÇİVİ: `IsProblem` false + `IsFinal` false birlikte "gitmedi, kuyrukta kaldı" demek ve
+        // bu dal HİÇ log yazmıyordu. Cihazda iptal gerçekleşmiş, bildirim gitmemiş, günlük sessiz —
+        // "gitti" ile "hiç denenmedi" ayırt edilemez oluyordu.
+        var (h, sim) = Kur();
+        _store.Save("svc-orig", Pay, "term-01", _clock.ServerNow() + 60_000);
+        sim.WithTicket(new TicketState(HasOpenTicket: true, TotalAmountMinor: 990, PaidAmountMinor: 0));
+        _notifier.TicketCancelResult = new NotifyResult(NotifyOutcome.NetworkError, null, null, 0, "ağ yok");
+        var req = ((ReversalParseResult.Ok)ReversalRequestParser.Parse(
+            Zarf(scope: "ticket", oturum: "oturum-A"))).Request;
+
+        await h.HandleReversalAsync(req);
+
+        Assert.Contains(_loglar, l => l.Mesaj.Contains("fiş iptali bildirimi GİTMEDİ"));
+        // ...ve BAŞARI metnine DÜŞMEMELİ: başlık yanlışsa günlüğü tarayan yanlış okur.
+        Assert.DoesNotContain(_loglar, l => l.Mesaj.Contains("fiş iptali bildirimi yazıldı"));
+        Assert.Equal("NetworkError", LogAlani("bildirimi GİTMEDİ", "outcome"));
+    }
+
     private FakeNotifier _notifier = new();
+
+    /// <summary>Sahte duvar saati (unix ms) — W46 süre ölçümü testlerde bununla sürülüyor.</summary>
+    private long _saatMs = 1_700_000_000_000;
+
+    /// <summary>Yakalanan log çağrıları (mesaj, veri) — W46 çivileri buradan okuyor.</summary>
+    private readonly List<(string Mesaj, object? Veri)> _loglar = new();
+
+    /// <summary>Yakalanan logdan bir alanı oku (anonim tip → yansıma).</summary>
+    private object? LogAlani(string mesajParcasi, string alan)
+    {
+        var kayit = _loglar.LastOrDefault(l => l.Mesaj.Contains(mesajParcasi));
+        return kayit.Veri?.GetType().GetProperty(alan)?.GetValue(kayit.Veri);
+    }
 
     private (LocalSaleHandler, SimulatorTransport) Kur()
     {
         var sim = new SimulatorTransport();
         var orch = new AgentOrchestrator(_store, sim, _clock, RecoveryPolicy.Immediate);
         _notifier = new FakeNotifier();
+        _loglar.Clear();
         var h = new LocalSaleHandler(new FakeAmounts(), orch, _store, new FakeResolver(),
-            new FakePaymentMethods(), _notifier, _outbox, sim);
+            new FakePaymentMethods(), _notifier, _outbox, sim,
+            now: () => DateTimeOffset.FromUnixTimeMilliseconds(_saatMs),
+            log: (m, o) => _loglar.Add((m, o)));
         return (h, sim);
     }
 
