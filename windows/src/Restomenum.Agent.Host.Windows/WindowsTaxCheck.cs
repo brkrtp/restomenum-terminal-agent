@@ -27,8 +27,36 @@ public static class WindowsTaxCheck
     private sealed record Kalem(string? ProductCode, string? CategoryId, string? TaxCode, string? Label);
 
     public static bool Run(IServiceProvider services, string dosya)
+        => RunAsync(services, dosya).GetAwaiter().GetResult();
+
+    public static async Task<bool> RunAsync(IServiceProvider services, string dosya)
     {
         var log = services.GetRequiredService<ILoggerFactory>().CreateLogger("TaxCheck");
+
+        // ── ÖNCE TAZELE ─────────────────────────────────────────────────────────────
+        // Prova "düzeltmem işe yaradı mı" sorusunu cevaplamak için var. Diskteki eşlemeyle
+        // koşarsa tam da o soruya GÜVENLE YANLIŞ cevap verir: operatör kategoriyi eşler,
+        // provayı koşar, "hâlâ eşlemesiz" görür ve düzeltmesinin işe yaramadığını sanır.
+        // Sahada oldu (2026-09-08 13:27): dosya 13:23'ten kalma sürüm 51'di, kullanıcı
+        // eşlemeyi ondan sonra yapmıştı.
+        //
+        // Satış yolundaki W29 ile aynı sözleşme: koşullu GET, sert zaman aşımı, hata
+        // yutulur ve diskteki sürümle DEVAM edilir — ama o zaman da SÖYLENİR.
+        var store = services.GetRequiredService<IDeviceMappingStore>();
+        var oncekiSurum = store.CurrentVersion;
+        try
+        {
+            var refresher = new Restomenum.Agent.Host.HttpMappingRefresher(
+                services.GetRequiredService<DeviceConfigClient>(), store,
+                services.GetRequiredService<ILoggerFactory>().CreateLogger("TaxCheck"),
+                TimeSpan.FromSeconds(10));
+            await refresher.EnsureFreshAsync();
+        }
+        catch (Exception e) { log.LogWarning("eşleme tazelenemedi: {Hata}", e.Message); }
+
+        log.LogInformation("eşleme sürümü: {Onceki} → {Simdi}",
+            oncekiSurum?.ToString() ?? "(yok)", store.CurrentVersion?.ToString() ?? "(yok)");
+
         var resolver = services.GetRequiredService<ILineDepartmentResolver>();
 
         List<Kalem>? kalemler;

@@ -93,7 +93,7 @@ if (retractKomut is not null)
 // reddetti" olamasın diye kural ikinci kez yazılmadı.
 if (taxDosya is not null)
 {
-    Environment.ExitCode = WindowsTaxCheck.Run(host.Services, taxDosya) ? 0 : 1;
+    Environment.ExitCode = await WindowsTaxCheck.RunAsync(host.Services, taxDosya) ? 0 : 1;
     return;
 }
 
