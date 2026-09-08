@@ -37,6 +37,27 @@
   </ItemGroup>
 
   <ItemGroup>
+    <!--
+      W42b PROVA KODU — DERLEMEYE GİRMEZ (2026-09-08 kararı).
+
+      `probe-multi` çalıştırıldığında süreç `Json_prepare_ItemSale` çağrısında
+      0xC0000374 STATUS_HEAP_CORRUPTION ile öldü ve kök neden BULUNAMADI (1.400+ çağrılık
+      izolasyon turu, üç hipotez, hiçbiri doğrulanmadı — bkz. 7621a66).
+
+      Dosyalar depoda KALIYOR: ölçümler (kalem ~73 B, önek 108 B, 335 kalem) ve izolasyon
+      düzeneği bir gün W42b açılırsa değerli. Ama ÖDEME SÜRÜŞÜ YAPAN ikiliye girmiyorlar:
+      sebebi bilinmeyen bir bellek hatasının kodu üretim binary'sinde taşınmaz.
+
+      Yeniden açmak için: bu ItemGroup'u kaldırın ve `Program.cs`'teki `probe-*` dalları
+      ile birlikte AYRI bir tanı ikilisinde derleyin.
+    -->
+    <Compile Remove="GmpWrapper.Probe.cs" />
+    <Compile Remove="GmpWrapper.AllocProbe.cs" />
+    <None Include="GmpWrapper.Probe.cs" />
+    <None Include="GmpWrapper.AllocProbe.cs" />
+  </ItemGroup>
+
+  <ItemGroup>
     <ProjectReference Include="..\Restomenum.Agent.Core\Restomenum.Agent.Core.csproj" />
   </ItemGroup>
 

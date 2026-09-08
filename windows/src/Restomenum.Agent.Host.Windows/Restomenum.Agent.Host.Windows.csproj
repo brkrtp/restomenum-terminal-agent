@@ -31,4 +31,13 @@
     <ProjectReference Include="../Restomenum.Agent.Windows/Restomenum.Agent.Windows.csproj" />
     <ProjectReference Include="../Restomenum.Agent.Gmp/Restomenum.Agent.Gmp.csproj" />
   </ItemGroup>
+
+  <ItemGroup>
+    <!-- W42b prova CLI dosyalari - derlemeye GIRMEZ; gerekce: Restomenum.Agent.Gmp.csproj -->
+    <Compile Remove="WindowsProbeMulti.cs" />
+    <Compile Remove="WindowsAllocProbe.cs" />
+    <None Include="WindowsProbeMulti.cs" />
+    <None Include="WindowsAllocProbe.cs" />
+  </ItemGroup>
+
 </Project>
