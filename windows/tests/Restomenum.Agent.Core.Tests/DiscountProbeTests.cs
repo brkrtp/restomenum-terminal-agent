@@ -99,17 +99,17 @@ public class DiscountProbeTests
     }
 
     [Fact]
-    public void Bes_sorunun_HEPSI_olculur()
+    public void Alti_sorunun_HEPSI_olculur()
     {
         // ← ÇİVİ: eksik bir adım, cevaplanmamış bir soru demek — ve o soruyu sormak için ikinci bir
-        // mali fiş açmak gerekir. Beş adım TEK turda ölçülmeli.
+        // mali fiş açmak gerekir. Altı adım TEK turda ölçülmeli.
         var gmp = new GmpTerminalTransportTests.FakeGmp();
 
         var r = DiscountProbe.Run(gmp);
 
         Assert.Equal(ProbeStatus.Completed, r.Status);
-        Assert.Equal(5, r.Steps.Count);
-        Assert.Equal(3, gmp.Calls.Count(c => c == "ItemSale"));   // düz + promotion + ikram
+        Assert.Equal(6, r.Steps.Count);
+        Assert.Equal(4, gmp.Calls.Count(c => c == "ItemSale"));   // düz + promotion + ikram + adet2
         Assert.Single(gmp.MinusCalls);
         Assert.Single(gmp.DecCalls);
     }
@@ -143,6 +143,20 @@ public class DiscountProbeTests
         Assert.Equal(DiscountProbe.ItemAmountMinor, ikram.DiscountMinor);
         Assert.Equal(ikram.UnitPriceMinor, ikram.DiscountMinor);   // ← ÇİVİ: TAM eşit, "neredeyse" değil
         Assert.Contains("TAM İKRAM", r.Steps[4].Name);
+    }
+
+    [Fact]
+    public void BIRIM_mi_SATIR_mi_sorusu_ADET_IKI_ile_sorulur()
+    {
+        // ← ÇİVİ: sorunun kendisi "cihaz `promotion.amount`'ı birim mi satır mı sayıyor". Adet 1
+        // ile sorulursa iki cevap AYIRT EDİLEMEZ — 100 hem birim hem satır olur. Adet 2 şart.
+        var gmp = new GmpTerminalTransportTests.FakeGmp();
+
+        DiscountProbe.Run(gmp);
+
+        var adet2 = gmp.ItemSales[3];
+        Assert.Equal(2, adet2.Quantity);
+        Assert.Equal(DiscountProbe.DiscountAmountMinor, adet2.DiscountMinor);
     }
 
     [Fact]

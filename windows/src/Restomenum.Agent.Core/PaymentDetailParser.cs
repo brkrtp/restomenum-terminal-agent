@@ -52,10 +52,24 @@ public static class PaymentDetailParser
                     foreach (var it in arr.EnumerateArray())
                     {
                         string? catId = null, lineId = null;
+                        decimal? indirimHam = null;
+                        var indirimBozuk = false;
                         if (it.TryGetProperty("RestomenumExt", out var iext))
                         {
                             catId = StrOrNull(iext, "CategoryId");
                             lineId = StrOrNull(iext, "LineId");
+                            // W63: indirim HAM okunur, burada YARGILANMAZ. Üç durum ayrı tutulur —
+                            // alan yok (null), alan var ama sayı değil (bozuk), alan var ve sayı.
+                            // Ayrıştırıcı okur, `LocalSaleHandler` karar verir ve gerekirse cihaza
+                            // GİTMEDEN reddeder. "Bozuk"u "yok" saymak, sözleşme ihlalini sessizce
+                            // indirimsiz satışa çevirmek olurdu.
+                            if (iext.TryGetProperty("DiscountAmount", out var dEl))
+                            {
+                                if (dEl.ValueKind == JsonValueKind.Number && dEl.TryGetDecimal(out var dVal))
+                                    indirimHam = dVal;
+                                else
+                                    indirimBozuk = true;
+                            }
                         }
                         items.Add(new SaleLine(
                             ItemId: it.GetProperty("ItemID").GetInt32(),
@@ -66,7 +80,9 @@ public static class PaymentDetailParser
                             ItemAmountMinor: Money.ToMinor(it.GetProperty("ItemAmount").GetDecimal(), exponent),
                             TaxCode: StrOr(it, "TaxCode", ""),
                             CategoryId: catId,
-                            LineId: lineId));
+                            LineId: lineId,
+                            DiscountAmountRaw: indirimHam,
+                            DiscountMalformed: indirimBozuk));
                     }
                 }
 

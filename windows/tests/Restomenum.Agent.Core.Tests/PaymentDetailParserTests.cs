@@ -40,6 +40,51 @@ public class PaymentDetailParserTests
         Assert.Equal("10", item.TaxCode);
         Assert.Equal("e2e-cat", item.CategoryId);
         Assert.Equal("l1", item.LineId);
+        Assert.Null(item.DiscountAmountRaw);              // W63: alan YOK → null (indirim yok)
+        Assert.False(item.DiscountMalformed);
+    }
+
+    // ── W63: DiscountAmount HAM okunur, burada YARGILANMAZ ──────────────────────
+
+    [Fact]
+    public void DiscountAmount_HAM_okunur()
+    {
+        // ← ÇİVİ: ayrıştırıcının işi OKUMAK. Değeri burada kuruşa çevirmek ya da doğrulamak, aynı
+        // kuralı iki yerde (ayrıştırıcı + işleyici) tanımlamak olurdu.
+        // ⚠️ Birim asimetrisi: `ItemAmount` ANA birimde (240 → 24000 kuruş), `DiscountAmount` ise
+        // sözleşmeye göre doğrudan KURUŞ. Bu yüzden 300, 30000 değil 300 olarak kalıyor.
+        var body = TrBody.Replace("\"CategoryId\":\"e2e-cat\"", "\"CategoryId\":\"e2e-cat\",\"DiscountAmount\":300");
+        var r = Assert.IsType<PaymentDetailResult.Ok>(PaymentDetailParser.Parse(200, body));
+
+        var item = Assert.Single(r.Detail.Items);
+        Assert.Equal(300m, item.DiscountAmountRaw);
+        Assert.False(item.DiscountMalformed);
+        Assert.Equal(24000, item.ItemAmountMinor);        // ← ÇİVİ: ItemAmount hâlâ ANA birimden çevriliyor
+    }
+
+    [Fact]
+    public void DiscountAmount_SAYI_DEGILSE_bozuk_isaretlenir_alan_YOK_sayilmaz()
+    {
+        // ← ÇİVİ: "alan var ama sayı değil" ile "alan yok" AYRI. İkincisi indirimsiz satıştır;
+        // ilkini indirimsiz saymak sözleşme ihlalini sessizce geçirmek olurdu. Ayrıştırıcı ikisini
+        // ayırt edilebilir bırakır, kararı işleyici verir.
+        var body = TrBody.Replace("\"CategoryId\":\"e2e-cat\"", "\"CategoryId\":\"e2e-cat\",\"DiscountAmount\":\"cok\"");
+        var r = Assert.IsType<PaymentDetailResult.Ok>(PaymentDetailParser.Parse(200, body));
+
+        var item = Assert.Single(r.Detail.Items);
+        Assert.Null(item.DiscountAmountRaw);
+        Assert.True(item.DiscountMalformed);              // ← ÇİVİ: "yok" değil, BOZUK
+    }
+
+    [Fact]
+    public void DiscountAmount_ONDALIK_gelirse_HAM_tasinir_reddi_isleyici_verir()
+    {
+        // Ayrıştırıcı reddetmez; ondalık değeri olduğu gibi taşır ki işleyici "ondalık" diyebilsin.
+        // Kırpsaydı, reddedilmesi gereken bir gövde sessizce geçerli hâle gelirdi.
+        var body = TrBody.Replace("\"CategoryId\":\"e2e-cat\"", "\"CategoryId\":\"e2e-cat\",\"DiscountAmount\":100.5");
+        var r = Assert.IsType<PaymentDetailResult.Ok>(PaymentDetailParser.Parse(200, body));
+
+        Assert.Equal(100.5m, Assert.Single(r.Detail.Items).DiscountAmountRaw);
     }
 
     [Fact]

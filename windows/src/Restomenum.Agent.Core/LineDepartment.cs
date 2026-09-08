@@ -55,29 +55,48 @@ public static class FiscalLineBuilder
     {
         var total = item.ItemAmountMinor;   // OTORİTE
         var qty = item.Quantity;
+        // İndirim de SATIR TOPLAMIDIR (sözleşme: `0 < DiscountAmount ≤ ItemAmount`, ikisi de satır).
+        // Doğrulaması `LocalSaleHandler.IndirimDogrula`da yapıldı; buraya yalnız geçerli değer gelir.
+        var indirim = item.DiscountAmountRaw is decimal ham && ham > 0 ? (long)ham : 0L;
+
         if (qty <= 1 || total <= 0)
         {
             // Tek kalem (ya da adet≤1): birim = toplam, adet = max(1, qty).
-            yield return Line(item, departmentNo, Math.Max(1, qty), total);
+            yield return Line(item, departmentNo, Math.Max(1, qty), total, indirim);
             yield break;
         }
 
-        var q = total / qty;          // aşağı yuvarlanmış birim
-        var r = total - q * qty;      // dağıtılacak kalan kuruş (0 ≤ r < qty)
-        if (r == 0)
+        // ── FİYAT VE İNDİRİM AYNI ANDA DAĞITILIR ────────────────────────────────────
+        // İkisi ayrı ayrı bölünseydi kalan kuruşlar farklı birimlere düşer ve satırı ikiye ayırmak
+        // yetmezdi; üstelik toplamlardan biri kayabilirdi. Birim i şunu alır:
+        //   fiyat   = q  + (i >= qty-rp ? 1 : 0)
+        //   indirim = dq + (i >= qty-rd ? 1 : 0)
+        // Fazla kuruş İKİSİNDE DE SONDAKİ birimlere veriliyor; böylece indirim yokken (rd=0)
+        // gruplar bugünkü iki satıra birebir çöküyor ve fiş görünümü değişmiyor.
+        var q = total / qty;
+        var rp = (int)(total - q * qty);       // fiyatın kalan kuruşu (0 ≤ rp < qty)
+        var dq = indirim / qty;
+        var rd = (int)(indirim - dq * qty);    // indirimin kalan kuruşu (0 ≤ rd < qty)
+
+        // Sınırlar: birim indeksleri artarken fiyat ve indirim en fazla iki noktada değişir.
+        var sinir1 = qty - Math.Max(rp, rd);
+        var sinir2 = qty - Math.Min(rp, rd);
+
+        foreach (var (adet, fiyatArti, indirimArti) in new[]
         {
-            yield return Line(item, departmentNo, qty, q);
-        }
-        else
+            (sinir1,          0, 0),
+            (sinir2 - sinir1, rp >= rd ? 1 : 0, rd >= rp ? 1 : 0),
+            (qty - sinir2,    1, 1),
+        })
         {
-            // (qty−r) × q + r × (q+1) = qty·q + r = total  (adet ve toplam TAM korunur)
-            yield return Line(item, departmentNo, qty - (int)r, q);
-            yield return Line(item, departmentNo, (int)r, q + 1);
+            if (adet > 0)
+                yield return Line(item, departmentNo, adet, q + fiyatArti, dq + indirimArti);
         }
     }
 
-    private static FiscalLine Line(SaleLine item, int dept, int qty, long unitMinor) =>
+    private static FiscalLine Line(SaleLine item, int dept, int qty, long unitMinor, long indirimMinor) =>
         // VatRate=0: bilgi amaçlı; cihaz KDV'yi departmandan türetir (GmpWrapper taxRate=0).
         new(ProductId: item.ProductCode, Name: item.ProductLabel, Quantity: qty,
-            UnitPriceMinor: unitMinor, VatRate: 0m, DepartmentNo: dept);
+            UnitPriceMinor: unitMinor, VatRate: 0m, DepartmentNo: dept,
+            LineDiscountMinor: indirimMinor);
 }

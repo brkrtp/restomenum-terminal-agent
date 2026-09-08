@@ -132,6 +132,114 @@ public class LocalSaleHandlerTests : IDisposable
         return (h, sim, notifier);
     }
 
+    // ── W63: SATIR İNDİRİMİ KAPISI ──────────────────────────────────────────────
+
+    private static PaymentDetail Indirimli(decimal? indirim, bool bozuk = false, long tutar = 24000) =>
+        new(Pay, "1042", "TRY", 2, tutar, tutar, "TR", "ACCEPTED",
+            DateTimeOffset.UtcNow.ToUnixTimeMilliseconds() + 600_000, "fullSale",
+            new List<SaleLine> { new(0, "p1", "Adana", 2, tutar, "10", "c1", "l1", indirim, bozuk) },
+            "11-cash");
+
+    [Theory]
+    [InlineData(-1)]        // negatif
+    [InlineData(24001)]     // satır toplamını AŞIYOR
+    public async Task GECERSIZ_indirim_terminale_GITMEDEN_reddedilir(int indirim)
+    {
+        // ← ÇİVİ: geçersiz bir indirimi kırpmak müşteriden yanlış tutar tahsil etmek, yok saymak
+        // indirimi hiç uygulamamak olurdu. İkisi de GERİ ALINAMAZ mali kayıt üretir; tek doğru
+        // davranış cihaza gitmeden reddetmek.
+        var (h, sim, _) = Kur(new PaymentDetailResult.Ok(Indirimli(indirim)));
+
+        var cevap = await h.HandleAsync(Req());
+
+        Assert.Empty(sim.SaleCalls);                       // ← ÇİVİ: cihaza HİÇ gidilmedi
+        var resp = Resp(cevap);
+        Assert.Equal("Failure", resp.GetProperty("Result").GetString());
+        Assert.Equal("PaymentRestriction", resp.GetProperty("ErrorCondition").GetString());
+        Assert.Contains("DISCOUNT_INVALID", resp.GetProperty("AdditionalResponse").GetString());
+        Assert.Contains("p1", resp.GetProperty("AdditionalResponse").GetString());   // HANGİ ürün
+    }
+
+    [Fact]
+    public async Task ONDALIK_indirim_reddedilir()
+    {
+        // ← ÇİVİ: 100,5 kuruş diye bir şey yok. Yuvarlamak müşteriden yarım kuruş fazla ya da eksik
+        // almak demek — hangi yöne yuvarlarsak biri yanlış.
+        var (h, sim, _) = Kur(new PaymentDetailResult.Ok(Indirimli(100.5m)));
+
+        var cevap = await h.HandleAsync(Req());
+
+        Assert.Empty(sim.SaleCalls);
+        Assert.Contains("DISCOUNT_INVALID", cevap);
+    }
+
+    [Fact]
+    public async Task SAYI_OLMAYAN_indirim_reddedilir()
+    {
+        // ← ÇİVİ: "alan var ama sayı değil" ≠ "alan yok". İkincisi indirimsiz satıştır; ilkini
+        // indirimsiz saymak, sözleşme ihlalini SESSİZCE geçirmek olurdu.
+        var (h, sim, _) = Kur(new PaymentDetailResult.Ok(Indirimli(null, bozuk: true)));
+
+        var cevap = await h.HandleAsync(Req());
+
+        Assert.Empty(sim.SaleCalls);
+        Assert.Contains("DISCOUNT_INVALID", cevap);
+    }
+
+    [Fact]
+    public async Task Indirim_SATIR_TOPLAMINA_ESIT_olabilir()
+    {
+        // ← ÇİVİ: sözleşme `0 < x ≤ ItemAmount` — eşitlik DAHİL (tam ikram). Sınırı `<` yapmak
+        // ikramı imkânsız kılardı. (Cihazın 990→0'ı kabul edip etmediği W60'ta ölçülecek; bugünkü
+        // kapı SÖZLEŞMEYE uyar, ölçülmemiş cihaz davranışına değil.)
+        var (h, sim, _) = Kur(new PaymentDetailResult.Ok(Indirimli(24000)));
+
+        await h.HandleAsync(Req());
+
+        Assert.Single(sim.SaleCalls);                      // cihaza GİTTİ
+        Assert.Equal(24000, sim.SaleCalls[0].FiscalLines!.Sum(l => l.LineDiscountMinor * l.Quantity));
+    }
+
+    [Fact]
+    public async Task SIFIR_indirim_GECERLI_sayilir()
+    {
+        // ← ÇİVİ: sözleşme `0 < x` diyor ama açıkça sıfır gelen bir indirim YANLIŞ MALİ KAYIT
+        // ÜRETMEZ — "indirim yok" ile aynı şeydir. Onu reddetmek zararsız bir değer yüzünden satışı
+        // düşürüp kasayı manuel ödemeye indirmek olurdu (kullanıcının değişmez şartı).
+        var (h, sim, _) = Kur(new PaymentDetailResult.Ok(Indirimli(0)));
+
+        await h.HandleAsync(Req());
+
+        Assert.Single(sim.SaleCalls);
+        Assert.Equal(0, sim.SaleCalls[0].FiscalLines!.Sum(l => l.LineDiscountMinor));
+    }
+
+    [Fact]
+    public async Task GECERLI_indirim_fis_satirlarina_TASINIR()
+    {
+        // ← ÇİVİ: alan taşınmazsa `LineDiscountMinor` yine ölü kalır ve indirim hiçbir yere ulaşmaz.
+        // 24000 kuruş / 2 adet, indirim 300 → birim başına 150.
+        var (h, sim, _) = Kur(new PaymentDetailResult.Ok(Indirimli(300)));
+
+        await h.HandleAsync(Req());
+
+        var satirlar = sim.SaleCalls[0].FiscalLines!;
+        Assert.Equal(300, satirlar.Sum(l => l.LineDiscountMinor * l.Quantity));
+        Assert.All(satirlar, l => Assert.Equal(150, l.LineDiscountMinor));
+    }
+
+    [Fact]
+    public async Task Indirim_ALANI_YOKSA_satis_normal_gecer()
+    {
+        // Bugünkü davranış korunuyor: alan yok → indirim 0, hiçbir kapı tetiklenmiyor.
+        var (h, sim, _) = Kur(new PaymentDetailResult.Ok(Detail()));
+
+        await h.HandleAsync(Req());
+
+        Assert.Single(sim.SaleCalls);
+        Assert.All(sim.SaleCalls[0].FiscalLines!, l => Assert.Equal(0, l.LineDiscountMinor));
+    }
+
     // ── W62: KURTARMA UÇUŞTAKİ KOMUTA DOKUNMAZ ──────────────────────────────────
 
     [Fact]

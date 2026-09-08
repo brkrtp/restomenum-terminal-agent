@@ -47,6 +47,12 @@ public readonly record struct DiscountProbeReport(
 ///   <item><b>Tam ikram:</b> kalem tutarına EŞİT indirim (990 → 0) kabul ediliyor mu? Kabul
 ///     edilmiyorsa ikram, indirim yoluyla değil <c>PAYMENT_IKRAM</c> ödeme tipiyle yapılmalı —
 ///     ikisi mali olarak farklı (biri matrahı düşürür, öteki tahsilat satırı yazar).</item>
+///   <item><b><c>promotion.amount</c> BİRİM mi SATIR mı?</b> <c>count 2, amount 990,
+///     promotion 100</c> gönderilir ve fişin indirim toplamına bakılır: <b>100</b> ise satır
+///     bazlı, <b>200</b> ise birim bazlı. Platform indirimi <b>satır toplamı</b> olarak
+///     gönderiyor; cihaz birim sayıyorsa ajan satır indirimini birimlere dağıtmak zorunda
+///     (W63'te dağıtım hazır), satır sayıyorsa doğrudan geçirilir. <b>Ölçmeden bağlamak,
+///     indirimi iki katına çıkarma ya da yarıya düşürme riskidir.</b></item>
 /// </list>
 ///
 /// <para><b>⚠️ MALİ FİŞ AÇAR</b> — ama <b>ASLA YAZDIRMAZ</b>, <see cref="CapabilityProbe"/> ile
@@ -132,6 +138,17 @@ public static class DiscountProbe
         adimlar.Add(Adim("ItemSale(990 + promotion 990 = TAM İKRAM)", r.Code, t5));
         yaz("[indirim] tam ikram", Ozet(r.Code, t5));
         if (Kayip(r.Code)) return (ProbeStatus.HandleLost, "ItemSale(ikram)", r.Code);
+
+        // ── 6. BİRİM Mİ SATIR MI: adet 2, indirim 100 ────────────────────────────────
+        // Bir önceki adıma göre fişin indirim toplamı 100 artarsa SATIR bazlı, 200 artarsa BİRİM
+        // bazlı. Platform satır toplamı gönderdiği için bu cevap dağıtımın gerekip gerekmediğini
+        // belirliyor — yanlış varsayım indirimi iki katına çıkarır ya da yarıya düşürür.
+        r = gmp.ItemSale(handle,
+            new GmpItem("YOKLAMA-ADET2", ItemAmountMinor, 2, Dept, DiscountAmountMinor, "%10 İndirim"),
+            out var t6);
+        adimlar.Add(Adim($"ItemSale(count 2, 990 + promotion {DiscountAmountMinor}) → BİRİM mi SATIR mı", r.Code, t6));
+        yaz("[indirim] adet 2 — birim mi satır mı", Ozet(r.Code, t6));
+        if (Kayip(r.Code)) return (ProbeStatus.HandleLost, "ItemSale(adet2)", r.Code);
 
         return (ProbeStatus.Completed, null, 0u);
     }

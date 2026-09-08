@@ -552,6 +552,30 @@ public sealed class LocalSaleHandler : IDeviceIdleGate
                     new { req.PaymentId, item.ProductCode, urunOrani = urunYuzde * 100,
                           bolumOrani = deptRate, dept = m.Index });
             }
+            // ── W63: SATIR İNDİRİMİ KAPISI — cihaza GİTMEDEN ────────────────────────
+            // Sözleşme: `RestomenumExt.DiscountAmount` KURUŞ tam sayısı ve `0 < x ≤ ItemAmount`
+            // (ikisi de SATIR TOPLAMI). Geçersiz bir indirim sessizce kırpılamaz ya da yok
+            // sayılamaz: kırpmak müşteriden yanlış tutar tahsil etmek, yok saymak indirimi
+            // uygulamamak olurdu — ikisi de geri alınamaz mali kayıt üretir.
+            var indirimHatasi = IndirimDogrula(item);
+            if (indirimHatasi is not null)
+            {
+                var reddi = SaleToPoiResponseBuilder.BuildFailure(req, "PaymentRestriction",
+                    // Ürün kodu METNE de giriyor (`PRODUCT_UNMAPPED` ile aynı desen): operatör
+                    // kasadaki tek satırdan HANGİ kalemin reddedildiğini görebilmeli; ayrı alanı
+                    // okumak için gövdeyi açmak zorunda kalmasın.
+                    $"DISCOUNT_INVALID:{item.ProductCode}:{indirimHatasi}", _now(), RestomenumReasons.DiscountInvalid,
+                    productCode: item.ProductCode);
+                await NotifyAsync(req.PaymentId, reddi, ct);
+                _log("[yerel] geçersiz satır indirimi — terminale gidilmedi", new
+                {
+                    req.PaymentId, item.ProductCode, item.ItemAmountMinor,
+                    indirim = item.DiscountAmountRaw?.ToString() ?? (item.DiscountMalformed ? "(sayı değil)" : "(yok)"),
+                    hata = indirimHatasi,
+                });
+                return reddi;
+            }
+
             lines.AddRange(FiscalLineBuilder.Build(item, m.Index));
         }
 
@@ -655,6 +679,35 @@ public sealed class LocalSaleHandler : IDeviceIdleGate
             toplamMs = (long)(_now() - tBas).TotalMilliseconds,
         });
         return body;
+    }
+
+    /// <summary>
+    /// W63 — satır indirimini doğrular. <c>null</c> = geçerli (indirim yok ya da kurallara uyuyor);
+    /// dolu ise reddin İNSAN OKUR sebebi.
+    ///
+    /// <para><b>Sözleşme:</b> <c>DiscountAmount</c> KURUŞ tam sayısıdır ve <c>0 &lt; x ≤ ItemAmount</c>
+    /// — ikisi de <b>SATIR TOPLAMI</b> (birim fiyat değil; <c>ItemAmount</c> otorite, birim fiyat ondan
+    /// türetiliyor).</para>
+    ///
+    /// <para><b>Neden 0 GEÇERLİ sayılıyor:</b> sözleşme <c>0 &lt; x</c> diyor ama açıkça sıfır gelen bir
+    /// indirim yanlış mali kayıt ÜRETMEZ — "indirim yok" ile aynı şeydir. Onu reddetmek, zararsız bir
+    /// değer yüzünden satışı düşürüp kasayı manuel ödemeye indirmek olurdu (kullanıcının değişmez
+    /// şartı). Negatif, ondalık ya da tutarı aşan değerler ise gerçekten reddedilir.</para>
+    /// </summary>
+    private static string? IndirimDogrula(SaleLine item)
+    {
+        // "Alan var ama sayı değil" ≠ "alan yok". İlki sözleşme ihlali, ikincisi indirimsiz satış.
+        if (item.DiscountMalformed) return "sayı değil";
+        if (item.DiscountAmountRaw is not decimal ham) return null;   // alan yok → indirim yok
+
+        if (ham < 0) return $"negatif ({ham})";
+        // Kuruş tam sayısı: 100.5 kuruş diye bir şey yok. Yuvarlamak, müşteriden yarım kuruş fazla
+        // ya da eksik almak demek — hangi yöne yuvarlarsak yuvarlayalım biri yanlış.
+        if (decimal.Truncate(ham) != ham) return $"ondalık ({ham}) — kuruş tam sayısı bekleniyor";
+        var indirim = (long)ham;
+        if (indirim > item.ItemAmountMinor)
+            return $"satır toplamını aşıyor (indirim {indirim} > tutar {item.ItemAmountMinor})";
+        return null;
     }
 
     /// <summary>

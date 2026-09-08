@@ -163,6 +163,14 @@ public static class RestomenumReasons
     /// <summary>Kasanın dikte ettiği ödeme yöntemi cihazda eşlenmemiş; ödeme başlamadı.</summary>
     public const string PaymentMethodUnmapped = "PAYMENT_METHOD_UNMAPPED";
 
+    /// <summary>
+    /// W63 — <c>SaleItem.RestomenumExt.DiscountAmount</c> sözleşmeye uymuyor (sayı değil, negatif,
+    /// ondalık ya da satır toplamını aşıyor). <b>Cihaza GİDİLMEDEN</b> reddedilir: geçersiz bir
+    /// indirimi kırpmak müşteriden yanlış tutar tahsil etmek, yok saymak indirimi uygulamamak
+    /// olurdu — ikisi de geri alınamaz mali kayıt üretir.
+    /// </summary>
+    public const string DiscountInvalid = "DISCOUNT_INVALID";
+
     /// <summary>Eklenti/cihaz yapılandırması eksik ya da çelişkili; ödeme başlamadı.</summary>
     public const string ProviderConfigIncomplete = "PROVIDER_CONFIG_INCOMPLETE";
 

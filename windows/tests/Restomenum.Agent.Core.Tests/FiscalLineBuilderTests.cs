@@ -14,6 +14,66 @@ public class FiscalLineBuilderTests
         new(ItemId: 0, ProductCode: "p1", ProductLabel: "Ürün", Quantity: qty,
             ItemAmountMinor: itemAmount, TaxCode: "10", CategoryId: "c1", LineId: "l1");
 
+    private static SaleLine Indirimli(long itemAmount, int qty, long indirim) =>
+        new(ItemId: 0, ProductCode: "p1", ProductLabel: "Ürün", Quantity: qty,
+            ItemAmountMinor: itemAmount, TaxCode: "10", CategoryId: "c1", LineId: "l1",
+            DiscountAmountRaw: indirim);
+
+    // ── W63: SATIR İNDİRİMİNİN KURUŞ DAĞITIMI ───────────────────────────────────
+
+    [Theory]
+    [InlineData(3000, 3, 100)]    // indirim tam bölünmez (33,33,34)
+    [InlineData(3001, 3, 100)]    // fiyat DA tam bölünmez — iki kalan farklı birimlere düşer
+    [InlineData(1000, 7, 99)]     // ikisi de bölünmez, kalanlar farklı
+    [InlineData(1000, 7, 7)]      // indirim tam bölünür, fiyat bölünmez
+    [InlineData(2100, 3, 300)]    // ikisi de tam bölünür
+    [InlineData(990, 1, 100)]     // adet 1
+    [InlineData(2000, 4, 2000)]   // TAM İKRAM: indirim = tutar
+    [InlineData(3000, 3, 0)]      // indirim yok
+    public void Indirim_toplami_TAM_korunur(long itemAmount, int qty, long indirim)
+    {
+        // ← ÇİVİ: dağıtım toplamı korumazsa fişteki indirim platformdakinden birkaç kuruş sapar ve
+        // bu geri alınamaz bir mali kayıttır. Fiyat ve indirim AYNI ANDA dağıtılıyor; ayrı ayrı
+        // bölünselerdi kalan kuruşlar farklı birimlere düşer ve satırı ikiye ayırmak yetmezdi.
+        var lines = FiscalLineBuilder.Build(Indirimli(itemAmount, qty, indirim), 5).ToList();
+
+        Assert.Equal(itemAmount, lines.Sum(l => l.UnitPriceMinor * l.Quantity));      // fiyat TAM
+        Assert.Equal(indirim, lines.Sum(l => l.LineDiscountMinor * l.Quantity));      // indirim TAM
+        Assert.Equal(qty, lines.Sum(l => l.Quantity));                                // adet TAM
+        Assert.All(lines, l => Assert.True(l.LineDiscountMinor >= 0));
+        Assert.All(lines, l => Assert.True(l.LineDiscountMinor <= l.UnitPriceMinor,
+            "birim indirimi birim fiyatı AŞAMAZ — negatif satır olurdu"));
+    }
+
+    [Fact]
+    public void Indirim_YOKKEN_satirlar_BIREBIR_eskisi_gibi()
+    {
+        // ← ÇİVİ: dağıtım algoritması değişti; indirimsiz satışın fiş GÖRÜNÜMÜ değişmemeli.
+        // Fazla kuruş ikisinde de SONDAKİ birimlere veriliyor, böylece indirim yokken gruplar
+        // bugünkü iki satıra birebir çöküyor.
+        var lines = FiscalLineBuilder.Build(Item(1000, 3), 5).ToList();
+
+        Assert.Equal(2, lines.Count);
+        Assert.Equal(333, lines[0].UnitPriceMinor);
+        Assert.Equal(2, lines[0].Quantity);
+        Assert.Equal(334, lines[1].UnitPriceMinor);
+        Assert.Equal(1, lines[1].Quantity);
+        Assert.All(lines, l => Assert.Equal(0, l.LineDiscountMinor));
+    }
+
+    [Fact]
+    public void Iki_kalan_FARKLI_birimlere_duserse_UC_satir_olur()
+    {
+        // ← ÇİVİ: fiyatın kalanı 1 birime, indirimin kalanı 2 birime düşüyor → tek bir bölme
+        // yetmez. Eski algoritma (yalnız fiyata bakan) burada indirimi kaydırırdı.
+        // 3001/3 → 1000,1000,1001 ; indirim 200/3 → 66,67,67
+        var lines = FiscalLineBuilder.Build(Indirimli(3001, 3, 200), 5).ToList();
+
+        Assert.Equal(3, lines.Count);
+        Assert.Equal(3001, lines.Sum(l => l.UnitPriceMinor * l.Quantity));
+        Assert.Equal(200, lines.Sum(l => l.LineDiscountMinor * l.Quantity));
+    }
+
     [Theory]
     [InlineData(2999, 3, 2)]   // 999 + 2×1000
     [InlineData(3001, 3, 2)]   // 2×1000 + 1001

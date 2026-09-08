@@ -76,6 +76,20 @@ public sealed record FiscalLine(
     /// departman yanlış mali kayıt yazar ve geri alınamaz.</para>
     /// </summary>
     int DepartmentNo,
+    /// <summary>
+    /// <b>BİRİM BAŞINA</b> indirim (kuruş) — <see cref="UnitPriceMinor"/> ile aynı eksende, çünkü
+    /// cihazın <c>ST_ITEM.promotion</c> alanı da birim fiyatın yanında duruyor.
+    ///
+    /// <para><b>Platform SATIR TOPLAMI gönderir</b> (<c>DiscountAmount ≤ ItemAmount</c>, ikisi de
+    /// satır); <see cref="FiscalLineBuilder"/> onu birimlere <b>tam</b> dağıtır — fiyatta olduğu gibi
+    /// kalan kuruş kaybolmaz, gerekirse satır bölünür. Dağıtım toplamı korumazsa fişteki indirim
+    /// platformdakinden birkaç kuruş sapar ve bu geri alınamaz bir mali kayıttır.</para>
+    ///
+    /// <para>⚠️ <b>Bugün cihaza GÖNDERİLMİYOR.</b> W63 alanı taşıyor ve doğruluyor;
+    /// <c>GmpItem.DiscountMinor</c>'a bağlanması <c>--discount-probe</c> (W60) cihazın
+    /// <c>promotion.amount</c>'ı birim mi satır mı saydığını ölçtükten SONRA yapılacak. Ölçmeden
+    /// bağlamak, indirimi iki katına çıkarma ya da yarıya düşürme riskidir.</para>
+    /// </summary>
     long LineDiscountMinor = 0);
 
 /// <summary>
