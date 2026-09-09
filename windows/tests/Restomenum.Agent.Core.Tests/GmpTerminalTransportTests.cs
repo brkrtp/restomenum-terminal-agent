@@ -1115,8 +1115,12 @@ public class GmpTerminalTransportTests
                 _bekleyenTerminal.TryGetValue(x.Key, out var o) ? o.Oturum : null,
                 x.Value.Deneme, x.Value.Adim, x.Value.Kod)).ToList();
 
-        public int MarkFinishAttempt(string ticketId, string? step, string? code, long? now = null)
+        /// <summary>Son denemede geçirilen aralık — ucuz/pahalı ayrımının çivisi bunu okur.</summary>
+        public TimeSpan? SonAralik;
+        public int MarkFinishAttempt(string ticketId, string? step, string? code, long? now = null,
+            TimeSpan? sonrakiAralik = null)
         {
+            SonAralik = sonrakiAralik;
             if (!Bekleyen.TryGetValue(ticketId, out var v)) return 0;
             Bekleyen[ticketId] = (step, code, v.Deneme + 1);
             return v.Deneme + 1;

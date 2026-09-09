@@ -559,7 +559,7 @@ public sealed class CommandStore : ITicketSnapshotStore, IDisposable
     /// cihaza sonsuza kadar 15 saniyede bir gidilirdi.</para>
     /// </summary>
     public void MarkTicketNeedsFinish(string ticketId, string terminalId, string? saleSessionId,
-        string? step, string? code, int ilkBeklemeSn = 15, long? now = null)
+        string? step, string? code, int ilkBeklemeSn = 10, long? now = null)
     {
         lock (_gate)
         {
@@ -610,7 +610,8 @@ public sealed class CommandStore : ITicketSnapshotStore, IDisposable
     /// <b>Vazgeçme YOK, silme YOK:</b> bu fişte gerçek para var; ertelemek başka, unutmak başka.
     /// </summary>
     /// <returns>Artırımdan SONRAKİ deneme sayısı — çağıran alarm eşiğini buna göre kurar.</returns>
-    public int MarkFinishAttempt(string ticketId, string? step, string? code, long? now = null)
+    public int MarkFinishAttempt(string ticketId, string? step, string? code, long? now = null,
+        TimeSpan? sonrakiAralik = null)
     {
         lock (_gate)
         {
@@ -629,7 +630,10 @@ public sealed class CommandStore : ITicketSnapshotStore, IDisposable
             cmd.Parameters.AddWithValue("$f", ticketId);
             cmd.Parameters.AddWithValue("$n", yeni);
             cmd.Parameters.AddWithValue("$now", simdi);
-            cmd.Parameters.AddWithValue("$bekleme", (long)Outbox.Bekleme(yeni).TotalMilliseconds);
+            // W116: aralık POLİTİKASI çağıranın (bedeli olan/olmayan deneme ayrımı orada).
+            // Depo yalnız yazar. Verilmezse eski üstel eğri — geriye uyumlu.
+            cmd.Parameters.AddWithValue("$bekleme",
+                (long)(sonrakiAralik ?? Outbox.Bekleme(yeni)).TotalMilliseconds);
             cmd.Parameters.AddWithValue("$adim", (object?)step ?? DBNull.Value);
             cmd.Parameters.AddWithValue("$kod", (object?)code ?? DBNull.Value);
             cmd.ExecuteNonQuery();

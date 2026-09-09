@@ -134,14 +134,19 @@ public interface ITicketSnapshotStore
     /// aynı durum <b>83 dakika</b> sürdü ve ancak insan müdahalesiyle çözüldü.
     /// </summary>
     void MarkTicketNeedsFinish(string ticketId, string terminalId, string? saleSessionId,
-        string? step, string? code, int ilkBeklemeSn = 15, long? now = null);
+        string? step, string? code, int ilkBeklemeSn = 10, long? now = null);
 
     /// <summary>Zamanı GELMİŞ tamamlama kayıtları (en eski önce).</summary>
     IReadOnlyList<PendingFinishRow> PendingFinishes(long? now = null);
 
     /// <summary>Denemeyi sayar ve bir sonrakini üstel olarak erteler. <b>Vazgeçme YOK.</b></summary>
     /// <returns>Artırımdan SONRAKİ deneme sayısı.</returns>
-    int MarkFinishAttempt(string ticketId, string? step, string? code, long? now = null);
+    /// <param name="sonrakiAralik">
+    /// Bir sonraki denemeye kalan süre. <c>null</c> = üstel eğri (<see cref="Outbox.Bekleme"/>).
+    /// Politika ÇAĞIRANDA: ucuz başarısızlıkta sabit/kısa, pahalıda üstel.
+    /// </param>
+    int MarkFinishAttempt(string ticketId, string? step, string? code, long? now = null,
+        TimeSpan? sonrakiAralik = null);
 
     /// <summary>Bekleyen tamamlama kaydını düşürür (tamamlandı ya da ortada fiş kalmadı).</summary>
     void ClearPendingFinish(string ticketId);

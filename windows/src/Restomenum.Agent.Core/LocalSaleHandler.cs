@@ -119,12 +119,46 @@ public sealed class LocalSaleHandler : IDeviceIdleGate
     /// <para>Kural: <b>bedeli olan denemeler sınırlanır, bedeli olmayanlar sınırlanmaz.</b>
     /// Zaman aşımı ve bütçe bitişi PAHALI; cihazın kesin cevabı (kâğıt yok gibi) UCUZ.</para>
     /// </summary>
-    private static bool PahaliBasarisizlik(string? kod) =>
-        // Kod okunamadıysa PAHALI say: bilinmeyeni ucuz saymak, sınırı sessizce kaldırmak olurdu.
-        kod is null
-        || kod.Equals($"0x{GmpCodes.Timeout:X4}", StringComparison.OrdinalIgnoreCase)
-        || kod.Equals($"0x{GmpCodes.Timeout2:X4}", StringComparison.OrdinalIgnoreCase)
-        || kod.Equals($"0x{GmpCodes.BudgetExhausted:X4}", StringComparison.OrdinalIgnoreCase);
+    private static bool PahaliBasarisizlik(string? kod) => !UcuzBasarisizlik(kod);
+
+    /// <summary>
+    /// <b>Cihazın HIZLI ve KESİN cevabı mı?</b> — yani denemek bedava mı?
+    ///
+    /// <para><b>⚠️ BU BİR BEYAZ LİSTE ve öyle olmak ZORUNDA (W116 düzeltmesi).</b> İlk yazımda
+    /// tersini yapmıştım: <i>pahalıların</i> listesini tutuyordum ve listede olmayan her şey
+    /// sessizce "ucuz" sayılıyordu. Yorumu "bilinmeyeni ucuz saymak sınırı sessizce kaldırmak
+    /// olurdu" diyordu ama <b>kod tam olarak onu yapıyordu</b>: istisna yolundan gelen
+    /// <c>"TimeoutException"</c> gibi bir tip adı ya da eşlenmemiş herhangi bir cihaz kodu
+    /// (2069, 2085, <c>0xF01C</c>…) listede olmadığı için ucuz sayılıyor ve <b>sınırsız</b>
+    /// deneniyordu — üstelik o denemelerin her biri cihazı dakikalarca kilitleyebilir.</para>
+    ///
+    /// <para>Doğru yön: <b>yalnız BİLİNEN kodlar ucuzdur, geri kalan her şey pahalıdır.</b>
+    /// Bilinmeyen bir kodun ne kadar sürdüğünü bilmiyoruz; bilmediğimizi ucuz saymak,
+    /// ölçmediğimiz bir şeyi bedava ilan etmektir.</para>
+    ///
+    /// <para>Bugünkü tek üye: <c>0x0020 TRAN_RESULT_NO_PAPER</c> — sahada ölçüldü, milisaniyeler
+    /// içinde dönüyor. Yeni bir kodun buraya girmesi için <b>hızlı döndüğünün ölçülmüş olması</b>
+    /// gerekir.</para>
+    /// </summary>
+    private static bool UcuzBasarisizlik(string? kod) =>
+        kod is not null
+        && kod.Equals($"0x{GmpCodes.NoPaper:X4}", StringComparison.OrdinalIgnoreCase);
+
+    /// <summary>
+    /// <b>W116 — ucuz başarısızlıkta SABİT ve KISA aralık.</b>
+    ///
+    /// <para>Üstel geri çekilmenin varlık sebebi PAHALI denemeyi seyreltmektir. <c>0x0020</c>
+    /// milisaniyelerde dönüyor; orada aralığın büyümesi hiçbir şey kazandırmaz, yalnız
+    /// <b>kâğıdı takan insanı bekletir</b> — eski eğride 5 dakikaya kadar.</para>
+    ///
+    /// <para>10 sn, turun kendisiyle aynı: rulo takıldıktan sonra fiş en geç bir sonraki turda
+    /// kapanır.</para>
+    /// </summary>
+    private static readonly TimeSpan UcuzDenemeAraligi = TimeSpan.FromSeconds(10);
+
+    /// <summary>Bir sonraki denemenin aralığı — bedeline göre.</summary>
+    private static TimeSpan TamamlamaAraligi(int deneme, string? kod) =>
+        UcuzBasarisizlik(kod) ? UcuzDenemeAraligi : Outbox.Bekleme(deneme);
 
     /// <summary>Otomatik sınır dolunca kaydın ertelendiği süre — insan ölçeği, cihaz ölçeği değil.</summary>
     private static readonly TimeSpan TamamlamaErtelemesi = TimeSpan.FromHours(24);
@@ -1104,7 +1138,9 @@ public sealed class LocalSaleHandler : IDeviceIdleGate
             catch (Exception e)
             {
                 // Kayıt DURUYOR. Silmek, üzerinde para olan bir fişi unutmak olurdu.
-                var n = _store.MarkFinishAttempt(f.TicketId, "EXCEPTION", e.GetType().Name, simdi);
+                // İstisna PAHALI sayılır: ne olduğunu bilmiyoruz, ne kadar sürdüğünü de.
+                var n = _store.MarkFinishAttempt(f.TicketId, "EXCEPTION", e.GetType().Name, simdi,
+                    Outbox.Bekleme(f.Attempts + 1));
                 _log("[tamamla] deneme hata verdi — kayıt duruyor", new { f.TicketId, deneme = n, hata = e.Message });
                 continue;
             }
@@ -1133,7 +1169,8 @@ public sealed class LocalSaleHandler : IDeviceIdleGate
             }
 
             // ŞART ②: ertelenir, sayılır; eşiği aşınca ses yükselir. Vazgeçilmez.
-            var deneme = _store.MarkFinishAttempt(f.TicketId, s.BasarisizAdim, s.Kod, simdi);
+            var deneme = _store.MarkFinishAttempt(f.TicketId, s.BasarisizAdim, s.Kod, simdi,
+                TamamlamaAraligi(f.Attempts + 1, s.Kod));
 
             // W108/W114: otomatik pencere YALNIZ PAHALI denemeler için dolar. Cihaz hızlı ve
             // kesin cevap veriyorsa (ör. `0x0020` kâğıt yok) denemek cihazı rehin almaz ve
@@ -1154,7 +1191,8 @@ public sealed class LocalSaleHandler : IDeviceIdleGate
             {
                 f.TicketId, deneme, adim = s.BasarisizAdim, kod = s.Kod,
                 neden = s.Plan.Neden, ureticiAdimi = s.Plan.UreticiAdimi,
-                sonrakiDenemeSn = (int)Outbox.Bekleme(deneme).TotalSeconds,
+                // W116: ucuz başarısızlıkta sabit 10 sn, pahalıda üstel eğri.
+                sonrakiDenemeSn = (int)TamamlamaAraligi(deneme, s.Kod).TotalSeconds,
             };
 
             if (s.Meshgul)

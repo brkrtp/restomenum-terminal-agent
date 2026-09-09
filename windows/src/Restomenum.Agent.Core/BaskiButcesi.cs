@@ -91,3 +91,17 @@ public sealed class BaskiButcesi
         return kalan < asgari ? null : (int)Math.Min(tavan, kalan);
     }
 }
+
+/// <summary>
+/// <b>W116 — periyodik tur sıklığı.</b> Sabit Core'da çünkü <c>AgentWorker</c> Host projesinde
+/// ve <b>test projesi yok</b>; oradayken mutasyon ("turu tekrar 30 sn yap") YEŞİL geçti.
+/// </summary>
+public static class AjanTuru
+{
+    /// <summary>
+    /// Drain/süpürme turunun sıklığı. ⚠️ Turun KENDİSİ ucuz: boşta üç küçük yerel SQLite
+    /// sorgusu. Sıklığı artırmak ağ trafiğini artırmaz — hem outbox kayıtlarının hem yarım
+    /// fişlerin KENDİ <c>next_attempt_at</c>'i var; tur yalnız sırası GELMİŞ işi görür.
+    /// </summary>
+    public static readonly TimeSpan DrainAraligi = TimeSpan.FromSeconds(10);
+}

@@ -50,9 +50,12 @@ public class TicketSweepTests : IDisposable
 
         /// <summary>Süpürmenin geçirdiği bütçe — cihazı ne kadar tutabileceğinin çivisi.</summary>
         public BaskiButcesi? SonButce;
+        /// <summary>Doluysa çağrı bunu FIRLATIR — istisna yolunun aralığını ölçmenin tek yolu.</summary>
+        public Exception? Patlat;
         public StuckTicketResult FinishStuckTicket(bool uygula, BaskiButcesi? butce = null)
         {
             Cagrilar.Add(uygula); SonButce = butce;
+            if (Patlat is not null) throw Patlat;
             return Sonuc;
         }
 
@@ -237,6 +240,111 @@ public class TicketSweepTests : IDisposable
         Assert.True(tasima.Cagrilar.Count > 8, $"deneme sayısı {tasima.Cagrilar.Count}, 8'de durmamalıydı");
         Assert.False(LogVar("otomatik denemeler DURDURULDU"));
         Assert.Single(_store.PendingFinishes(_saatMs));
+    }
+
+    [Fact]
+    public async Task UCUZ_basarisizlikta_aralik_SABIT_10_sn_buyumez()
+    {
+        // ← ÇİVİ: üstel geri çekilmenin varlık sebebi PAHALI denemeyi seyreltmek. `0x0020`
+        // milisaniyelerde dönüyor; orada aralığın büyümesi hiçbir şey kazandırmaz, yalnız
+        // KÂĞIDI TAKAN İNSANI bekletir — eski eğride 5 dakikaya kadar.
+        var (h, tasima) = Kur();
+        tasima.Sonuc = new StuckTicketResult(false, false, false,
+            new FisBitirmePlani(FisBitirmeAdimi.MfVeKapat, TicketFinish.Tamamlanabilir, 5),
+            0, "PrintBeforeMF", "0x0020");
+        _store.MarkTicketNeedsFinish("tkt_1", "t1", "oturum-A", null, null, 0, _saatMs);
+
+        // Beş tur: aralık BÜYÜMEMELİ.
+        for (var i = 0; i < 5; i++)
+        {
+            await h.DrainOutboxAsync();
+            _saatMs += 11_000;                       // 10 sn'lik aralığı geç
+            Assert.Equal(i + 1, tasima.Cagrilar.Count);
+        }
+    }
+
+    [Fact]
+    public async Task PAHALI_basarisizlikta_aralik_USTEL_buyur()
+    {
+        var (h, tasima) = Kur();
+        tasima.Sonuc = new StuckTicketResult(false, false, false,
+            new FisBitirmePlani(FisBitirmeAdimi.MfVeKapat, TicketFinish.Tamamlanabilir, 5),
+            0, "PrintMF", "0xF003");                 // zaman aşımı = PAHALI
+        _store.MarkTicketNeedsFinish("tkt_1", "t1", "oturum-A", null, null, 0, _saatMs);
+
+        await h.DrainOutboxAsync();                  // 1. deneme
+        _saatMs += 11_000;                           // 11 sn: ucuz olsaydı yetecekti
+        await h.DrainOutboxAsync();
+
+        // ← ÇİVİ: pahalı denemede 11 sn YETMEZ (üstel eğri 30 sn ister). Ucuz/pahalı ayrımı
+        // gerçekten aralığı belirliyor; tek bir sabite düşseydi biri diğerinin bedelini öderdi.
+        Assert.Single(tasima.Cagrilar);
+    }
+
+    [Fact]
+    public async Task BILINMEYEN_kod_PAHALI_sayilir_ve_SINIRLANIR()
+    {
+        // ← ÇİVİ: BU GERÇEK BİR KUSURDU. İlk yazımda "pahalıların listesi"ni tutuyordum ve
+        // listede olmayan HER ŞEY sessizce ucuz sayılıyordu — istisna yolundan gelen
+        // "TimeoutException" gibi bir tip adı ya da eşlenmemiş herhangi bir cihaz kodu
+        // (2069, 2085, 0xF01C…) dahil. Yorum "bilinmeyeni ucuz saymak sınırı sessizce
+        // kaldırmak olurdu" diyordu ama kod TAM OLARAK onu yapıyordu: sınırsız deneme,
+        // üstelik her biri cihazı dakikalarca kilitleyebilecek denemeler.
+        var (h, tasima) = Kur();
+        tasima.Sonuc = new StuckTicketResult(false, false, false,
+            new FisBitirmePlani(FisBitirmeAdimi.MfVeKapat, TicketFinish.Tamamlanabilir, 5),
+            0, "PrintMF", "0x0817");                 // eşlenmemiş cihaz kodu (2071)
+        _store.MarkTicketNeedsFinish("tkt_1", "t1", "oturum-A", null, null, 0, _saatMs);
+
+        for (var i = 0; i < 12; i++) { await h.DrainOutboxAsync(); _saatMs += 10 * 60_000; }
+
+        // Bilinmeyen kod PAHALI sayılır → sekizde durur.
+        Assert.True(LogVar("otomatik denemeler DURDURULDU"));
+        Assert.Equal(8, tasima.Cagrilar.Count);
+    }
+
+    [Fact]
+    public async Task ISTISNA_PAHALI_sayilir_ucuz_araliga_dusmez()
+    {
+        // ← ÇİVİ: istisnadan gelen "kod" bir TİP ADIdır (`TimeoutException` gibi), cihaz kodu
+        // değil. Onu ucuz saymak, ne olduğunu BİLMEDİĞİMİZ bir başarısızlığı bedava ilan edip
+        // 10 saniyede bir denemek olurdu — üstelik o denemelerin her biri cihazı dakikalarca
+        // kilitleyebilir.
+        var (h, tasima) = Kur();
+        tasima.Patlat = new TimeoutException("cihaz cevap vermedi");
+        _store.MarkTicketNeedsFinish("tkt_1", "t1", "oturum-A", null, null, 0, _saatMs);
+
+        await h.DrainOutboxAsync();                  // 1. deneme → istisna
+        Assert.Single(tasima.Cagrilar);
+
+        _saatMs += 11_000;                           // ucuz olsaydı yetecekti
+        await h.DrainOutboxAsync();
+        Assert.Single(tasima.Cagrilar);              // ← YETMEDİ: üstel eğri 30 sn istiyor
+
+        _saatMs += 25_000;                           // toplam 36 sn
+        await h.DrainOutboxAsync();
+        Assert.Equal(2, tasima.Cagrilar.Count);
+    }
+
+    [Fact]
+    public void Ilk_bekleme_VARSAYILANI_10_sn()
+    {
+        // ← ÇİVİ: diğer testler `ilkBeklemeSn`i AÇIKÇA veriyor, yani VARSAYILAN hiçbir yerde
+        // sınanmıyordu — 5 dakikaya çıkarılsa kimse fark etmezdi. Sahada kullanılan değer bu.
+        _store.MarkTicketNeedsFinish("tkt_1", "t1", "oturum-A", null, null, now: _saatMs);
+
+        Assert.Empty(_store.PendingFinishes(_saatMs + 9_000));    // 9 sn: HENÜZ değil
+        Assert.Single(_store.PendingFinishes(_saatMs + 10_000));  // 10 sn: sırası geldi
+    }
+
+    [Fact]
+    public void Tur_SIKLIGI_ucuz_aralikla_tutarli()
+    {
+        // ← ÇİVİ: tur, ucuz aralıktan SEYREK olursa 10 sn'lik aralık fiilen tur süresine
+        // yuvarlanır ve kısaltmanın hiçbir anlamı kalmaz. İki sabit ayrı yerlerde duruyor
+        // (biri Host'ta kullanılıyor); ilişkileri ancak burada çivilenebilir.
+        Assert.True(AjanTuru.DrainAraligi <= TimeSpan.FromSeconds(10),
+            $"tur {AjanTuru.DrainAraligi.TotalSeconds} sn — ucuz deneme aralığından (10 sn) seyrek olamaz");
     }
 
     [Fact]

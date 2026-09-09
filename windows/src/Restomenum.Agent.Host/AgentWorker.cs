@@ -281,7 +281,13 @@ public sealed class AgentWorker : BackgroundService
     {
         while (!ct.IsCancellationRequested)
         {
-            try { await Task.Delay(TimeSpan.FromSeconds(30), ct); }
+            // W116 — 30 sn'den 10 sn'ye indirildi (kullanıcı isteği).
+            // ⚠️ Turun KENDİSİ ucuz: boşta üç küçük yerel SQLite sorgusu. Sıklığı artırmak
+            // ağ trafiğini artırmıyor çünkü hem outbox kayıtlarının hem yarım fişlerin KENDİ
+            // `next_attempt_at`i var; tur yalnız sırası GELMİŞ işi görür. Kurtarma turu ayrıca
+            // 60 sn'lik kendi kapısında (`_sonKurtarma`), temizlik günlük kapıda.
+            // Kazanç: kâğıt takıldıktan sonra fişin kapanma gecikmesi 30 sn'den 10 sn'ye iner.
+            try { await Task.Delay(AjanTuru.DrainAraligi, ct); }
             catch (OperationCanceledException) { break; }
 
             // Günde bir: eski kayıtları temizle. Sürekli açık kalan bir kasada açılış tek başına yetmez.
