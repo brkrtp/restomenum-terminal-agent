@@ -1,4 +1,7 @@
-# W79 — "tahsil edilen ≠ istenen" bildirilsin (tasarım, KOD YOK)
+# W79 — "tahsil edilen ≠ istenen" bildirilsin — **SON HÂL** (tasarım, KOD YOK)
+
+> Bu belge P138 paketinin sözleşmesidir. Bütün maddeler 2026-09-09 saha ölçümlerine dayanır;
+> ölçülmemiş olanlar açıkça öyle işaretlidir. **Kod, bu tasarım onaylandıktan sonra yazılacak.**
 
 **Durum:** tasarım. Kampanya ortasında yayım yapılmayacak; bu belge uygulanacak değişikliğin
 sözleşmesidir.
@@ -72,7 +75,16 @@ mutabakat tek eksende yürüsün); yeni sütun `collected_minor` (migration,
 `CommandStore.cs:145` şema bloğu). Değişmez: `sum(collected_minor)` = 
 `closed_tickets.paid_minor`. Bugün bu değişmez YOK ve 88/2'de 7150 ≠ 6793 olarak kırıldı.
 
-### 6. Kısmi ödeme — ÖLÇÜLMEDİ
+### 6. Kısmi ödeme — **ÖLÇÜLDÜ (FR30 + fiş 88/11)**
+
+**İndirimin tabanı, o BACAĞIN tutarıdır — fişin toplamı değil.** FR30 3. bacağı: istenen 1390 →
+tahsil 1321, indirim **69**; 69/1390 = %4,96 (fiş toplamına göre olsaydı %2,9 olurdu). Fiş toplamı
+2380 → 2311'e düştü, `TotalReceiptTax` 322 → 312, ve **açıkta bakiye kalmadı** (990 + 1321 = 2311).
+Fiş 88/11'de de aynı: istenen 990 → tahsil 941, fiş 2380 → 2331, kalan 1390 tutarlı kaldı.
+`DeviceRemainingMinor` cihazın kendi `Total − Paid` farkından geldiği için **kendiliğinden doğru**;
+ek bir hesap gerekmiyor.
+
+### 6-eski. (kaldırıldı — yukarıdaki ölçüm bunun yerine geçti)
 `DeviceRemainingMinor` (`GmpTerminalTransport.cs:349`, `:333`) cihazın kendi
 `TotalAmountMinor − PaidAmountMinor` farkından geliyor (`GmpContracts.cs:311`). Banka
 indirimi `TotalReceiptAmount`'ı da düşürdüğü için kalan **kendiliğinden** doğru olmalı —
@@ -134,7 +146,7 @@ karşı tarafla kararlaştırılmalı.
 `requestedAmountMinor`, `collectedAmountMinor`, `bankDiscountMinor`; nexo tarafında
 `AuthorizedAmount` = **tahsil edilen** kalır (sözleşme değişmez, §30.5).
 
-### 8. AÇIK MADDE — P130 kapısı: `voidedPaymentCount 0` gönderirken kimlik ZORUNLU
+### 9. AÇIK MADDE — P130 kapısı: `voidedPaymentCount 0` gönderirken kimlik ZORUNLU
 
 Platform ölçtü (`reversal.js:446`): `voidedPaymentCount 0` gelen bir iptalde gövde
 **`ticketId`** ya da **`cancelledSaleSessionId`** ya da **`TICKET_CANCELLED`** beyanından en az
@@ -159,6 +171,58 @@ sayar, ya da (b) ajan bu dalda bildirimi **hiç göndermez** (iptal edilecek bir
 deftere yazılacak bir şey de yok). (b) daha basit ama "kasiyer düğmeye bastı" olgusunu
 platformdan gizler. Ölçmeden karar verilmemeli: **bu dal bugüne dek sahada hiç koşmadı.**
 
+### 10. W83 — `voidedPaymentCount` DARALTILMAZ, BÖLÜNÜR
+
+**Ölçüm (VO05, fiş 88/10):** üç başarısız kart denemesi olan fişin iptalinde gövde
+`voidedPaymentCount 3` + `voidedAmountMinor 0` gönderdi — *"üç ödeme geri alındı, sıfır lira"*.
+Kasa "3 ödeme geri alındı" gördü; oysa hiç para yoktu.
+**Cihaz ikisini zaten ayrı tutuyor:** `totalNumberOfPayments 3` ve `TotalReceiptPayment 0`.
+- `voidedPaymentCount` → **`payAmount > 0` olan satırlar** (o vakada **0**) — `voidedAmountMinor`
+  ile aynı tabana oturur, çift artık tutarlı olur.
+- `voidedAttemptCount` (**yeni**) → tüm satırlar (o vakada **3**) — başarısız denemeler görünür
+  kalır; `NO_RESPONSE` incelemesinde ihtiyaç duyulan sayı budur.
+⚠️ Platform `voidedPaymentCount`u bugün "deneme sayısı" diye okuyorsa **anlamı sessizce
+çevirmeyin**; o hâlde yalnız yeni alan eklenir. (Platform ölçümü: `expectedVoidCount` zaten
+APPROVED sayısı → hizalama doğru yönde.)
+
+### 11. W88 — BAŞARISIZLIK DALINDA TUTAR **NİYET** TAŞIYOR
+
+**Ölçüm (fiş 88/11, 18:11):** `VoidPayment` zaman aşımına uğradı; gövde aynı anda
+`Result "Failure"` + `reason VOID_INCOMPLETE` **ve** `voidedPaymentCount 1` +
+`voidedAmountMinor 941` dedi. Platform **400 `invalidResult`** ile reddetti — gövde kendi içinde
+çelişkili olduğu için makul. Kaynak: `GmpTerminalTransport.Iptal.cs:173` başarısızlık dalında
+`VoidedPaymentCount: sayi, VoidedAmountMinor: tutar` yine dolduruluyor.
+**Kural:** başarısızlıkta **`voidedPaymentCount = 0`, `voidedAmountMinor = 0`**; niyet ayrı alanda:
+**`attemptedVoidAmountMinor`** / **`attemptedVoidCount`**. "Ne kadar geri alındı" ile "ne kadarını
+geri almaya çalıştık" iki ayrı sorudur.
+**Yan etki (istenen):** gövde çelişkisi kalkınca P130 kapısı da geçilebilir hâle gelir.
+
+### 12. W86 — SATIR YOKKEN `reason` VARSAYILANI KESİN KONUŞUYOR
+
+**Ölçüm (18:00, zaman aşımı 5112):** cihazda **hiç ödeme satırı oluşmadı**
+(`totalNumberOfPayments 0`). Yoklama sebepsiz `NotLanded` döndürdü ve
+`AgentOrchestrator.cs:256` varsayılanı devreye girdi: `Reason: sonuc.Reason ?? NotLanded` →
+gövde **`reason NOT_LANDED`** ("hiç başlamadı") dedi, `ErrorCondition` **`PaymentRestriction`**
+oldu, platform **REJECTED** yazdı ve **banka incelemesi açılmadı**.
+Oysa elimizdeki kanıt yalnız **mali taraf** (fişte para yok, sayaç kıpırdamadı); zaman aşımının
+**banka tarafında** ne olduğu bilinmiyor — ve zaman aşımı yetim provizyonun klasik senaryosudur.
+**Kural:** satır oluşmadığında da **`info: NOT_LANDED` gönderilsin** (kanıt sağlam: `delta = 0`
+**ve** `PaymentCount` değişmedi) ama **`reason` UYDURULMASIN**. `??` varsayılanı, kanıtın
+yokluğunu olumlu bir iddiaya çevirmemeli.
+**Aynı aile:** `NO_RESPONSE` dalında cihazın ödeme satırındaki alanlar (`inputType`, `pan`,
+`rrn`, `authorizeCode`) **kanıt sayılmaz** — onları dolduracak cevap zaten gelmemiştir; cihaz
+o satırı `(00000000)-DEFAULT` ile doldurduğunu kendisi yazıyor. Ayrım ancak **bağımsız bir
+kanaldan** kurulabilir (bkz. W85/W99/W100, ya da insan tanıklığı).
+
+### 13. UYGULAMA SIRASI VE YENİ DEĞİŞMEZ
+
+Sıra: **ajan → platform → kasa → panel.** Ajan alanları göndermeden platform okuyamaz; platform
+kaydetmeden kasa gösteremez.
+**Yeni değişmez (ajan tarafında test edilebilir):**
+`sum(ticket_payments.collected_minor) == closed_tickets.paid_minor`
+Bugün bu değişmez YOK ve dört kez kırıldı (88/2: 7150 ↔ 6793 · 88/4: 990 ↔ 941 · FR30: 3380 ↔ 2311
+· 88/11: 3380 ↔ 2331).
+
 ## Testler (mutasyonla kanıtlanacak)
 1. `Collected != Requested` → `ApprovedAmountMinor` **istenen** kalır (platform
    eşleştirmesi kırılmasın) VE `CollectedAmountMinor` tahsil edileni taşır.
@@ -168,7 +232,13 @@ platformdan gizler. Ölçmeden karar verilmemeli: **bu dal bugüne dek sahada hi
    Mutasyon: `:245`'teki eski şartı geri koy → KIRMIZI.
 4. `Collected != delta` → hiçbir tutar iddia edilmez.
 5. `ticket_payments` toplamı = `closed_tickets.paid_minor`.
-6. `stan 0 && rrn boş && inputType 0` → sebep `BANK_DECLINED` **değil**.
+6. `authorizeCode "" && rrn "" && payAmount 0` → sebep `BANK_DECLINED` **değil**
+   (⚠️ `stan` KULLANILMAZ — çürütüldü, bkz. §7).
+7. Başarısız iptalde `voidedAmountMinor == 0` ve `attemptedVoidAmountMinor == 941`.
+   Mutasyon: eski hâli geri koy (niyeti `voidedAmountMinor`e yaz) → KIRMIZI.
+8. `voidedPaymentCount` yalnız `payAmount > 0` satırları sayar; `voidedAttemptCount` hepsini.
+9. Ödeme satırı hiç oluşmadığında `info == NOT_LANDED` ve `reason` **konmaz**.
+10. Kapanış okuması başarısızken `deviceRemainingMinor` **yok** (uydurulmuş sıfır gitmez).
 
 ## Kapsam dışı
 `bekleMs` negatif (−2, −10, −20, −69) → **W80**, ayrı ve küçük.
