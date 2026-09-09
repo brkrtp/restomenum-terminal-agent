@@ -67,8 +67,11 @@ public class GmpTerminalTransportTests
         }
         /// <summary>W109: her baskı/kapatma çağrısına GEÇİLEN zaman aşımı — bütçenin çivisi bunu okur.</summary>
         public List<(string Ad, int? Sure)> Sureler { get; } = new();
+        /// <summary>Baskı ÇAĞRISI SIRASINDA çalışır — "süreç tam burada ölseydi ne kalırdı"
+        /// sorusunu ölçmenin tek yolu. Çağrıdan önce/sonraki hâl bunu gösteremez.</summary>
+        public Action? BaskiSirasinda;
         public GmpResult PrintTotalsAndPayments(ulong h, int? t = null)
-        { Sureler.Add(("PrintTotalsAndPayments", t)); return Kod("PrintTotalsAndPayments"); }
+        { Sureler.Add(("PrintTotalsAndPayments", t)); BaskiSirasinda?.Invoke(); return Kod("PrintTotalsAndPayments"); }
         public GmpResult PrintBeforeMF(ulong h, int? t = null)
         { Sureler.Add(("PrintBeforeMF", t)); return Kod("PrintBeforeMF"); }
         public GmpResult PrintUserMessage(ulong h) => Kod("PrintUserMessage");
@@ -88,7 +91,9 @@ public class GmpTerminalTransportTests
         public GmpResult VoidPayment(ulong h, int i) => Kod("VoidPayment");
         public GmpResult Close(ulong h, int? t = null)
         { Sureler.Add(("Close", t)); return Kod("Close"); }
-        public GmpResult Echo() => Kod("Echo");
+        /// <summary>Cihazin HAM durum alani (W112). Saglikli olcum: 0x0000001D.</summary>
+        public uint EchoStatus = 0x0000001D;
+        public GmpResult Echo(out uint status) { status = EchoStatus; return Kod("Echo"); }
         public GmpResult GetPaymentApplicationsRaw(out string json, out int total, out int received, byte requested = 20)
         { json = "[]"; total = 0; received = 0; return Kod("GetPaymentApplications"); }
         public GmpResult Pair(GmpPairingConfig c, out GmpDeviceInfo i)
@@ -2036,6 +2041,24 @@ public class GmpTerminalTransportTests
     }
 
     [Fact]
+    public async Task CIHAZ_KAGIT_BITTI_derse_sebep_OUT_OF_PAPER_olur()
+    {
+        var (t, g) = TamOdemeKur();
+        g.Codes["PrintBeforeMF"] = GmpCodes.NoPaper;   // 0x0020 — SAHADA ÖLÇÜLDÜ 2026-09-10 02:21
+
+        var r = await t.SaleAsync(Req(amount: 990, paymentType: GmpPaymentTypes.Cash, satisToplam: 990));
+
+        // ← ÇİVİ: bu bir ÇIKARIM DEĞİL, cihazın BEYANI. Uzun süre "kâğıt hakkında sıfır ölçümümüz
+        // var" dedik ve haklıydık — 10 sn'lik zaman aşımı cihazı cevap veremeden kesiyordu.
+        // Süre uzayınca cihaz kodu gönderdi. Eşleme AJANDA çünkü sabit burada; kasada türetilseydi
+        // aynı sabit iki yerde tutulur ve biri sessizce kayardı.
+        Assert.Equal(TransportOutcome.Approved, r.Outcome);   // para ALINDI
+        Assert.Equal(RestomenumReasons.OutOfPaper, r.Reason);
+        Assert.Equal("PrintBeforeMF", r.PrintFailedStep);
+        Assert.Equal("0x0020", r.PrintFailedCode);            // HAM kod da gidiyor
+    }
+
+    [Fact]
     public async Task BASKI_RED_zaman_asimindan_AYRI_sebep_alir()
     {
         var (t, g) = TamOdemeKur();
@@ -2104,6 +2127,32 @@ public class GmpTerminalTransportTests
     }
 
     [Fact]
+    public async Task Isaret_baski_SIRASINDA_zaten_DURUYOR_surec_olurse_kaybolmasin()
+    {
+        // ← ÇİVİ: SAHADA ISIRDI (2026-09-10 02:05). Süreç baskı zincirinin ORTASINDA öldü
+        // (yayım için durduruldu, cihaz kâğıt bekliyordu). İşaret zincir DÖNDÜKTEN sonra
+        // yazıldığı için HİÇ yazılmadı ve fiş 990 kuruş tahsilatla açık kaldı — süpürme onu
+        // GÖRMEDİ. `closed_tickets`'ın kapattığı boşluğun birebir kardeşi.
+        //
+        // Doğru kural: TEHLİKELİ ADIMDAN ÖNCE kalıcı iz bırak. Bunu ancak baskı ÇAĞRISININ
+        // İÇİNDEN ölçebiliriz; öncesi/sonrası bu soruyu cevaplayamaz.
+        var g = new FakeGmp();
+        var snap = new FakeSnapshots();
+        g.Ticket = new GmpTicket(990, 0, 0, 0);
+        g.AfterPayment = new GmpTicket(990, 990, 1, GmpPaymentTypes.Cash);
+        int baskiAninda = -1;
+        g.BaskiSirasinda = () => baskiAninda = snap.Bekleyen.Count;
+        var t = new GmpTerminalTransport(g, snap);
+
+        var r = await t.SaleAsync(Req(amount: 990, paymentType: GmpPaymentTypes.Cash,
+            oturum: "oturum-A", satisToplam: 990));
+
+        Assert.Equal(1, baskiAninda);          // ← baskı sürerken işaret DURUYOR
+        Assert.Equal("CLOSED", r.TicketState);
+        Assert.Empty(snap.Bekleyen);           // ← zincir bitince düştü
+    }
+
+    [Fact]
     public async Task Baski_SORUNSUZSA_bekleyen_kayit_YAZILMAZ()
     {
         var g = new FakeGmp();
@@ -2119,7 +2168,8 @@ public class GmpTerminalTransportTests
 
         Assert.NotNull(r.TicketId);          // kapı gerçekten sınanabilir durumda
         Assert.Equal("CLOSED", r.TicketState);
-        // ← ÇİVİ: her kapanışa kayıt yazsaydık süpürme her satıştan sonra cihaza giderdi.
+        // ← ÇİVİ: zincir tamamlanınca işaret DÜŞER. Kalsaydı süpürme her başarılı satıştan
+        // sonra cihaza gider ve kapanmış fişi boş yere yoklardı.
         Assert.Empty(snap.Bekleyen);
     }
 

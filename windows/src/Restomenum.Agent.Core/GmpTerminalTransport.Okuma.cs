@@ -283,5 +283,13 @@ public sealed partial class GmpTerminalTransport
             RemainingMinor: simdi.RemainingMinor, CounterRead: true);
     }
 
-    public Task<bool> EchoAsync(CancellationToken ct = default) => Task.Run(() => _gmp.Echo().Ok, ct);
+    public Task<bool> EchoAsync(CancellationToken ct = default) => Task.Run(() =>
+    {
+        var rc = _gmp.Echo(out var durum);
+        // W112: cihazın HAM durum alanı. Karar buna BAĞLANMIYOR — yalnız kayda geçiyor ki bir
+        // sonraki kâğıt/bloke olayında sağlıklı değerle (ölçüm: 0x001D) karşılaştırılabilsin.
+        // Alan bugüne kadar her eşleşmede geliyor ve ATILIYORDU.
+        _log("[gmp] echo", new { code = rc.ToString(), status = $"0x{durum:X8}" });
+        return rc.Ok;
+    }, ct);
 }

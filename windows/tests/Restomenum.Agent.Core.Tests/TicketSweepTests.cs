@@ -196,7 +196,7 @@ public class TicketSweepTests : IDisposable
         var (h, tasima) = Kur();
         tasima.Sonuc = new StuckTicketResult(false, false, false,
             new FisBitirmePlani(FisBitirmeAdimi.MfVeKapat, TicketFinish.Tamamlanabilir, 5),
-            0, "PrintMF", "0xF003");
+            0, "PrintMF", "0xF003");   // 0xF003 = ZAMAN AŞIMI → PAHALI deneme
         _store.MarkTicketNeedsFinish("tkt_1", "t1", "oturum-A", null, null, 0, _saatMs);
 
         // Sekiz denemeyi doldur (her turda geri çekilmeyi aş).
@@ -213,6 +213,30 @@ public class TicketSweepTests : IDisposable
         var kalan = Assert.Single(_store.PendingFinishes(_saatMs + (long)TimeSpan.FromDays(2).TotalMilliseconds));
         Assert.Equal(8, kalan.Attempts);
         Assert.Empty(_store.PendingFinishes(_saatMs));   // yakın vadede artık gelmiyor
+    }
+
+    [Fact]
+    public async Task KAGIT_YOK_denemeleri_UCUZ_oldugu_icin_SINIRLANMAZ()
+    {
+        // Kullanıcının talimatı (2026-09-10): "kâğıt bittiğini bildiriyorsa ... kalan 0 ise bir
+        // interval başlatıp fiş kapanışını otomatik yapsın BAŞARILI OLANA KADAR."
+        //
+        // ← ÇİVİ: W108'in sekiz denemede durma kuralı, denemenin PAHALI olduğu varsayımına
+        // dayanıyordu (her deneme cihazı dakikalarca kilitler). Bu, cihaz CEVAP VERMEDİĞİNDE
+        // doğru. Ama cihaz `0x0020` ile HIZLI ve KESİN cevap verdiğinde deneme UCUZDUR ve
+        // sınırlamak kullanıcının istediği davranışı bedelsizce engellemek olurdu.
+        var (h, tasima) = Kur();
+        tasima.Sonuc = new StuckTicketResult(false, false, false,
+            new FisBitirmePlani(FisBitirmeAdimi.MfVeKapat, TicketFinish.Tamamlanabilir, 5),
+            0, "PrintBeforeMF", "0x0020");
+        _store.MarkTicketNeedsFinish("tkt_1", "t1", "oturum-A", null, null, 0, _saatMs);
+
+        for (var i = 0; i < 12; i++) { await h.DrainOutboxAsync(); _saatMs += 10 * 60_000; }
+
+        // Sekizinci denemeden SONRA da denemeye devam etti.
+        Assert.True(tasima.Cagrilar.Count > 8, $"deneme sayısı {tasima.Cagrilar.Count}, 8'de durmamalıydı");
+        Assert.False(LogVar("otomatik denemeler DURDURULDU"));
+        Assert.Single(_store.PendingFinishes(_saatMs));
     }
 
     [Fact]

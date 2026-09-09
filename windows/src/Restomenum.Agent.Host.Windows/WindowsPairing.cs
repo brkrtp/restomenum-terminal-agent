@@ -23,12 +23,22 @@ public static class WindowsPairing
         var gmp = services.GetRequiredService<IGmpWrapper>();
 
         log.LogInformation("eşleştirme: Echo (bağlantı testi) — terminal GMP.XML'deki IP'de açık olmalı");
-        var echo = gmp.Echo();
+        var echo = gmp.Echo(out var cihazDurumu);
         if (!echo.Ok)
         {
             log.LogError("Echo BAŞARISIZ (rc={Rc}) — terminale ulaşılamıyor (IP/port/ağ?). Eşleşme YAPILMADI.", echo.Code);
             return false;
         }
+        // ── W112: CİHAZIN HAM DURUM ALANI ─────────────────────────────────────────
+        // `ST_ECHO.status` her eşleşmede geliyor ve bugüne kadar ATILIYORDU. Ölçüm (cihaz izi,
+        // 14 okuma): sağlıklı cihaz **0x0000001D**. Bloke olduğu tek anda (2026-09-10 02:05:48,
+        // ekranda "Kağıt bitti") yanıt `retcode 0` ile TAMAMEN SIFIR geldi.
+        // ⚠️ Bu farkın sebebi KANITLANMADI — "başarı + tüm alanlar sıfır" deseni
+        // `FP3_VoidPayment` hatasında da görüldü ve orada "boş yanıt" demekti; cihaz kâğıtsız
+        // değil MEŞGUL olduğu için de böyle dönmüş olabilir. Hiçbir karar buna bağlanmıyor;
+        // satır yalnız bir sonraki olayda karşılaştırma yapabilmek için var.
+        log.LogInformation("cihaz durumu (HAM, yorumlanmadı): status={Durum} — sağlıklı ölçüm 0x0000001D",
+            $"0x{cihazDurumu:X8}");
 
         gmp.CheckPairing(out var once);
         log.LogInformation("eşleşme durumu (önce): {Durum}", once ? "EŞLİ" : "eşli DEĞİL");

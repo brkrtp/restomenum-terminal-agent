@@ -103,6 +103,29 @@ public sealed class LocalSaleHandler : IDeviceIdleGate
     /// </summary>
     private const int TamamlamaOtomatikSiniri = 8;
 
+    /// <summary>
+    /// <b>W114 — hangi başarısızlıklar OTOMATİK SINIRA TABİ.</b>
+    ///
+    /// <para>Kullanıcının talimatı (2026-09-10): <i>"kâğıt bittiğini bildiriyorsa ... kalan 0 ise
+    /// bir interval başlatıp fiş kapanışını otomatik yapsın BAŞARILI OLANA KADAR."</i> Bu, W108'in
+    /// sekiz denemede durma kuralıyla çelişiyordu. Çelişkiyi çözen şey ölçüm oldu:</para>
+    ///
+    /// <para><b>W108'in gerekçesi denemenin PAHALI olduğu varsayımıydı</b> — her deneme cihazı
+    /// dakikalarca kilitler. Bu, cihaz CEVAP VERMEDİĞİNDE doğru (zaman aşımı: adım başına 100 sn).
+    /// Ama cihaz <c>0x0020</c> ile <b>hızlı ve kesin</b> cevap verdiğinde deneme UCUZDUR — saniye
+    /// mertebesinde. Ucuz bir denemeyi sınırlamak, kullanıcının istediği "başarılı olana kadar"
+    /// davranışını bedelsizce engellemek olurdu.</para>
+    ///
+    /// <para>Kural: <b>bedeli olan denemeler sınırlanır, bedeli olmayanlar sınırlanmaz.</b>
+    /// Zaman aşımı ve bütçe bitişi PAHALI; cihazın kesin cevabı (kâğıt yok gibi) UCUZ.</para>
+    /// </summary>
+    private static bool PahaliBasarisizlik(string? kod) =>
+        // Kod okunamadıysa PAHALI say: bilinmeyeni ucuz saymak, sınırı sessizce kaldırmak olurdu.
+        kod is null
+        || kod.Equals($"0x{GmpCodes.Timeout:X4}", StringComparison.OrdinalIgnoreCase)
+        || kod.Equals($"0x{GmpCodes.Timeout2:X4}", StringComparison.OrdinalIgnoreCase)
+        || kod.Equals($"0x{GmpCodes.BudgetExhausted:X4}", StringComparison.OrdinalIgnoreCase);
+
     /// <summary>Otomatik sınır dolunca kaydın ertelendiği süre — insan ölçeği, cihaz ölçeği değil.</summary>
     private static readonly TimeSpan TamamlamaErtelemesi = TimeSpan.FromHours(24);
 
@@ -1109,8 +1132,10 @@ public sealed class LocalSaleHandler : IDeviceIdleGate
             // ŞART ②: ertelenir, sayılır; eşiği aşınca ses yükselir. Vazgeçilmez.
             var deneme = _store.MarkFinishAttempt(f.TicketId, s.BasarisizAdim, s.Kod, simdi);
 
-            // W108: otomatik pencere doldu — cihazı rehin almayı bırak, insanı bekle.
-            if (deneme >= TamamlamaOtomatikSiniri)
+            // W108/W114: otomatik pencere YALNIZ PAHALI denemeler için dolar. Cihaz hızlı ve
+            // kesin cevap veriyorsa (ör. `0x0020` kâğıt yok) denemek cihazı rehin almaz ve
+            // kullanıcının istediği gibi "başarılı olana kadar" sürer.
+            if (deneme >= TamamlamaOtomatikSiniri && PahaliBasarisizlik(s.Kod))
             {
                 _store.DeferFinish(f.TicketId, TamamlamaErtelemesi, simdi);
                 _log("[uyarı] yarım fiş OTOMATİK tamamlanamadı — otomatik denemeler DURDURULDU " +

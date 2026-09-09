@@ -264,6 +264,21 @@ public static class GmpCodes
     /// </summary>
     public const uint BudgetExhausted = 0xFF01;
 
+    /// <summary>
+    /// <b>KÂĞIT BİTTİ</b> (<c>TRAN_RESULT_NO_PAPER</c>, <c>GmpInterop.cs:4145</c>).
+    ///
+    /// <para><b>Sahada ÖLÇÜLDÜ (2026-09-10 02:21):</b> <c>PrintBeforeMF</c> bu kodu döndürdü ve
+    /// kasaya <c>printFailedCode "0x0020"</c> olarak ulaştı. ⚠️ Daha önce "cihaz kâğıt kodunu
+    /// hiçbir izde döndürmedi" demiştim — <b>YANLIŞTI</b>. Sebebi büyük olasılıkla şu: 23:07'de
+    /// zaman aşımı 10 sn'ydi ve cihaz cevabını veremeden kesiliyorduk. W104'ün uzattığı süre
+    /// yalnız kurtarmayı değil <b>teşhisi</b> de mümkün kılmış.</para>
+    ///
+    /// <para><b>Ve bu kod HIZLI geliyor</b> — zaman aşımı değil, kesin bir ret. Bu ayrım
+    /// süpürmenin deneme politikasını belirliyor (<c>LocalSaleHandler</c>): ucuz denemeler
+    /// sınırlanmaz, pahalı (zaman aşımına düşen) denemeler sınırlanır.</para>
+    /// </summary>
+    public const uint NoPaper = 0x0020;
+
     public static bool IsTimeout(uint c) => c == Timeout || c == Timeout2;
 }
 
@@ -745,7 +760,24 @@ public interface IGmpWrapper
 
     /// <inheritdoc cref="PrintTotalsAndPayments" path="/param[@name='timeoutMs']" />
     GmpResult Close(ulong handle, int? timeoutMs = null);
-    GmpResult Echo();
+    /// <param name="status">
+    /// <b>W112 — cihazın HAM durum alanı</b> (<c>ST_ECHO.status</c>). Yorumlanmaz.
+    ///
+    /// <para><b>Neden eklendi:</b> alan cihazdan HER eşleşmede geliyordu ve <b>atılıyordu</b>
+    /// (aynı <c>TransactionFlags</c> hikâyesi). 2026-09-10'da cihaz kâğıtsız kalıp ekranında
+    /// "Kağıt bitti" yazdı; kâğıt durumunun okunabilir olup olmadığını soramadık çünkü elimizde
+    /// hiçbir durum alanı yoktu.</para>
+    ///
+    /// <para><b>Ölçüm (izden, 14 okuma):</b> sağlıklı cihaz <c>0x001D</c> döndürüyor. Bloke
+    /// olduğu tek anda (02:05:48) yanıt <c>retcode 0</c> ile <b>tamamen sıfır</b> geldi
+    /// (status 0, ZNo 0, FisNo 0). ⚠️ Bu farkın sebebi KANITLANMADI: "başarı + tüm alanlar
+    /// sıfır" deseni <c>FP3_VoidPayment</c> hatasında da görüldü ve orada "boş yanıt" demekti.
+    /// Cihaz kâğıtsız DEĞİL, MEŞGUL olduğu için de böyle dönmüş olabilir.</para>
+    ///
+    /// <para>Bu yüzden alan <b>yalnız taşınır ve günlüğe yazılır</b>; hiçbir karar ona
+    /// bağlanmaz. Bir sonraki kâğıt olayında iki durumun farkı ÖLÇÜM olur.</para>
+    /// </param>
+    GmpResult Echo(out uint status);
 
     /// <summary>
     /// Cihazda KURULU odeme (banka) uygulamalarini okur — <c>FP3_GetPaymentApplicationInfo</c>.

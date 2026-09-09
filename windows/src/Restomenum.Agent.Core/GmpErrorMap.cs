@@ -319,6 +319,20 @@ public static class RestomenumReasons
     /// turuna düşer — biz devam edip başarırken. Bütçe, kasaya <b>KESİN</b> bir cevap dönmeyi
     /// baskıyı bitirmeye tercih eder; fişi kurtarma tamamlar (W105).</para>
     /// </summary>
+    /// <summary>
+    /// <b>KÂĞIT BİTTİ</b> — cihaz <c>0x0020 TRAN_RESULT_NO_PAPER</c> döndürdü. Ödeme alındı,
+    /// fiş açık kaldı.
+    ///
+    /// <para><b>Bu bir ÇIKARIM DEĞİL, cihazın beyanı.</b> Uzun süre "kâğıt hakkında hiçbir
+    /// ölçümümüz yok" dedik ve haklıydık — 10 sn'lik zaman aşımı cihazı cevap veremeden
+    /// kesiyordu. Süre uzayınca cihaz kodu gönderdi (ölçüm 2026-09-10 02:21).</para>
+    ///
+    /// <para><b>Eşleme neden AJANDA, kasada değil:</b> kod→anlam eşlemesi cihaz sözleşmesinin
+    /// parçası ve o sabit burada (<c>GmpCodes.NoPaper</c>). Kasada türetilseydi aynı sabit iki
+    /// yerde tutulur ve biri sessizce kayardı. <c>printFailedCode</c> yine HAM gidiyor.</para>
+    /// </summary>
+    public const string OutOfPaper = "OUT_OF_PAPER";
+
     public const string PrintBudgetExhausted = "PRINT_BUDGET_EXHAUSTED";
 
     /// <summary>

@@ -131,6 +131,19 @@ public class TicketQueryTests : IDisposable
     }
 
     [Fact]
+    public void KIMLIKSIZ_sorguda_bag_yoksa_NO_OPEN_TICKET_doner()
+    {
+        var s = TicketQueryHandler.Cevapla(_store, Istek());
+
+        // ← ÇİVİ: "bağlı açık fiş YOK" ile "bu fişi bilmiyorum" AYRI beyanlar ve eskiden ikisi
+        // de `UNKNOWN`dı. Kasa haklı olarak sordu: "kimliksiz UNKNOWN açık fiş yok demek mi?"
+        // Tek kelimeyle iki olguyu taşımak, okuyanın TAHMİN etmesini gerektiriyordu — ve yanlış
+        // tahminin bedeli ağır: gerçekten açık bir fişi kapandı sayıp adisyonu kapatmak.
+        Assert.Equal("NO_OPEN_TICKET", s.Durum);
+        Assert.Null(s.TicketId);
+    }
+
+    [Fact]
     public void Defterde_iz_YOKSA_UNKNOWN_doner_ACIK_DEMEZ()
     {
         var s = TicketQueryHandler.Cevapla(_store, Istek("tkt_bilinmeyen"));

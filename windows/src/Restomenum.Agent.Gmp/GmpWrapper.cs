@@ -355,12 +355,18 @@ public sealed partial class GmpWrapper : IGmpWrapper
             .Replace('\u00FE', '\u015F')   // ş
             .TrimEnd('\0', ' ');
 
-    public GmpResult Echo()
+    public GmpResult Echo(out uint status)
     {
+        status = 0;
         uint h = AcquireInterface();
         if (h == 0) return GmpCodes.PortNotOpen;
         var echo = new ST_ECHO();
-        return Json_GMPSmartDLL.FP3_Echo(h, ref echo, TimeoutEcho);
+        var rc = Json_GMPSmartDLL.FP3_Echo(h, ref echo, TimeoutEcho);
+        // W112: HAM taşınır. `retcode 0` ile birlikte 0 gelmesi "durum sıfır" DEĞİL, büyük
+        // ihtimalle "yanıt boş" demek (aynı desen `FP3_VoidPayment` hatasında görüldü) —
+        // ama bunu burada YORUMLAMIYORUZ, çağırana ham geçiyoruz.
+        status = echo.status;
+        return rc;
     }
 
     // ── Provisioning ─────────────────────────────────────────────────────────

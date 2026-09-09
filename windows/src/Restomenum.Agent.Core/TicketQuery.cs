@@ -35,9 +35,24 @@ public sealed record TicketQueryRequest(
 /// boş ile bilinmeyen karıştırılırsa kasa yanlış uyarı üretir, ki zaten olan tam olarak buydu.
 /// </summary>
 /// <param name="Durum">
-/// <c>"OPEN"</c> (defterde açık bağ), <c>"CLOSED"</c> (kapanış kaydı var),
-/// <c>"UNKNOWN"</c> (defterde iz yok — kapanıp saklama süresi dolmuş ya da bu ajanın hiç
-/// görmediği bir fiş olabilir). <b>UNKNOWN "açık" DEĞİLDİR</b> ve öyle yorumlanmamalı.
+/// <list type="bullet">
+///   <item><c>"OPEN"</c> — defterde bu terminale bağlı açık fiş var.</item>
+///   <item><c>"CLOSED"</c> — bu fişin kapanış kaydı var.</item>
+///   <item><c>"NO_OPEN_TICKET"</c> — <b>YALNIZ kimliksiz sorguda:</b> bu ajanın defterinde bu
+///   terminale bağlı AÇIK FİŞ YOK.</item>
+///   <item><c>"UNKNOWN"</c> — BELİRLİ bir fiş soruldu ve defterde izi YOK (kapanıp saklama
+///   süresi dolmuş ya da bu ajanın hiç görmediği bir fiş olabilir).</item>
+/// </list>
+///
+/// <para><b>İkisi neden AYRI değer (W113):</b> ikisi de eskiden <c>UNKNOWN</c>'dı ve kasa haklı
+/// olarak sordu: "kimliksiz UNKNOWN, açık fiş yok demek mi?" Tek kelimeyle iki farklı beyanı
+/// taşımak, okuyanın hangisi olduğunu TAHMİN etmesini gerektiriyordu — ve yanlış tahminin bedeli
+/// ağır: gerçekten açık bir fişi "kapandı" sayıp adisyonu kapatmak.</para>
+///
+/// <para>⚠️ <b><c>NO_OPEN_TICKET</c> "CİHAZDA açık fiş yok" DEMEK DEĞİLDİR</b>; "BU AJANIN
+/// DEFTERİNDE bağlı açık fiş yok" demektir. Sorgu cihaza GİTMEZ (gitse mali numara tüketirdi).
+/// Cihazda ajanın bilmediği bir fiş durabilir — cihaz menüsünden açılmış ya da bağı düşmüş.
+/// O vaka <c>BayatFisiTemizle</c>'nin işidir ve bir sonraki satışta yakalanır.</para>
 /// </param>
 /// <param name="LedgerWritten">
 /// Kapanış bildirimi outbox'a DEVREDİLDİ mi (<c>notified_at</c> dolu). Kasanın "ödeme deftere
@@ -95,6 +110,12 @@ public static class TicketQueryParser
 /// <summary>Sorguyu DEFTERDEN cevaplar. <b>Cihaza dokunmaz, kilit almaz.</b></summary>
 public static class TicketQueryHandler
 {
+    /// <summary>
+    /// Kimliksiz sorgu: bu ajanın defterinde bu terminale bağlı AÇIK FİŞ YOK.
+    /// <b>"Cihazda fiş yok" DEĞİL</b> — sorgu cihaza gitmez.
+    /// </summary>
+    public const string AcikFisYok = "NO_OPEN_TICKET";
+
     public static TicketQueryResult Cevapla(CommandStore defter, TicketQueryRequest istek)
     {
         // ── 1. BU TERMİNALDE AÇIK BAĞ VAR MI ──────────────────────────────────────
@@ -104,7 +125,9 @@ public static class TicketQueryHandler
         // Fiş belirtilmediyse soru "şu an açık fiş var mı".
         var hedef = istek.TicketId ?? acikFis;
         if (hedef is null)
-            return new TicketQueryResult("UNKNOWN", null, null, null, null, null, null, null, null);
+            // Kimliksiz soru + defterde bağ yok = "bağlı açık fiş YOK". Bunu `UNKNOWN` ile aynı
+            // kelimeye koymak, kasanın iki ayrı olguyu ayırt edememesi demekti.
+            return new TicketQueryResult(AcikFisYok, null, null, null, null, null, null, null, null);
 
         var bekleyen = defter.PendingFinishes(long.MaxValue).FirstOrDefault(x => x.TicketId == hedef);
         int? denemeler = bekleyen.TicketId == hedef ? bekleyen.Attempts : null;

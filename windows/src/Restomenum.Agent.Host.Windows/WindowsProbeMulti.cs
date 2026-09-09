@@ -63,7 +63,7 @@ public static class WindowsProbeMulti
                 return false;
             }
 
-            if (!gmp.Echo().Ok)
+            if (!gmp.Echo(out _).Ok)
             {
                 log.LogError("Echo BAŞARISIZ — terminale ulaşılamıyor, prova YAPILMADI");
                 return false;

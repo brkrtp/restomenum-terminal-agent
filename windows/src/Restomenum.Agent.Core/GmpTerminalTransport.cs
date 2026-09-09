@@ -357,27 +357,55 @@ public sealed partial class GmpTerminalTransport : ITerminalTransport
                         new { request.CommandId, fisId, cihazSatir, bizim = bizim.Count });
             }
 
+            // ── W111: İŞARET BASKIDAN **ÖNCE** YAZILIR ───────────────────────────
+            // Buraya YALNIZ fiş tam ödenmişken gelinir, yani fişte GERÇEK PARA var ve şimdi
+            // baskı zinciri başlayacak. Kayıt eskiden zincir DÖNDÜKTEN sonra yazılıyordu ve
+            // sahada bunun bedeli ölçüldü (2026-09-10 02:05): süreç zincirin ORTASINDA öldü
+            // (yayım için durduruldu, cihaz kâğıt bekliyordu) ve satır HİÇ yazılmadı — fiş
+            // 990 kuruş tahsilatla açık kaldı ama süpürme onu GÖRMEDİ.
+            //
+            // Bu, `closed_tickets`'ın kapattığı boşluğun birebir kardeşi: orada da "bağ silindi
+            // ama gövde yazılamadan süreç öldü" aralığı kalıcı bir kayıtla kapatılıyor. Aynı
+            // ilke: TEHLİKELİ ADIMDAN ÖNCE kalıcı iz bırak.
+            //
+            // Maliyeti her kapanışta bir yerel SQLite yazması; kazancı, süreç ölümünün fişi
+            // görünmez bırakmaması.
+            if (fisId is not null)
+                _snapshots?.MarkTicketNeedsFinish(fisId, request.TerminalId, request.SaleSessionId,
+                    null, null);
+
             var (kapanisHatasi, kapandi, baskiAdim, baskiKod) = Kapat(handle, butce);
             if (kapanisHatasi is not null) return kapanisHatasi;
             baskiAdimi = baskiAdim;
             baskiKodu = baskiKod?.ToString();
-            // ── W105: TEKRAR DENENEBİLİR OLSUN ────────────────────────────────────
-            // Buraya YALNIZ fiş tam ödenmişken gelinir (kapanış zinciri o hâlde çalışır), yani
-            // fişte GERÇEK PARA var ve fiş AÇIK kaldı. Kalıcı kayıt yazılmazsa bu fişi tekrar
-            // deneyecek hiçbir mekanizma yok: 2026-09-09'da tam bu boşluk 83 dakika sürdü ve
-            // ancak insan müdahalesiyle kapandı. Kayıt tetiği KANITTIR, yoklama değil.
-            if (!kapandi && fisId is not null)
-                _snapshots?.MarkTicketNeedsFinish(fisId, request.TerminalId, request.SaleSessionId,
-                    baskiAdim, baskiKodu);
+
+            if (fisId is not null)
+            {
+                if (kapandi)
+                    // Zincir tamamlandı: işaret düşer. (Bu satır ile `Close` arasında süreç
+                    // ölürse işaret KALIR ve süpürme cihazda açık fiş bulamayıp kaydı düşürür —
+                    // "kapandı" diye deftere YAZMADAN. Doğru taraf bu.)
+                    _snapshots?.ClearPendingFinish(fisId);
+                else
+                    // Zincir yarıda kaldı: hata alanlarını tazele. Deneme sayacı SIFIRLANMAZ.
+                    _snapshots?.MarkTicketNeedsFinish(fisId, request.TerminalId, request.SaleSessionId,
+                        baskiAdim, baskiKodu);
+            }
             if (baskiAdim is not null && baskiKod is { } bk)
                 // ⚠️ Zaman aşımı ile RET ayrı sebeplerdir: "cevap gelmedi" ile "cevap geldi ve
                 // hayır dedi" farklı olgular. `Close` ayrı: orada kâğıt/yazıcı sorusu yoktur.
-                baskiSebebi = bk.Code == GmpCodes.BudgetExhausted
-                    ? RestomenumReasons.PrintBudgetExhausted
-                    : baskiAdim == "Close"
+                baskiSebebi = bk.Code switch
+                {
+                    // Cihaz KÂĞIT BİTTİ dedi — çıkarım değil, beyan (ölçüm 2026-09-10 02:21).
+                    GmpCodes.NoPaper => RestomenumReasons.OutOfPaper,
+                    // Bütçe doldu, adım cihaza HİÇ gönderilmedi.
+                    GmpCodes.BudgetExhausted => RestomenumReasons.PrintBudgetExhausted,
+                    _ => baskiAdim == "Close"
                         ? RestomenumReasons.TicketCloseFailed
+                        // "cevap gelmedi" ile "cevap geldi ve hayır dedi" AYRI olgular.
                         : GmpCodes.IsTimeout(bk.Code) ? RestomenumReasons.PrintTimeout
-                                                      : RestomenumReasons.PrintFailed;
+                                                      : RestomenumReasons.PrintFailed,
+                };
             if (kapandi)
             {
                 fisDurumu = "CLOSED";
