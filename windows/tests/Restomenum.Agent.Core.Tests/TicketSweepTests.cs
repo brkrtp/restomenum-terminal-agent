@@ -186,6 +186,31 @@ public class TicketSweepTests : IDisposable
     }
 
     [Fact]
+    public async Task Otomatik_pencere_dolunca_CIHAZA_GIDILMEYI_BIRAKIR_ama_kayit_DURUR()
+    {
+        var (h, tasima) = Kur();
+        tasima.Sonuc = new StuckTicketResult(false, false, false,
+            new FisBitirmePlani(FisBitirmeAdimi.MfVeKapat, TicketFinish.Tamamlanabilir, 5),
+            0, "PrintMF", "0xF003");
+        _store.MarkTicketNeedsFinish("tkt_1", "t1", "oturum-A", null, null, 0, _saatMs);
+
+        // Sekiz denemeyi doldur (her turda geri çekilmeyi aş).
+        for (var i = 0; i < 10; i++) { await h.DrainOutboxAsync(); _saatMs += 10 * 60_000; }
+
+        // ← ÇİVİ: kâğıt gerçekten bittiyse her deneme `PrintMF`'te dakikalarca bloke olur ve
+        // cihaz o süre boyunca HERKESE kapalıdır. Sonsuza kadar denemek, cihazı rehin almak
+        // ve kasiyerin elle kurtarmasını da engellemek olurdu.
+        Assert.True(LogVar("otomatik denemeler DURDURULDU"));
+        Assert.Equal(8, tasima.Cagrilar.Count);   // sekizinciden sonra CİHAZA GİDİLMEDİ
+
+        // ← ÇİVİ: VAZGEÇME DEĞİL. Fişte gerçek para var; kayıt SİLİNMEZ ve elle tamamlama
+        // her an çalışır. Yalnız 24 saatlik insan ölçeğine çekilir.
+        var kalan = Assert.Single(_store.PendingFinishes(_saatMs + (long)TimeSpan.FromDays(2).TotalMilliseconds));
+        Assert.Equal(8, kalan.Attempts);
+        Assert.Empty(_store.PendingFinishes(_saatMs));   // yakın vadede artık gelmiyor
+    }
+
+    [Fact]
     public async Task Cihaz_MESGULSE_alarm_yukselmez_yalnizca_ertelenir()
     {
         var (h, tasima) = Kur();

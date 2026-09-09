@@ -637,6 +637,30 @@ public sealed class CommandStore : ITicketSnapshotStore, IDisposable
         }
     }
 
+    /// <summary>
+    /// <b>W108</b> — otomatik denemeler <b>İNSAN ÖLÇEĞİNE</b> ertelenir (varsayılan 24 saat).
+    ///
+    /// <para><b>Neden gerekli:</b> kâğıt gerçekten bittiyse her deneme <c>PrintMF</c>'te dakikalarca
+    /// bloke olur ve cihaz o süre boyunca HERKESE kapalıdır. Sonsuza kadar 5 dakikada bir denemek,
+    /// cihazı zamanın yarısında meşgul tutar ve kasiyer elle bile kurtaramaz.</para>
+    ///
+    /// <para><b>Bu VAZGEÇME DEĞİLDİR — kayıt SİLİNMEZ.</b> Fişte gerçek para var. Yalnız otomatik
+    /// dokunma insan ölçeğine çekilir; elle tamamlama (<c>--finish-ticket</c>) her an çalışır ve
+    /// <c>TicketQuery</c> durumu göstermeye devam eder.</para>
+    /// </summary>
+    public void DeferFinish(string ticketId, TimeSpan sure, long? now = null)
+    {
+        lock (_gate)
+        {
+            using var cmd = _conn.CreateCommand();
+            cmd.CommandText = "UPDATE pending_finish SET next_attempt_at = $sonra WHERE ticket_id = $f";
+            cmd.Parameters.AddWithValue("$f", ticketId);
+            cmd.Parameters.AddWithValue("$sonra",
+                (now ?? DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()) + (long)sure.TotalMilliseconds);
+            cmd.ExecuteNonQuery();
+        }
+    }
+
     /// <summary>Fiş tamamlandı (ya da artık açık değil) — kayıt düşer.</summary>
     public void ClearPendingFinish(string ticketId)
     {

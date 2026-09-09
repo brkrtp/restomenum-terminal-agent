@@ -1117,6 +1117,14 @@ public class GmpTerminalTransportTests
             Bekleyen.Remove(ticketId);
         }
 
+        /// <summary>Ertelenen fişler — sahtede zaman yürümediği için yalnız KAYDEDİLİR.</summary>
+        public Dictionary<string, TimeSpan> Ertelenen { get; } = new();
+        public void DeferFinish(string ticketId, TimeSpan sure, long? now = null)
+        {
+            BekleyenSirasi.Add("defer:" + ticketId);
+            Ertelenen[ticketId] = sure;
+        }
+
         /// <summary>Fiş → ödemeler (bizim paymentId'lerimiz).</summary>
         public Dictionary<string, List<TicketPaymentRow>> Odemeler { get; } = new();
         /// <summary>W79: kaydedilen TAHSİL tutarları — defter değişmezinin çivisi bunu okur.</summary>

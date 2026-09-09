@@ -145,6 +145,12 @@ public interface ITicketSnapshotStore
 
     /// <summary>Bekleyen tamamlama kaydını düşürür (tamamlandı ya da ortada fiş kalmadı).</summary>
     void ClearPendingFinish(string ticketId);
+
+    /// <summary>
+    /// <b>W108</b> — otomatik denemeleri insan ölçeğine erteler. <b>Vazgeçme DEĞİL, silme DEĞİL:</b>
+    /// fişte para var; yalnız cihazı süresiz meşgul etmeyi bırakırız.
+    /// </summary>
+    void DeferFinish(string ticketId, TimeSpan sure, long? now = null);
 }
 
 /// <summary>

@@ -89,6 +89,24 @@ public sealed class LocalSaleHandler : IDeviceIdleGate
     private const int TamamlamaAlarmEsigi = 5;
 
     /// <summary>
+    /// <b>W108</b> — kaç denemeden sonra OTOMATİK dokunma bırakılır (kayıt SİLİNMEZ).
+    ///
+    /// <para><b>Neden sınır gerekiyor:</b> kâğıt gerçekten bittiyse her deneme <c>PrintMF</c>'te
+    /// dakikalarca bloke olur ve cihaz o süre boyunca HERKESE kapalıdır. 5 dakikalık geri çekilme
+    /// ile sonsuza kadar denemek, cihazı zamanın kabaca yarısında meşgul tutardı — kasiyer elle
+    /// bile kurtaramaz. Sekiz deneme, geri çekilme eğrisiyle yaklaşık <b>yarım saatlik</b> bir
+    /// otomatik pencere demek: birinin kâğıdı değiştirmesine yeter, cihazı rehin almaya yetmez.</para>
+    ///
+    /// <para><b>Sonrasında ne olur:</b> kayıt <see cref="TamamlamaErtelemesi"/> kadar ertelenir ve
+    /// otomatik yol susar. Elle tamamlama her an çalışır; <c>TicketQuery</c> durumu göstermeye
+    /// devam eder. <b>Vazgeçme yok:</b> fişte gerçek para var.</para>
+    /// </summary>
+    private const int TamamlamaOtomatikSiniri = 8;
+
+    /// <summary>Otomatik sınır dolunca kaydın ertelendiği süre — insan ölçeği, cihaz ölçeği değil.</summary>
+    private static readonly TimeSpan TamamlamaErtelemesi = TimeSpan.FromHours(24);
+
+    /// <summary>
     /// Satış öncesi eşleme tazeleyici (W29). <c>null</c> = kapalı (test/eski davranış): satış
     /// diskteki eşlemeyle yapılır.
     /// </summary>
@@ -940,6 +958,20 @@ public sealed class LocalSaleHandler : IDeviceIdleGate
 
             // ŞART ②: ertelenir, sayılır; eşiği aşınca ses yükselir. Vazgeçilmez.
             var deneme = _store.MarkFinishAttempt(f.TicketId, s.BasarisizAdim, s.Kod, simdi);
+
+            // W108: otomatik pencere doldu — cihazı rehin almayı bırak, insanı bekle.
+            if (deneme >= TamamlamaOtomatikSiniri)
+            {
+                _store.DeferFinish(f.TicketId, TamamlamaErtelemesi, simdi);
+                _log("[uyarı] yarım fiş OTOMATİK tamamlanamadı — otomatik denemeler DURDURULDU " +
+                    "(kayıt SİLİNMEDİ, üzerinde PARA VAR). Kâğıt/yazıcı düzeltilince elle tamamlayın: " +
+                    "--finish-ticket --onayla", new
+                    {
+                        f.TicketId, deneme, adim = s.BasarisizAdim, kod = s.Kod,
+                        sonrakiOtomatikSaat = (int)TamamlamaErtelemesi.TotalHours,
+                    });
+                continue;
+            }
             var veri = new
             {
                 f.TicketId, deneme, adim = s.BasarisizAdim, kod = s.Kod,

@@ -1,4 +1,4 @@
-using Restomenum.Agent.Core;
+﻿using Restomenum.Agent.Core;
 using Xunit;
 
 namespace Restomenum.Agent.Core.Tests;
@@ -302,4 +302,36 @@ public class AgentOrchestratorTests : IDisposable
         Assert.DoesNotContain("pan", json, StringComparison.OrdinalIgnoreCase);
         Assert.DoesNotContain("track", json, StringComparison.OrdinalIgnoreCase);
     }
+    // ── W107: KASA 180 sn'DE PES EDERSE ─────────────────────────────────────────
+    //
+    // Kasa ölçtü (2026-09-10): `LOCAL_TIMEOUT_MS = 180 sn`. Ajanın kapanış zinciri en kötü
+    // hâlde bundan UZUN sürebiliyor (aşağıdaki `Zincirin_en_kotu_suresi_...` testine bakın).
+    // O hâlde kasa POST'u bırakır ve uzlaştırma turunda AYNI ServiceID ile yeniden gönderir.
+    // Sorulan tek soru şu: ikinci çağrı İKİNCİ BİR TAHSİLAT üretir mi?
+
+    [Fact]
+    public async Task Kasa_pes_edip_AYNI_ServiceID_ile_donerse_IKINCI_TAHSILAT_OLMAZ()
+    {
+        var sim = new SimulatorTransport();
+        sim.Expect(new TransportResult(TransportOutcome.Approved, ApprovedAmountMinor: 24000,
+            Rrn: "RRN1", ProviderResultCode: "0x0000"));
+        var orch = Orch(sim);
+        var son = DateTimeOffset.UtcNow.AddHours(1).ToUnixTimeMilliseconds();
+
+        var ilk = await orch.HandleAsync(Req(), son);
+        Assert.Equal(AgentDecision.Approved, ilk.Decision);
+
+        // Kasa 180 sn'de pes etti, uzlaştırma turunda AYNI zarfı yeniden gönderdi.
+        var ikinci = await orch.HandleAsync(Req(), son);
+
+        // ← ÇİVİ: cihaza İKİNCİ KEZ GİDİLMEZ. Saklanan sonuç replay edilir.
+        Assert.Single(sim.SaleCalls);
+        Assert.Equal(AgentDecision.Replayed, ikinci.Decision);
+        Assert.Equal(CommandState.COMPLETED, ikinci.State);
+    }
+
+    // Uçuşta kalmış bir denemede tekrar GÖNDERİLMEDİĞİ (cihaza SORULDUĞU) bu dosyada zaten
+    // çivili: `Busy_ParaHareketEtmisOlabilir_TerminaleSorulur` ve
+    // `Timeout_KismiOdeme_CiftTahsilatUretmez`. Kasanın 180 sn'lik kapısı o vakaların YENİ bir
+    // tetikleyicisi; kuralı değiştirmiyor, dolayısıyla ayrı bir çivi eklemiyorum.
 }
