@@ -321,6 +321,11 @@ Bunlar üretici belgesinde yazmıyor; sahada ölçülüp burada kayda geçti.
   dept 10 (%10) 891 kuruşluk kalem → `TotalReceiptTax` **81** = 891×10/110.
 - **`bankBkmId = 0` = "cihaz seçsin"** ve cihaz aynı fişte art arda iki denemede **farklı**
   banka seçebiliyor (GARANTİ 62 → AKBANK 46).
+- **Cihaz izi (`GMPDLL_*.TXT`) SÜREÇ BAŞINA DEĞİL, BOYUTA GÖRE döner** (`GMP.XML`
+  `LogFileSize: 5000000`). 2026-09-09'da 14:45 / 14:58 / 15:20 / 16:22 yeniden başlatmalarının
+  hiçbiri yeni dosya açmadı; 16:01:22'deki yeni dosya önceki 5 MB'a ulaştığı için açıldı.
+  **Yeniden başlatmadan sonra izi eski dosyada aramak gerekir.** İz dosyaları **cp1254**
+  kodludur (`iconv -f cp1254 -t utf-8`), aksi hâlde Türkçe fiş satırları bozuk okunur.
 ### İndirim (`ST_ITEM.promotion`) — hepsi ölçüldü
 
 Kaynak: `--discount-probe` (2026-09-09 14:57, tek fiş, altı adım) + canlı satış F70-R (15:26).
@@ -341,8 +346,24 @@ Kaynak: `--discount-probe` (2026-09-09 14:57, tek fiş, altı adım) + canlı sa
   (890) %10'u. `Minus`/`Dec` ile **ara toplam indirimi yapılamaz**; indeks 0-tabanlı kalem
   indeksidir. (Hem bizim hem karşı tarafın ilk varsayımı "bütün fiş"ti; ölçüm çürüttü.)
 - **`ticketMsg` boş gönderilir** — kullanıcı kararı: *"fişte ne yazacağını zaten sen
-  belirleyemezsin, terminal otomatik çıkarır"*. **Cihazın kâğıda ne bastığı henüz GÖRÜLMEDİ**
-  (yoklamada yazdırma yapılmadı); kanıt gerçek fişte.
+  belirleyemezsin, terminal otomatik çıkarır"*. **ÖLÇÜLDÜ (fiş 11/16/17):** cihaz boş
+  `ticketMsg` ile kendi etiketini basıyor — satır `İNDİRİM` adıyla, tutar sonunda `-` işaretiyle:
+  `"İNDİRİM                         *0,99-"`. Yani kendi etiketimizi göndermeye gerek yok
+  (W72 bu yüzden iptal edildi).
+- **Cihaz fişe bastığı satırları HER FİŞTE zaten gönderiyor** (`ST_TICKET.stPrinterCopy`,
+  `OptionFlags(Reload)` → `ECHO_PRINTER`). Ek bir çağrı gerekmez; kapanış `GetTicket`'inde gelir.
+  `totalNumberOfPrinterLines` cihazın BİLDİRDİĞİ toplam, gelen dizi ondan kısa olabilir —
+  *"üç satır bastı"* ile *"üç satırını gördük"* ayrı şeylerdir (günlükte `eksik` alanı).
+  W73b bu satırları günlüğe METİN olarak yazar; artık *"indirim fişte çıktı mı"* sorusu kâğıt
+  beklemeden cevaplanır:
+  ```
+  [gmp] fişe basılan satırlar { CommandId = …, adet = 2, cihazinBildirdigi = 2, eksik = False, satirlar =
+    1│Espresso               %10      *9,90 │
+    2│İNDİRİM                         *0,99-│ }
+  ```
+  Satırlar `│…│` ile sarılı: fiş sütun hizalı ve **sondaki boşluk anlamlı**. 6+ ardışık rakam
+  `***` ile maskelenir (`PrinterCopy.Read`) — kartlı fişte kopyada maskeli PAN olabilir ve bu
+  metin diske yazılır.
 
 - **Cihaz yeniden başlatıldığında açık fişin numarasına/sayacına ne olduğu ÖLÇÜLMEDİ.**
   Bir gözlemde (2026-09-09, 8 saatlik kesinti) `FNo` **1 arttı** (8 → 9) ve fişteki başarısız
