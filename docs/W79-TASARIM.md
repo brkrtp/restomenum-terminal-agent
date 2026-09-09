@@ -85,8 +85,23 @@ bakılır. FR30 bunu doğal olarak üretir.
 kod varsa `Refusal` + **`BANK_DECLINED`**. Ölçüldü (FR02 deneme 1): `AppErrorCode E003`
 "KULLANICI VAZGECTI" ile **banka hiç sorulmamıştı** — `stan 0`, `rrn ""`,
 `authorizeCode ""`, `inputType 0`, `pan ""`. Yani kullanılabilir kod ≠ banka reddi.
-**Üçüncü hâl** gerekiyor: *"bankaya gitmedi"*. Ayırt eden kanıt elde: `stan == 0 && rrn
-boş && inputType == 0`. Para güvenliği bugünkü hâlde de doğru (`Refusal` = tekrar güvenli),
+**Üçüncü hâl** gerekiyor: *"bankaya gitmedi"*.
+
+⚠️ **İLK ÖNERDİĞİM İMZA YANLIŞTI — ikinci ölçüm çürüttü.** `stan == 0 && rrn boş &&
+inputType == 0` demiştim. FR30 2. bacağında (17:13, aynı E003) **`stan = 722`** geldi, yani
+sıfır DEĞİL — oysa kart yine okutulmamıştı (`inputType 0`, `pan ""`) ve yetkilendirme yoktu
+(`rrn ""`, `authorizeCode ""`, `payAmount 0`). **`stan` yerel olarak deneme başına
+veriliyor; bankaya ulaşıldığının kanıtı DEĞİL.** İmzada kullanılamaz.
+
+**Ayakta kalan kanıt:** `authorizeCode == "" && rrn == "" && payAmount == 0` → yetkilendirme
+olmadı. Kart hiç okunmadıysa ayrıca `inputType == 0 && pan == ""`. İki ölçümde de dördü birden
+tuttu.
+
+⚠️ **METİN EŞLEŞTİRMESİ YASAK.** Aynı olay iki bankada iki farklı metin verdi:
+AKBANK → `ErrorMsg "KULLANICI VAZGECTI"`, `AppErrorMsg "İŞLEM ONAYLANMADI"`;
+GARANTİ BBVA → `ErrorMsg "KULLANICI VAZGEÇTİ"` (Ç/İ ile), `AppErrorMsg "(0000E003)-"`.
+Kararı **yalnız `AppErrorCode` + yukarıdaki alan kanıtı** kurmalı; metin teşhiste gösterilir,
+karar verdirmez. Para güvenliği bugünkü hâlde de doğru (`Refusal` = tekrar güvenli),
 yanlış olan kasiyere söylenen sebep: "banka reddetti" başka kart denetir; doğrusu "müşteri
 vazgeçti, aynı kartla tekrar dene". Yeni sebep adı platform sözleşmesini ilgilendirir →
 karşı tarafla kararlaştırılmalı.
