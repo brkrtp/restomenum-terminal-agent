@@ -42,12 +42,19 @@ başarısızlık yolunda `:214` zaten aynı kuralı kullanıyor). `Collected = s
 "bilmiyorum", yanlış tutardan iyidir.
 
 ### 2. Yeni alanlar (`TerminalTransport.cs:144` ve `:320` kayıtları)
-- `ApprovedAmountMinor` → **tahsil edilen** (anlamı değişiyor, adı değil: nexo
-  `AuthorizedAmount` "para hareket etti" demek, `SaleToPoiResponseBuilder.cs:43`).
-- `RequestedAmountMinor` (yeni) — kasanın istediği.
-- `BankDiscountMinor` (yeni) — `Requested − Collected`, yalnız **> 0** ise konur.
-  Negatif çıkarsa (tahsil > istenen) bu ayrı ve daha ciddi bir olaydır: alan konmaz,
-  `Unknown` + WARN.
+
+⚠️ **İLK TASARIMIM YANLIŞTI, PLATFORM ÖLÇÜMÜYLE DÜZELTİLDİ.** "`ApprovedAmountMinor` =
+tahsil edilen olsun" demiştim; platform tarafında `statusSink.js:236-240` onaylı sonuçta
+**bildirilen tutar `attempt.amountMinor`'a eşit değilse sonucu HİÇ KAYDETMİYOR** (K-10
+kapalı). Yani o değişiklik ıraksamayı düzeltmez, **sonucu tamamen kaybettirirdi** — bugünkü
+sessiz 357 kuruşluk fark yerine sessiz bir "sonuç yok" üretirdi. Doğrusu:
+
+- `ApprovedAmountMinor` → **İSTENEN tutar OLARAK KALIR** (platform eşleştirmesi buna bağlı).
+- `CollectedAmountMinor` (yeni) — cihazın gerçekten tahsil ettiği.
+- `MerchantDiscountMinor` (yeni) — `İstenen − Tahsil`, yalnız **> 0** ise konur.
+- `RequestedAmountMinor` (yeni) — açıkça yazılır; `ApprovedAmountMinor` ile aynı değer
+  olsa da okuyanın hangi sayının ne olduğunu tahmin etmesi gerekmesin.
+- Negatif fark (tahsil > istenen) ayrı ve daha ciddi bir olaydır: alan konmaz, WARN.
 
 ### 3. Günlük
 `Requested != Collected` olduğunda **WARN**: `{CommandId, istenen, tahsil, fark, banka, bkm}`.
@@ -60,9 +67,10 @@ Böylece **tutar uyuşmazlığı BİLDİRİLİR, banka yine de YAZILIR.** Bugün
 olguyu (tutar tutmuyor) iki karara birden bindiriyor ve doğru bilgiyi düşürüyor.
 
 ### 5. Defter
-`ticket_payments`: `amount_minor` = **tahsil edilen**; yeni sütun `requested_minor`
-(migration, `CommandStore.cs:145` şema bloğu). Böylece `ticket_payments` toplamı ile
-`closed_tickets.paid_minor` **tutar**.
+`ticket_payments`: `amount_minor` **istenen olarak kalır** (platformla aynı sayı,
+mutabakat tek eksende yürüsün); yeni sütun `collected_minor` (migration,
+`CommandStore.cs:145` şema bloğu). Değişmez: `sum(collected_minor)` = 
+`closed_tickets.paid_minor`. Bugün bu değişmez YOK ve 88/2'de 7150 ≠ 6793 olarak kırıldı.
 
 ### 6. Kısmi ödeme — ÖLÇÜLMEDİ
 `DeviceRemainingMinor` (`GmpTerminalTransport.cs:349`, `:333`) cihazın kendi
@@ -88,9 +96,10 @@ karşı tarafla kararlaştırılmalı.
 `AuthorizedAmount` = **tahsil edilen** kalır (sözleşme değişmez, §30.5).
 
 ## Testler (mutasyonla kanıtlanacak)
-1. `Collected != Requested` → `ApprovedAmountMinor` **tahsil edileni** taşır.
-   Mutasyon: `request.AmountMinor`'a geri döndür → KIRMIZI.
-2. `BankDiscountMinor` = fark, yalnız > 0'da konur.
+1. `Collected != Requested` → `ApprovedAmountMinor` **istenen** kalır (platform
+   eşleştirmesi kırılmasın) VE `CollectedAmountMinor` tahsil edileni taşır.
+   Mutasyon: `CollectedAmountMinor`'ı `request.AmountMinor`'dan doldur → KIRMIZI.
+2. `MerchantDiscountMinor` = fark, yalnız > 0'da konur.
 3. Tutar uyuşmazlığında **banka yine yazılır** (bugün NULL geliyor).
    Mutasyon: `:245`'teki eski şartı geri koy → KIRMIZI.
 4. `Collected != delta` → hiçbir tutar iddia edilmez.
