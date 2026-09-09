@@ -253,6 +253,17 @@ public static class GmpCodes
     /// <summary>Hat/kablo/GMP.XML yapılandırması eksik (`DLL_RETCODE_ACK_NOT_RECEIVED`).</summary>
     public const uint AckNotReceived = 0xF01B;
 
+    /// <summary>
+    /// <b>W109 — BİZİM ürettiğimiz kod, cihazdan GELMEZ.</b> Satışın toplam süre bütçesi doldu ve
+    /// adım cihaza HİÇ gönderilmedi. Cihaz kodlarıyla çakışmasın diye <c>0xFF</c> ön ekli aralıkta
+    /// (<c>DLL_RETCODE_*</c> ailesi <c>0xF0xx</c>).
+    ///
+    /// <para><b>Neden zaman aşımı ailesinden AYRI:</b> zaman aşımı "cihaza gittik, cevap gelmedi"
+    /// der — cihazda bir şey olmuş olabilir. Bu ise "cihaza HİÇ GİTMEDİK" der; o adım kesinlikle
+    /// gerçekleşmedi. İkisini karıştırmak, olmadığı KESİN olan bir şeyi belirsiz göstermek olurdu.</para>
+    /// </summary>
+    public const uint BudgetExhausted = 0xFF01;
+
     public static bool IsTimeout(uint c) => c == Timeout || c == Timeout2;
 }
 
@@ -711,10 +722,18 @@ public interface IGmpWrapper
     GmpResult Payment(ulong handle, GmpPaymentRequest request, out GmpTicket ticket);
 
     GmpResult GetTicket(ulong handle, out GmpTicket ticket);
-    GmpResult PrintTotalsAndPayments(ulong handle);
-    GmpResult PrintBeforeMF(ulong handle);
+    /// <param name="timeoutMs">
+    /// <b>W109</b> — bu çağrıya verilen süre (ms). <c>null</c> = sarmalayıcının kendi tavanı.
+    /// Çağıran, satışın TOPLAM bütçesinden kalanı geçirir (<see cref="BaskiButcesi"/>): adım adım
+    /// zaman aşımlarının toplamı kasanın 180 sn'lik POST kapısını aşıyordu ve kasa ÖNCE pes edip
+    /// denemeyi belirsiz bırakıyordu — biz devam edip başarırken.
+    /// </param>
+    GmpResult PrintTotalsAndPayments(ulong handle, int? timeoutMs = null);
+    /// <inheritdoc cref="PrintTotalsAndPayments" path="/param[@name='timeoutMs']" />
+    GmpResult PrintBeforeMF(ulong handle, int? timeoutMs = null);
     GmpResult PrintUserMessage(ulong handle);
-    GmpResult PrintMF(ulong handle);
+    /// <inheritdoc cref="PrintTotalsAndPayments" path="/param[@name='timeoutMs']" />
+    GmpResult PrintMF(ulong handle, int? timeoutMs = null);
     GmpResult VoidAll(ulong handle, out GmpTicket ticket);
 
     /// <summary>
@@ -724,7 +743,8 @@ public interface IGmpWrapper
     /// </summary>
     GmpResult VoidPayment(ulong handle, int paymentIndex);
 
-    GmpResult Close(ulong handle);
+    /// <inheritdoc cref="PrintTotalsAndPayments" path="/param[@name='timeoutMs']" />
+    GmpResult Close(ulong handle, int? timeoutMs = null);
     GmpResult Echo();
 
     /// <summary>

@@ -65,11 +65,16 @@ public class GmpTerminalTransportTests
             return new GmpResult(StaleHandles.Contains(h) ? GmpCodes.InvalidHandle
                 : Codes.TryGetValue("GetTicket", out var c) ? c : GmpCodes.Ok);
         }
-        public GmpResult PrintTotalsAndPayments(ulong h) => Kod("PrintTotalsAndPayments");
-        public GmpResult PrintBeforeMF(ulong h) => Kod("PrintBeforeMF");
+        /// <summary>W109: her baskı/kapatma çağrısına GEÇİLEN zaman aşımı — bütçenin çivisi bunu okur.</summary>
+        public List<(string Ad, int? Sure)> Sureler { get; } = new();
+        public GmpResult PrintTotalsAndPayments(ulong h, int? t = null)
+        { Sureler.Add(("PrintTotalsAndPayments", t)); return Kod("PrintTotalsAndPayments"); }
+        public GmpResult PrintBeforeMF(ulong h, int? t = null)
+        { Sureler.Add(("PrintBeforeMF", t)); return Kod("PrintBeforeMF"); }
         public GmpResult PrintUserMessage(ulong h) => Kod("PrintUserMessage");
-        public GmpResult PrintMF(ulong h)
-        { Calls.Add("PrintMF"); return new GmpResult(PrintMfFailures-- > 0 ? 1u : GmpCodes.Ok); }
+        public GmpResult PrintMF(ulong h, int? t = null)
+        { Sureler.Add(("PrintMF", t)); Calls.Add("PrintMF");
+          return new GmpResult(PrintMfFailures-- > 0 ? 1u : GmpCodes.Ok); }
         /// <summary>W60 yoklamasinin denedigi indirim cagrilari — istekler SIRAYLA kaydedilir.</summary>
         public List<(long Amount, string Text, int Index)> MinusCalls { get; } = new();
         public List<(int Rate, string Text, int Index)> DecCalls { get; } = new();
@@ -81,7 +86,8 @@ public class GmpTerminalTransportTests
         { DecCalls.Add((ratePercent, text, indexOfItem)); changedMinor = DecChanged; tk = Ticket; return Kod("Dec"); }
         public GmpResult VoidAll(ulong h, out GmpTicket tk) { var r = Kod("VoidAll"); tk = Ticket; return r; }
         public GmpResult VoidPayment(ulong h, int i) => Kod("VoidPayment");
-        public GmpResult Close(ulong h) => Kod("Close");
+        public GmpResult Close(ulong h, int? t = null)
+        { Sureler.Add(("Close", t)); return Kod("Close"); }
         public GmpResult Echo() => Kod("Echo");
         public GmpResult GetPaymentApplicationsRaw(out string json, out int total, out int received, byte requested = 20)
         { json = "[]"; total = 0; received = 0; return Kod("GetPaymentApplications"); }
@@ -2245,6 +2251,79 @@ public class GmpTerminalTransportTests
         Assert.Equal(TicketFinish.OdemeTamamlanmamis, s.Plan.Neden);
         Assert.Equal(new[] { "Start", "OptionFlags", "GetTicket" }, g.Calls);
         Assert.NotNull(snap.ReadOpenTicketBinding("t1"));   // ← bağ DURUYOR, silinmedi
+    }
+
+    [Fact]
+    public async Task BUTCE_bittiyse_baskiya_HIC_GIRILMEZ_ve_AYRI_sebep_doner()
+    {
+        var g = new FakeGmp();
+        var snap = new FakeSnapshots();
+        g.Ticket = new GmpTicket(990, 0, 0, 0);
+        g.AfterPayment = new GmpTicket(990, 990, 1, GmpPaymentTypes.Cash);
+        // Saat her okunuşta 60 sn atlıyor: bütçe ödeme biter bitmez tükeniyor.
+        long tik = 0;
+        var t = new GmpTerminalTransport(g, snap, tik: () => tik += 60_000,
+            butce: TimeSpan.FromSeconds(30));
+
+        var r = await t.SaleAsync(Req(amount: 990, paymentType: GmpPaymentTypes.Cash,
+            oturum: "oturum-A", satisToplam: 990));
+
+        // ← ÇİVİ: para ALINDI, sonuç `Approved` KALIR.
+        Assert.Equal(TransportOutcome.Approved, r.Outcome);
+        Assert.Equal("OPEN", r.TicketState);
+        // ← ÇİVİ: "cihaza gittik cevap gelmedi" (PRINT_TIMEOUT) ile "cihaza HİÇ GİTMEDİK" AYRI
+        // olgular. İkincisinde o adımın gerçekleşmediği KESİN; tek sebebe katlamak kesin olanı
+        // belirsiz göstermek olurdu.
+        Assert.Equal(RestomenumReasons.PrintBudgetExhausted, r.Reason);
+        Assert.Equal("PrintTotalsAndPayments", r.PrintFailedStep);
+        // ← ÇİVİ: cihaza GERÇEKTEN gidilmedi.
+        Assert.DoesNotContain("PrintTotalsAndPayments", g.Calls);
+        Assert.DoesNotContain("PrintMF", g.Calls);
+        Assert.DoesNotContain("Close", g.Calls);
+        // ← ÇİVİ: fiş açık kaldı ve KURTARMA için işaretlendi — bütçe kesintisi arızayı
+        // saklamıyor, kuyruğa alıyor.
+        Assert.Single(snap.Bekleyen);
+    }
+
+    [Fact]
+    public async Task Butce_PrintMF_TEKRARLARI_arasinda_biterse_TEKRAR_DENENMEZ()
+    {
+        // ← ÇİVİ: `PrintMF`'in ÜÇ denemesi zincirin EN BÜYÜK tek kalemiydi (3 × 100 sn = 300 sn)
+        // ve W104'ten ÖNCE de öyleydi — kasanın 180 sn'lik kapısını asıl aşan buydu. Tekrarlar
+        // bütçeden muaf tutulsaydı bütçe koymanın anlamı kalmazdı.
+        var g = new FakeGmp();
+        var snap = new FakeSnapshots();
+        g.Ticket = new GmpTicket(990, 0, 0, 0);
+        g.AfterPayment = new GmpTicket(990, 990, 1, GmpPaymentTypes.Cash);
+        g.PrintMfFailures = 3;                   // üçü de başarısız olacaktı
+        long tik = 0;
+        // Her saat okumasında 1 sn ilerliyor; bütçe 4,5 sn. İki baskı adımı geçer, `PrintMF`
+        // BİR kez çalışır, ikinci tekrar için bütçe kalmaz.
+        var t = new GmpTerminalTransport(g, snap, tik: () => tik += 1_000,
+            butce: TimeSpan.FromMilliseconds(4_500));
+
+        await t.SaleAsync(Req(amount: 990, paymentType: GmpPaymentTypes.Cash,
+            oturum: "oturum-A", satisToplam: 990));
+
+        // ← ÇİVİ: ÜÇ değil BİR. Bütçe tekrarları da kısıtlıyor.
+        Assert.Equal(1, g.Calls.Count(x => x == "PrintMF"));
+    }
+
+    [Fact]
+    public async Task Butce_BOLKEN_adimlara_TAVAN_gecilir_kalan_degil()
+    {
+        var (t, g) = TamOdemeKur();
+
+        await t.SaleAsync(Req(amount: 990, paymentType: GmpPaymentTypes.Cash, satisToplam: 990));
+
+        // ← ÇİVİ: bütçe bolken davranış DEĞİŞMEMELİ — her adım kendi tavanını alır. Bütçe bir
+        // kısıt, bir hedef değil; normal satışı kısaltmak yazıcıyı boş yere zorlamak olurdu.
+        var baski = g.Sureler.Where(x => x.Ad != "Close").ToList();
+        Assert.NotEmpty(baski);
+        Assert.All(baski, x => Assert.Equal(100_000, x.Sure));
+        // `Close` bütçeden MUAF: baskı bitti, geriye yalnız fişi kapatmak kaldı ve onu bütçe
+        // yüzünden atlamak basılmış bir fişi AÇIK bırakmak olurdu.
+        Assert.Contains(g.Sureler, x => x.Ad == "Close" && x.Sure is null);
     }
 
     [Fact]

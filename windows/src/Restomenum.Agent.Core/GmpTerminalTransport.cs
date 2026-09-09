@@ -38,12 +38,24 @@ public sealed partial class GmpTerminalTransport : ITerminalTransport
     private readonly object _gate = new();
     private ulong _handle;
 
+    /// <summary>
+    /// <b>W109</b> — monotonik ms sayacı. Bütçe bir SÜRE ölçümüdür, saat değil: duvar saati NTP
+    /// ile geri atlarsa bütçe anında tükenmiş görünürdü.
+    /// </summary>
+    private readonly Func<long> _tik;
+
+    /// <summary>Satış çağrısının toplam süre bütçesi (bkz. <see cref="BaskiButcesi"/>).</summary>
+    private readonly TimeSpan _butce;
+
     public GmpTerminalTransport(
-        IGmpWrapper gmp, ITicketSnapshotStore? snapshots = null, Action<string, object?>? log = null)
+        IGmpWrapper gmp, ITicketSnapshotStore? snapshots = null, Action<string, object?>? log = null,
+        Func<long>? tik = null, TimeSpan? butce = null)
     {
         _gmp = gmp;
         _snapshots = snapshots;
         _log = log ?? ((_, _) => { });
+        _tik = tik ?? (() => Environment.TickCount64);
+        _butce = butce ?? BaskiButcesi.Varsayilan;
     }
 
     public PaymentModel Model => PaymentModel.Incremental;
@@ -78,6 +90,12 @@ public sealed partial class GmpTerminalTransport : ITerminalTransport
                 RestomenumReasons.ProductUnmapped);
 
         _terminalId = request.TerminalId;
+
+        // ── W109: BÜTÇE SATIŞIN EN BAŞINDA BAŞLAR ────────────────────────────────
+        // Kasanın 180 sn'lik POST kapısı TÜM çağrıyı kapsıyor — yalnız baskıyı değil. Bütçeyi
+        // baskı zincirinde başlatmak, ödemenin yediği 90 sn'yi görmezden gelmek olurdu ve
+        // toplam yine kapıyı aşardı.
+        var butce = new BaskiButcesi(_butce, _tik);
 
         string? bilgi = null;
         string? fisId = null;                         // fisin kalici kimligi (P27)
@@ -339,7 +357,7 @@ public sealed partial class GmpTerminalTransport : ITerminalTransport
                         new { request.CommandId, fisId, cihazSatir, bizim = bizim.Count });
             }
 
-            var (kapanisHatasi, kapandi, baskiAdim, baskiKod) = Kapat(handle);
+            var (kapanisHatasi, kapandi, baskiAdim, baskiKod) = Kapat(handle, butce);
             if (kapanisHatasi is not null) return kapanisHatasi;
             baskiAdimi = baskiAdim;
             baskiKodu = baskiKod?.ToString();
@@ -354,10 +372,12 @@ public sealed partial class GmpTerminalTransport : ITerminalTransport
             if (baskiAdim is not null && baskiKod is { } bk)
                 // ⚠️ Zaman aşımı ile RET ayrı sebeplerdir: "cevap gelmedi" ile "cevap geldi ve
                 // hayır dedi" farklı olgular. `Close` ayrı: orada kâğıt/yazıcı sorusu yoktur.
-                baskiSebebi = baskiAdim == "Close"
-                    ? RestomenumReasons.TicketCloseFailed
-                    : GmpCodes.IsTimeout(bk.Code) ? RestomenumReasons.PrintTimeout
-                                                  : RestomenumReasons.PrintFailed;
+                baskiSebebi = bk.Code == GmpCodes.BudgetExhausted
+                    ? RestomenumReasons.PrintBudgetExhausted
+                    : baskiAdim == "Close"
+                        ? RestomenumReasons.TicketCloseFailed
+                        : GmpCodes.IsTimeout(bk.Code) ? RestomenumReasons.PrintTimeout
+                                                      : RestomenumReasons.PrintFailed;
             if (kapandi)
             {
                 fisDurumu = "CLOSED";

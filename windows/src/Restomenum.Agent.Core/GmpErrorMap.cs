@@ -305,4 +305,26 @@ public static class RestomenumReasons
     /// Baskı hatalarından ayrı: burada kâğıt/yazıcı sorusu yoktur, fiş kapanmamıştır.
     /// </summary>
     public const string TicketCloseFailed = "TICKET_CLOSE_FAILED";
+
+    /// <summary>
+    /// <b>W109</b> — satışın toplam süre bütçesi doldu; baskı adımı cihaza <b>HİÇ GÖNDERİLMEDİ</b>.
+    /// Ödeme alındı, fiş açık kaldı.
+    ///
+    /// <para><b>Neden <see cref="PrintTimeout"/>'tan AYRI:</b> zaman aşımı "cihaza gittik, cevap
+    /// gelmedi" der ve cihazda bir şey olmuş OLABİLİR. Bu ise "cihaza hiç gitmedik" der — o adımın
+    /// gerçekleşmediği KESİNDİR. İkisini tek sebebe katlamak, kesin olanı belirsiz göstermek olurdu.</para>
+    ///
+    /// <para><b>Neden bütçe var:</b> kasanın POST zaman aşımı 180 sn; ajanın adım adım süreleri
+    /// toplamda 600 sn'ye çıkabiliyordu. Kasa önce pes ederse deneme belirsiz kalır ve uzlaştırma
+    /// turuna düşer — biz devam edip başarırken. Bütçe, kasaya <b>KESİN</b> bir cevap dönmeyi
+    /// baskıyı bitirmeye tercih eder; fişi kurtarma tamamlar (W105).</para>
+    /// </summary>
+    public const string PrintBudgetExhausted = "PRINT_BUDGET_EXHAUSTED";
+
+    /// <summary>
+    /// <b>W109</b> — cihaz kilidi tavan süre içinde alınamadı; ödeme <b>cihaza HİÇ GİTMEDİ</b>.
+    /// Kesin rettir ve kesinlik hak edilmiştir: para hareket etmedi, kasa temiz bir şekilde
+    /// yeniden deneyebilir. Tavansız beklemek kasayı 180 sn'lik kapısında cevapsız bırakırdı.
+    /// </summary>
+    public const string TerminalBusy = "TERMINAL_BUSY";
 }

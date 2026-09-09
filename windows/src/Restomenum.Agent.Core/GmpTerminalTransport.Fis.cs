@@ -16,6 +16,12 @@
 public sealed partial class GmpTerminalTransport
 {
     /// <summary>
+    /// <b>W109</b> — tek bir baskı adımına verilecek ÜST sınır. Bütçeden kalan bundan azsa
+    /// kalan geçerlidir; bu tavan "tek bir adım bütçenin tamamını yutmasın" içindir.
+    /// </summary>
+    private const int ButceAdimTavani = 100_000;
+
+    /// <summary>
     /// Acik fise devam etmeden onceki guvenlik kontrolleri. <c>null</c> = devam edilebilir.
     ///
     /// <para><b>Neden sart:</b> bag "bu fis bu satisa ait" der ama fisin ICERIGININ hala o satisla
@@ -157,12 +163,13 @@ public sealed partial class GmpTerminalTransport
     /// fiş açık" ÇELİŞKİSİNDEN çıkarabiliyordu — ve kısmi ödemede o çelişki hiç oluşmaz
     /// (kalan zaten 0 değildir), yani arıza kasada GÖRÜNMEZDİ.</para>
     /// </returns>
-    private (TransportResult? Hata, bool Kapandi, string? Adim, GmpResult? Kod) Kapat(ulong handle)
+    private (TransportResult? Hata, bool Kapandi, string? Adim, GmpResult? Kod) Kapat(
+        ulong handle, BaskiButcesi butce)
     {
-        foreach (var (ad, cagri) in new (string, Func<GmpResult>)[]
+        foreach (var (ad, cagri) in new (string, Func<int, GmpResult>)[]
         {
-            ("PrintTotalsAndPayments", () => _gmp.PrintTotalsAndPayments(handle)),
-            ("PrintBeforeMF", () => _gmp.PrintBeforeMF(handle)),
+            ("PrintTotalsAndPayments", sure => _gmp.PrintTotalsAndPayments(handle, sure)),
+            ("PrintBeforeMF", sure => _gmp.PrintBeforeMF(handle, sure)),
             // ── W50: `PrintUserMessage` ÇIKARILDI ─────────────────────────────────
             // Ajan bu adımı BOŞ bir mesajla çağırıyordu (`GmpWrapper`: varsayılan
             // `ST_USER_MESSAGE`), yani basılan bir kullanıcı mesajı YOKTU — ama 14 kapanış
@@ -178,7 +185,19 @@ public sealed partial class GmpTerminalTransport
             // `PrintTotalsAndPayments` üçünün de ilk adımı.
         })
         {
-            var r = cagri();
+            // ── W109: BÜTÇE BİTTİYSE CİHAZA HİÇ GİTME ────────────────────────────
+            // Kasa 180 sn'de pes ederse deneme BELİRSİZ kalır ve uzlaştırma turuna düşer —
+            // biz devam edip başarırken. Yani "kasa bilmiyor, cihazda para alınmış". Baskıyı
+            // bırakıp KESİN bir cevap dönmek daha iyi: para alındı, fiş açık kaldı, sebebi
+            // yazılı, kurtarması var (W105).
+            var sure = butce.Sure(ButceAdimTavani);
+            if (sure is null)
+            {
+                _log("[gmp] BÜTÇE BİTTİ — baskıya girilmedi (ödeme ALINDI, fiş AÇIK kaldı)",
+                    new { ad, kalanMs = butce.KalanMs });
+                return (null, false, ad, GmpCodes.BudgetExhausted);
+            }
+            var r = cagri(sure.Value);
             // ⚠️ Baskı başarısız olsa bile ödeme ALINMIŞTIR. Burada `Declined` dönmek, alınmış bir
             // parayı "reddedildi" diye raporlamak olurdu — yanlış yön, tehlikeli yön.
             // Ama fiş de KAPANMADI: `Close`'a hiç gelinmedi.
@@ -197,7 +216,16 @@ public sealed partial class GmpTerminalTransport
         GmpResult? mfKodu = null;
         for (var i = 0; i < 3; i++)
         {
-            var mf = _gmp.PrintMF(handle);
+            // Üç deneme bütçenin EN BÜYÜK tek kalemiydi (3 × 100 sn = 300 sn). Artık üçü de
+            // AYNI bütçeden yiyor: bütçe biterse tekrar denenmez.
+            var mfSure = butce.Sure(ButceAdimTavani);
+            if (mfSure is null)
+            {
+                mfKodu = GmpCodes.BudgetExhausted;
+                _log("[gmp] BÜTÇE BİTTİ — PrintMF tekrarı yapılmadı", new { deneme = i + 1 });
+                break;
+            }
+            var mf = _gmp.PrintMF(handle, mfSure.Value);
             if (mf.Ok) { mfKodu = null; break; }
             mfKodu = mf;
             _log("[gmp] PrintMF tekrar", new { deneme = i + 1, code = mf.ToString() });
@@ -206,6 +234,9 @@ public sealed partial class GmpTerminalTransport
             _log("[gmp] PrintMF ÜÇ DENEMEDE DE başarısız (ödeme ALINDI) — Close yine deneniyor",
                 new { code = mfBasarisiz.ToString() });
 
+        // `Close` bütçeden MUAF ve bilerek: baskı bitti, geriye yalnız fişi kapatmak kaldı.
+        // Onu bütçe yüzünden atlamak, basılmış bir fişi AÇIK bırakmak olurdu — en kötüsü.
+        // Kendi tavanı zaten 10 sn ve toplam hesabında o payla yer alıyor.
         var kapanis = _gmp.Close(handle);
         if (!kapanis.Ok)
         {

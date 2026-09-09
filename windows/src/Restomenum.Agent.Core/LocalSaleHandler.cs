@@ -107,6 +107,21 @@ public sealed class LocalSaleHandler : IDeviceIdleGate
     private static readonly TimeSpan TamamlamaErtelemesi = TimeSpan.FromHours(24);
 
     /// <summary>
+    /// <b>W109</b> — satış yolunda cihaz kilidini beklemenin ÜST sınırı.
+    ///
+    /// <para><b>Neden gerekli:</b> kilit eskiden tavansız bekleniyordu (<c>WaitAsync(ct)</c>).
+    /// Kasanın POST zaman aşımı 180 sn; önceki satış hâlâ basıyorsa ikinci istek kilitte bekler,
+    /// kasa pes eder ve <b>hiçbir şey öğrenemez</b> — zaman aşımı bütçesinin (<see cref="BaskiButcesi"/>)
+    /// bütün faydası tam burada kaybolurdu. Tavan 180'in ALTINDA: kasa her hâlde KESİN bir cevap alır.</para>
+    ///
+    /// <para>Süre dolarsa ödeme <b>cihaza HİÇ GİTMEZ</b> — para hareket etmedi, kesin ret güvenli.</para>
+    /// </summary>
+    public static readonly TimeSpan SatisKilitTavaniVarsayilan = TimeSpan.FromSeconds(150);
+
+    /// <summary>Etkin tavan — testte kısaltılabilir; üretimde varsayılan.</summary>
+    private readonly TimeSpan _satisKilitTavani;
+
+    /// <summary>
     /// Satış öncesi eşleme tazeleyici (W29). <c>null</c> = kapalı (test/eski davranış): satış
     /// diskteki eşlemeyle yapılır.
     /// </summary>
@@ -117,8 +132,9 @@ public sealed class LocalSaleHandler : IDeviceIdleGate
         ILineDepartmentResolver departments, IPaymentMethodResolver paymentMethods,
         IResultNotifier notifier, Outbox outbox, ITerminalTransport transport,
         Func<DateTimeOffset>? now = null, Action<string, object?>? log = null,
-        IMappingRefresher? mappingRefresher = null)
+        IMappingRefresher? mappingRefresher = null, TimeSpan? satisKilitTavani = null)
     {
+        _satisKilitTavani = satisKilitTavani ?? SatisKilitTavaniVarsayilan;
         _mappingRefresher = mappingRefresher;
         _transport = transport;
         _amounts = amounts;
@@ -692,7 +708,23 @@ public sealed class LocalSaleHandler : IDeviceIdleGate
         // Terminal başına TEK işlem (değişmez #4): eşzamanlı iki satış cihaz fişini bozar.
         AgentOutcome outcome;
         var tCihaz = _now();
-        await _islemKilidi.WaitAsync(ct);
+        // W109: TAVANLI bekleme. Tavansız beklemek, kasanın 180 sn'lik kapısında cevapsız
+        // kalmak demekti — üstelik cihaza hiç gitmemiş bir istek için.
+        if (!await _islemKilidi.WaitAsync(_satisKilitTavani, ct))
+        {
+            // Cihaza HİÇ GİDİLMEDİ: para hareket etmedi, kesin ret GÜVENLİ. Kasanın "bilinmiyor"
+            // ile uğraşması yerine net bir "şu an meşgul" alması her açıdan iyi.
+            _log("[yerel] terminal kilidi alınamadı — ödeme cihaza GİTMEDİ", new
+            {
+                req.ServiceId, req.PaymentId, tavanSn = (int)_satisKilitTavani.TotalSeconds,
+            });
+            // `PaymentRestriction` = KESİN RET (platformun kesin-ret listesi). Burada kesinlik
+            // HAK EDİLMİŞ: cihaza hiç gidilmedi, para hareket etmedi. `Busy` koşulu platformda
+            // "bilinmiyor"a eşleniyor ve kasayı boş yere uzlaştırma turuna sokardı.
+            // Gövde `paymentInvoked: false` taşır — "kart kesinlikle çekilmedi".
+            return SaleToPoiResponseBuilder.BuildFailure(req, "PaymentRestriction", "TERMINAL_BUSY",
+                _now(), reason: RestomenumReasons.TerminalBusy);
+        }
         try { outcome = await _orch.HandleAsync(sale, d.ExpiresAtMs, ct); }
         finally { _islemKilidi.Release(); }
         var cihazMs = (long)(_now() - tCihaz).TotalMilliseconds;

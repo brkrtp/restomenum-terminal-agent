@@ -1,4 +1,4 @@
-using System.Text.Json;
+﻿using System.Text.Json;
 using Restomenum.Agent.Core;
 using Xunit;
 
@@ -1217,4 +1217,62 @@ public class LocalSaleHandlerTests : IDisposable
 
         Assert.Equal(2, sim.SaleCalls.Count);
     }
+    // ── W109: CİHAZ KİLİDİNİ BEKLEMENİN TAVANI ──────────────────────────────────
+
+    [Fact]
+    public async Task Kilit_TAVAN_suresinde_alinamazsa_odeme_CIHAZA_GITMEZ_ve_KESIN_ret_doner()
+    {
+        // Kasa ölçtü: POST zaman aşımı 180 sn. Kilit eskiden TAVANSIZ bekleniyordu; önceki satış
+        // hâlâ basıyorsa ikinci istek orada bekler, kasa pes eder ve HİÇBİR ŞEY öğrenemez —
+        // zaman aşımı bütçesinin (W109) bütün faydası tam burada kaybolurdu.
+        var sim = new SimulatorTransport();
+        var orch = new AgentOrchestrator(_store, sim, _clock, RecoveryPolicy.Immediate);
+        _loglar.Clear();
+        var h = new LocalSaleHandler(
+            new FakeAmounts { Result = new PaymentDetailResult.Ok(Detail()) }, orch, _store,
+            new FakeResolver { Dept = 3 }, new FakePaymentMethods(), new FakeNotifier(), _outbox, sim,
+            now: () => DateTimeOffset.FromUnixTimeMilliseconds(_saatMs),
+            log: (m, o) => _loglar.Add((m, o)),
+            satisKilitTavani: TimeSpan.FromMilliseconds(50));
+
+        using var mesgul = h.TryAcquire();   // cihazı başka bir iş tutuyor
+        Assert.NotNull(mesgul);
+
+        // ⚠️ ZAMAN AŞIMLI BEKLE. Tavan kaldırılırsa (mutasyon: `WaitAsync(1 gün)`) bu çağrı
+        // SONSUZA KADAR ASILIR ve test "başarısız" değil "askıda" olur — mutasyon bataryası da
+        // testi çalıştıran süreç de kilitlenir (sahada bir kez oldu). Asılmayı BAŞARISIZLIĞA
+        // çevirmek, hatayı görünür kılmanın tek yolu.
+        var is_ = h.HandleAsync(Req());
+        var biten = await Task.WhenAny(is_, Task.Delay(TimeSpan.FromSeconds(10)));
+        Assert.True(biten == is_, "kilit tavanı yok: çağrı 10 sn içinde dönmedi (ASILDI)");
+        var govde = await is_;
+
+        var yanit = System.Text.Json.JsonDocument.Parse(govde).RootElement
+            .GetProperty("SaleToPOIResponse");
+        var resp = yanit.GetProperty("PaymentResponse").GetProperty("Response");
+
+        Assert.Equal("Failure", resp.GetProperty("Result").GetString());
+        // ← ÇİVİ: KESİN ret ve kesinlik HAK EDİLMİŞ — cihaza hiç gidilmedi, para hareket etmedi.
+        // `Busy` koşulu platformda "bilinmiyor"a eşleniyor ve kasayı boş yere uzlaştırma turuna
+        // sokardı; burada belirsizlik YOK.
+        Assert.Equal("PaymentRestriction", resp.GetProperty("ErrorCondition").GetString());
+        Assert.Equal("TERMINAL_BUSY", resp.GetProperty("AdditionalResponse").GetString());
+
+        var ek = yanit.GetProperty("Restomenum");
+        Assert.Equal("TERMINAL_BUSY", ek.GetProperty("reason").GetString());
+        // ← ÇİVİ: "kart KESİNLİKLE çekilmedi" — kasiyere söylenecek tek doğru cümle bunu gerektirir.
+        Assert.False(ek.GetProperty("paymentInvoked").GetBoolean());
+        // ← ÇİVİ: cihaza gerçekten GİDİLMEDİ.
+        Assert.Empty(sim.SaleCalls);
+    }
+
+    [Fact]
+    public void Kilit_tavani_kasanin_180_saniyesinin_ALTINDA()
+    {
+        // Aritmetik çivi: tavan 180'i aşarsa kasa yine cevapsız kalır ve bu düzeltmenin
+        // tamamı anlamsızlaşır. Sabit büyütülürse burası kırmızıya döner.
+        Assert.True(LocalSaleHandler.SatisKilitTavaniVarsayilan < TimeSpan.FromSeconds(180),
+            "satış kilidi tavanı kasanın 180 sn'lik POST kapısının ALTINDA olmalı");
+    }
+
 }

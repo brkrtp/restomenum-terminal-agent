@@ -218,18 +218,23 @@ public sealed partial class GmpWrapper : IGmpWrapper
         return rc;
     }
 
-    public GmpResult PrintTotalsAndPayments(ulong handle)
+    // W109 — çağıranın geçirdiği süre KENDİ tavanımızı aşamaz. Karar `BaskiButcesi.Kirp`'te
+    // (Core, testli): bu proje P/Invoke katmanı ve test projesi YOK; burada özel bir yardımcı
+    // olarak dururken mutasyon testi onu yeşil geçti.
+    private static int Sure(int? istenen, int tavan) => BaskiButcesi.Kirp(istenen, tavan);
+
+    public GmpResult PrintTotalsAndPayments(ulong handle, int? timeoutMs = null)
     {
         uint h = AcquireInterface();
         if (h == 0) return GmpCodes.PortNotOpen;
-        return GMPSmartDLL.FP3_PrintTotalsAndPayments(h, handle, TimeoutPrint);
+        return GMPSmartDLL.FP3_PrintTotalsAndPayments(h, handle, Sure(timeoutMs, TimeoutPrint));
     }
 
-    public GmpResult PrintBeforeMF(ulong handle)
+    public GmpResult PrintBeforeMF(ulong handle, int? timeoutMs = null)
     {
         uint h = AcquireInterface();
         if (h == 0) return GmpCodes.PortNotOpen;
-        return GMPSmartDLL.FP3_PrintBeforeMF(h, handle, TimeoutPrint);
+        return GMPSmartDLL.FP3_PrintBeforeMF(h, handle, Sure(timeoutMs, TimeoutPrint));
     }
 
     public GmpResult PrintUserMessage(ulong handle)
@@ -242,11 +247,11 @@ public sealed partial class GmpWrapper : IGmpWrapper
         return Json_GMPSmartDLL.FP3_PrintUserMessage(h, handle, ref msgs, (ushort)msgs.Length, ref stTicket, TimeoutDefault);
     }
 
-    public GmpResult PrintMF(ulong handle)
+    public GmpResult PrintMF(ulong handle, int? timeoutMs = null)
     {
         uint h = AcquireInterface();
         if (h == 0) return GmpCodes.PortNotOpen;
-        return GMPSmartDLL.FP3_PrintMF(h, handle, TimeoutPrintMf);
+        return GMPSmartDLL.FP3_PrintMF(h, handle, Sure(timeoutMs, TimeoutPrintMf));
     }
 
     public GmpResult VoidAll(ulong handle, out GmpTicket ticket)
@@ -270,11 +275,11 @@ public sealed partial class GmpWrapper : IGmpWrapper
         return Json_GMPSmartDLL.FP3_VoidPayment(h, handle, checked((ushort)paymentIndex), ref stTicket, TimeoutVoid);
     }
 
-    public GmpResult Close(ulong handle)
+    public GmpResult Close(ulong handle, int? timeoutMs = null)
     {
         uint h = AcquireInterface();
         if (h == 0) return GmpCodes.PortNotOpen;
-        return GMPSmartDLL.FP3_Close(h, handle, TimeoutDefault);
+        return GMPSmartDLL.FP3_Close(h, handle, Sure(timeoutMs, TimeoutDefault));
     }
 
     /// <summary>
