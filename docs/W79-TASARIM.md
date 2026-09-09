@@ -134,6 +134,31 @@ karşı tarafla kararlaştırılmalı.
 `requestedAmountMinor`, `collectedAmountMinor`, `bankDiscountMinor`; nexo tarafında
 `AuthorizedAmount` = **tahsil edilen** kalır (sözleşme değişmez, §30.5).
 
+### 8. AÇIK MADDE — P130 kapısı: `voidedPaymentCount 0` gönderirken kimlik ZORUNLU
+
+Platform ölçtü (`reversal.js:446`): `voidedPaymentCount 0` gelen bir iptalde gövde
+**`ticketId`** ya da **`cancelledSaleSessionId`** ya da **`TICKET_CANCELLED`** beyanından en az
+birini taşımak zorunda; yoksa **400**. W83 ile sayım `payAmount > 0`'a daraltılırsa bugün
+`3` giden alanlar `0`'a düşecek — yani bu kapı **W83'ten SONRA çok daha sık** çalınacak.
+
+Bugünkü gövdenin gerçek durumu (`SaleToPoiResponseBuilder.cs:300-323`):
+- `cancelledSaleSessionId` **anahtarı her zaman var**, ama bağ yoksa değeri açıkça `null`.
+- `ticketId` yalnız `CancelledTicketId` doluysa konur.
+- `info` = `TICKET_CANCELLED` (fiş açıktı) **veya `TICKET_NOT_OPEN`** (fiş yoktu).
+- `reason` yalnız doluysa konur.
+
+⚠️ **Riskli tek dal: "boşa Fiş İptal" (cihazda fiş yokken).** O yolda
+(`GmpTerminalTransport.Iptal.cs:133-136`) sonuç `Approved, TicketWasOpen: false` olur ve gövde
+**üç kimliğin HİÇBİRİNİ** taşımaz: `voidedPaymentCount 0`, `cancelledSaleSessionId null`,
+`ticketId` yok, `info` = **`TICKET_NOT_OPEN`**. Yani P130 kapısına takılır → **400**.
+W68'den sonra 400 kaydı SİLMİYOR, **damgalıyor** — dolayısıyla ortaya *hiçbir zaman
+çözülemeyecek* kalıcı bir "defter boşluğu" kaydı çıkar; oysa kaydedilecek bir olay yoktur.
+
+**Karar gereken (platform tarafı):** ya (a) platform `TICKET_NOT_OPEN` beyanını da geçerli
+sayar, ya da (b) ajan bu dalda bildirimi **hiç göndermez** (iptal edilecek bir şey yoktu →
+deftere yazılacak bir şey de yok). (b) daha basit ama "kasiyer düğmeye bastı" olgusunu
+platformdan gizler. Ölçmeden karar verilmemeli: **bu dal bugüne dek sahada hiç koşmadı.**
+
 ## Testler (mutasyonla kanıtlanacak)
 1. `Collected != Requested` → `ApprovedAmountMinor` **istenen** kalır (platform
    eşleştirmesi kırılmasın) VE `CollectedAmountMinor` tahsil edileni taşır.
