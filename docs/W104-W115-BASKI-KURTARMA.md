@@ -1,4 +1,4 @@
-# W104–W109 — BASKI ARIZASI, KURTARMA VE SÜRE BÜTÇESİ (ölçüm kaydı)
+# W104–W115 — BASKI ARIZASI, KURTARMA, SÜRE BÜTÇESİ VE ÇİFT TAHSİLAT (ölçüm kaydı)
 
 Bu belge tek bir saha olayından doğan zinciri ve **ölçülen** sayıları tutar. Çıkarımlar
 `[ÇIKARIM]` diye işaretli; işaretsiz her sayı bir ölçümdür.
@@ -105,8 +105,10 @@ Sonradan kurtarma fişi kapatırsa o yanıt güncellenmez — çoktan gönderilm
 
 **Nihai durumun tek otoritesi `TicketQuery`.**
 
-⚠️ **Hiçbir alandan kâğıdın varlığı/yokluğu ÇIKARILMAZ.** Cihaz hiçbir izde kâğıt kodu
-(`TRAN_RESULT_NO_PAPER`, 0x0020) döndürmedi; kâğıt hakkında **sıfır ölçüm** var.
+⚠️ **KÂĞIT KONUSUNDA ERKEN İDDİAM ÇÜRÜTÜLDÜ — bkz. §9.** Uzun süre "cihaz hiçbir izde kâğıt
+kodu döndürmedi, kâğıt hakkında sıfır ölçümümüz var" dedim. **2026-09-10 02:21'de cihaz
+`0x0020 TRAN_RESULT_NO_PAPER` DÖNDÜRDÜ.** Aşağıdaki paragraf o tarihten önceki hâli anlatır ve
+tarih kaydı olarak duruyor; geçerli kural §9'da.
 `closed + PRINT_FAILED` yalnız şunu der: fiş mali olarak kapandı, mali dip baskısı üç denemede de
 başarısız oldu. Kasiyere "yazıcıyı ve ruloyu **kontrol edin**" dedirtmek doğru; "kâğıt yok"
 dedirtmek **yanlış**.
@@ -174,3 +176,138 @@ kapatılabilir yarısı artık testli.
 - Fiziksel kâğıtta toplam bloğu bir kez mi iki kez mi basıldı — **kullanıcıda**, sorulacak.
 - `Restomenum.Agent.Gmp`'nin **test projesi yok**: `TimeoutPrint` sabiti ve `Map`'in alan taşıması
   mutasyonla sınanamıyor. Sahada ölçümle doğrulandı (bayrak 131078 geldi → taşıma çalışıyor).
+
+
+---
+
+# GECENİN İKİNCİ YARISI (02:00–02:45) — W110–W115
+
+## 9. `0x0020` — ERKEN İDDİAM ÇÜRÜTÜLDÜ
+
+**Ölçüm (2026-09-10 02:21, kasa tarafından okundu, benim ucumdan gitti):**
+
+    "reason":"PRINT_FAILED","printFailedStep":"PrintBeforeMF","printFailedCode":"0x0020"
+
+`0x0020 = TRAN_RESULT_NO_PAPER`. Cihaz kâğıdın bittiğini **söylüyor**.
+
+**Neden daha önce görmedik — [ÇIKARIM, ama güçlü]:** 23:07'de zaman aşımı **10 sn**'ydi ve
+cihaz cevabını veremeden kesiyorduk. W104'ün uzattığı süre yalnız kurtarmayı değil
+**teşhisi de** mümkün kılmış. Bunu ben iddia etmedim; olgu sırası gösterdi.
+
+**Sonuç:** `reason = OUT_OF_PAPER` artık **AJANDA** üretiliyor (`GmpCodes.NoPaper` sabiti
+burada; kasada türetilseydi aynı sabit iki yerde durur ve biri sessizce kayardı).
+`printFailedCode` yine HAM gidiyor. Kasiyere artık "KÂĞIT BİTTİ, rulo takın" denebilir —
+iddia değil, cihazın beyanı.
+
+**`FP3_GetEcrStatus` taraması — SONUÇ: YOK.** 131 fonksiyon tarandı. Durum/statü adayları
+yalnız: `FP3_Echo`, `FP3_FunctionEcrParameter`, `FP3_FunctionEkuReadInfo`,
+`FP3_FunctionModuleReadInfo`, `FP3_FunctionPaymentCheck`, `FP3_GetCurrentFiscalCounters`,
+`FP3_GetTlvData`. Ucuz bir kâğıt yoklaması için doğrudan çağrı YOK.
+`ST_ECHO.status` ise VAR ve atılıyordu (W112) — artık taşınıyor. Ölçüm: sağlıklı **0x0000001D**
+(15 okuma, ikisi yayım sonrası doğrulama). Bloke anda (02:05:48) `retcode 0` ile **tamamen
+sıfır**. ⚠️ Farkın sebebi **kanıtlanmadı**: "başarı + tüm alanlar sıfır" deseni
+`FP3_VoidPayment` hatasında da görülmüştü ve orada "boş yanıt" demekti; cihaz kâğıtsız değil
+**meşgul** olduğu için de böyle dönmüş olabilir. Hiçbir karar buna bağlı değil.
+
+## 10. ÇİFT TAHSİLAT — 19,80 TL, ÖLÇÜLDÜ
+
+**Masa M8, oturum `a299f947-f88b-431c-8656-25a095b4c46d`, iki AYRI mali fiş:**
+
+| fiş | ödeme | tutar | alındı | kapandı | kapatan |
+|---|---|---|---|---|---|
+| `tkt_1cbc1b17…` | `pay_6edebb4d…` | 990 | 02:05:27 | 02:18:28 | **elle** (`TicketFinish`) |
+| `tkt_39dd485e…` | `pay_f72c3c5c…` | 990 | 02:21:01 | 02:22:15 | **süpürme, kendiliğinden** |
+
+9,90'lık masa için mali kayıtta **19,80** ve **iki mali belge** var. Geri alınamaz: iki fiş de
+kapalı ve mali bellekte; `VoidAll` işlemez, `VoidPayment` kapanmış fişte geçersiz. Düzeltmesi
+iade/fiş iptali — **mali ve ticari karar, ajan tek başına yapmaz.**
+
+### Zincir (kendi payım dahil)
+1. **02:05:38 — ajanı yayım için durdurdum**; o anda cihazda NAKİT ödeme UÇUŞTAYDI. Para
+   cihaza 02:05:27'de yazılmıştı. Yanıt kayboldu (ECONNRESET).
+2. 02:09:10 — platform denemeyi `Superseded/stale` saydı; kasa "bilinmiyor"da kaldı.
+3. 02:18:28 — o fişi `TicketFinish` ile kapattım (masayı açmak için) ve **bağ silindi**.
+4. 02:21:01 — kasa YENİ paymentId ile tekrar denedi; bağ olmadığı için **yeni fiş** açıldı.
+
+⚠️ **ACI AYRINTI:** birinci fiş kapatılmasaydı ikinci ödeme `AMOUNT_EXCEEDS_REMAINING` ile
+**REDDEDİLİRDİ** (990 istenen > 0 kalan) ve para cihaza hiç gitmezdi. Masayı açmak için
+yapılan şey, çift tahsilatı önleyecek tek kapıyı kaldırdı.
+
+### Asıl kusur kapıda
+Ajan dedupe'u **paymentId** üzerinden çalışıyor. Kasa yeni attemptId + yeni paymentId ile
+geldiğinde bu ajan için MEŞRU ve YENİ bir ödemedir. "Aynı masaya ikinci kez aynı tutar" diye
+bir kapı YOK; o işi fişin kalanı yapıyordu ve fiş kapanınca o da gitti.
+→ Kasa tarafında E46 kapısı yazıldı: aynı oturum + aynı terminal için çözülmemiş başka bir
+deneme varken yeni tahsilat gönderilmiyor; tetiklendiğinde `TicketQuery` ile cihaza soruluyor.
+**Sorgu başarısız olursa kapı YİNE kapalı kalıyor — bilgi eksikliği kapıyı AÇMAZ.**
+
+### Kök sebep artık SORULABİLİR (W115)
+İkimiz de "boşta görünüyordu" diye TAHMİN ettik (kasa o gece kendini altı kez yeniden
+başlatmış, hiçbirinde bakmamış). `TicketQuery` yanıtına **`deviceBusy`** eklendi: işlem kilidi
+tutuluyorsa cihazda uçuşta iş VAR. Sorgu kilidi ALMAZ, yalnız okur.
+⚠️ Anlık fotoğraf — garanti değil, gözlem. Ama körlemesine durdurmaktan iyi.
+
+## 11. SÜPÜRME — İLK SAHA KANITI
+
+    02:22:12  [bitir] fiş okundu { toplam=990 tahsil=990 kalan=0
+                                   bayraklar=131078 (0x00020006) plan=TumBaskiVeKapat adım 6 }
+    02:22:13  adım tamam PrintTotalsAndPayments
+    02:22:14  adım tamam PrintBeforeMF          ← 0x0020 alan adım, bu kez geçti
+    02:22:15  adım tamam PrintMF
+    02:22:15  ✓ FİŞ KAPANDI · [tamamla] TAMAMLANDI { deneme = 1 }
+    02:22:45  kapanış platforma bildirildi (200 Recorded / COMPLETED)
+
+Kimse tetiklemedi. **Dün gece 83 dakika süren arıza, 39 saniyede kendiliğinden kapandı.**
+
+## 12. W111 — İŞARET BASKIDAN **ÖNCE**
+
+Süpürme işareti zincir DÖNDÜKTEN sonra yazılıyordu. Süreç zincirin **ortasında** ölünce
+(02:05, tam bu oldu) satır hiç yazılmadı ve fiş 990 kuruş tahsilatla açık kaldı ama süpürme
+onu **görmedi**. `closed_tickets`'ın kapattığı boşluğun birebir kardeşi.
+**İlke: TEHLİKELİ ADIMDAN ÖNCE kalıcı iz bırak.**
+
+## 13. W113 — `NO_OPEN_TICKET` ≠ `UNKNOWN`
+
+İkisi de eskiden `UNKNOWN`dı ve kasa haklı olarak sordu: "kimliksiz UNKNOWN açık fiş yok
+demek mi?" Tek kelimeyle iki beyanı taşımak, okuyanın TAHMİN etmesini gerektiriyordu.
+
+- `NO_OPEN_TICKET` — kimliksiz sorgu, defterde bağlı açık fiş yok.
+- `UNKNOWN` — belirli bir fiş soruldu, defterde izi yok.
+
+⚠️ `NO_OPEN_TICKET` **"CİHAZDA açık fiş yok" DEMEK DEĞİL**, "bu ajanın defterinde bağlı açık
+fiş yok" demek. Sorgu cihaza gitmez (gitse mali numara tüketirdi); cihazda ajanın bilmediği
+bir fiş durabilir ve o `BayatFisiTemizle`'nin işidir.
+
+## 14. W114 — UCUZ / PAHALI DENEME
+
+Kullanıcının talimatı: *"kâğıt bittiğini bildiriyorsa … kalan 0 ise bir interval başlatıp fiş
+kapanışını otomatik yapsın **başarılı olana kadar**."* Bu, W108'in sekiz denemede durma
+kuralıyla çelişiyordu. **Çelişkiyi ölçüm çözdü:**
+
+W108'in gerekçesi denemenin **pahalı** olduğu varsayımıydı — her deneme cihazı dakikalarca
+kilitler. Bu, cihaz **cevap vermediğinde** doğru (zaman aşımı). Ama cihaz `0x0020` ile hızlı
+ve kesin cevap verdiğinde deneme **ucuzdur**.
+
+> **Bedeli olan denemeler sınırlanır, bedeli olmayanlar sınırlanmaz.**
+
+PAHALI (sekizde durur): zaman aşımı, bütçe bitişi, **ve kod okunamadığı hâl** — bilinmeyeni
+ucuz saymak sınırı sessizce kaldırmak olurdu.
+UCUZ (sınırsız): cihazın kesin cevabı, `0x0020` dahil.
+
+## 15. TEST ALTYAPISI — İKİ DERS, İKİSİ DE BU GECE ISIRDI
+
+1. **"Testler yeşil + derleme geçiyor" bir ucun BAĞLI olduğunu göstermez.** `TicketQuery` yol
+   ayrımı hiç eklenmemişken 560/560 yeşildi ve derleme geçiyordu; canlı POST ortaya çıkardı
+   (`{"error":"UnsupportedCategory"}`).
+2. **Askıda kalan bir mutasyon "başarısız" sayılmazsa batarya kilitlenir.** Kilit tavanını
+   kaldıran mutasyon testi sonsuza kadar astı. İki düzeltme: test zaman aşımlı bekliyor
+   (asılma → başarısızlık) ve mutasyon betiği `dotnet test`i zaman aşımıyla koşup askıda
+   kalmayı KIRMIZI sayıyor.
+
+## 16. AÇIK MADDELER (güncel)
+- **Çift tahsilatın mali düzeltmesi** — kullanıcının kararı bekleniyor.
+- **(b) sahiplik/lease** yazılı değil.
+- **(d) süpürme sonucunu platforma olay olarak itmek** — kasa tarafı kendi kaydını tazeliyor
+  (E44), ama çok kasalı kurulumda diğer istasyonlar öğrenmez.
+- `FP3_GetCurrentFiscalCounters` **ölçülmedi** (cihaza gidiyor mu bilinmiyor).
+- Fiziksel kâğıtta toplam bloğunun bir kez mi iki kez mi basıldığı — kullanıcıda.
