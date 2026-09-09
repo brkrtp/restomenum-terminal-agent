@@ -80,6 +80,30 @@ ama **ölçülmedi**. Gereken deney: iki bacaklı fiş, ilk bacak kart (indirim 
 ikinci bacak nakit; kalanın indirimli toplamdan mı yoksa orijinalden mi hesaplandığına
 bakılır. FR30 bunu doğal olarak üretir.
 
+### 6b. ADAY MADDE — CLOSED'da `deviceRemainingMinor: 0` (platform isteği)
+
+Platform tarafı ölçtü (`bodyRead.js:99-106`, validator'da ikinci kapı): iki alan **çift olarak**
+kabul ediliyor — `deviceRemainingMinor` yoksa `deviceTicketTotalMinor` da düşüyor. Kapanan
+fişlerde `deviceRemainingMinor`'ı tasarım gereği göndermediğimiz için (§6) **gönderdiğimiz
+6793/941 platforma hiç ulaşmadı**; P65 kıyası kapanışta hiç koşmadı. P138'in kör noktasıyla aynı
+yer.
+
+Seçenek (b) = ajan CLOSED'da `deviceRemainingMinor: 0` gönderir. Ucuz ve platformda değişiklik
+gerektirmiyor. **Kabul edilebilir, ama tek şartla:** "0" ile "bilinmiyor" ayrımı korunmalı.
+Kapanan fişte kalan gerçekten **bilinen bir sıfırdır** — belirsizlik değil. Ancak kapanış
+`GetTicket`'i başarısız olduysa (`GmpTerminalTransport.cs:257-259` üç şartı) elimizde toplam da
+yoktur; o hâlde **hiçbir alan konmamalı**, bugünkü gibi. Kural:
+
+> `TicketState == "CLOSED"` **ve** `DeviceTicketTotalMinor`/`DevicePaidMinor` gerçekten okunduysa
+> → `deviceRemainingMinor = 0` konur. Okuma başarısızsa **üçü de konmaz.**
+
+Böylece sıfır yalnız ölçülmüş bir sıfırdır; uydurulmuş bir sıfır hiçbir zaman gitmez. Test:
+kapanış okuması başarısızken `deviceRemainingMinor` **yok** (mutasyon: koşulsuz 0 yaz → KIRMIZI).
+
+⚠️ Ad birleştirme YAPILMAYACAK (platform kararı): kapanış gövdesindeki `paidMinor` tahsil
+sayacıdır, ödeme gövdesindeki `deviceRemainingMinor` kalandır; `ticketClose.js:308` kıyası bu
+ayrıma dayanıyor.
+
 ### 7. Sebep etiketi de yanlış — W79'a dahil
 `GmpTerminalTransport.Okuma.cs:231-246`: `acikRet = KullanilabilirKod(AppErrorCode)` →
 kod varsa `Refusal` + **`BANK_DECLINED`**. Ölçüldü (FR02 deneme 1): `AppErrorCode E003`
