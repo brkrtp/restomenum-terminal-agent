@@ -1037,7 +1037,10 @@ public sealed class LocalSaleHandler : IDeviceIdleGate
     /// </summary>
     public string HandleTicketQuery(TicketQueryRequest istek)
     {
-        var sonuc = TicketQueryHandler.Cevapla(_store, istek);
+        // W115: işlem kilidi tutuluyorsa cihazda uçuşta bir iş VAR. `CurrentCount == 0` =
+        // semafor alınmış. Kilidi ALMIYORUZ — sorgunun satışı beklemesi ya da geciktirmesi
+        // kabul edilemez; yalnız o anki sayacı okuyoruz.
+        var sonuc = TicketQueryHandler.Cevapla(_store, istek, cihazMesgul: _islemKilidi.CurrentCount == 0);
         _log("[sorgu] fiş durumu", new
         {
             istek.PoiId, istenen = istek.TicketId ?? "(açık fiş)", durum = sonuc.Durum,

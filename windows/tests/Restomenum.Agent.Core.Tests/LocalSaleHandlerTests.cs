@@ -1267,6 +1267,33 @@ public class LocalSaleHandlerTests : IDisposable
     }
 
     [Fact]
+    public void TicketQuery_GERCEK_kilidi_okur_ucusta_is_varken_deviceBusy_TRUE()
+    {
+        // ← ÇİVİ: bu alanın bütün değeri GERÇEK kilide bağlı olmasında. Sabit `false` ya da ters
+        // okuma, yeniden başlatmadan önce bakan kişiye "boşta" der ve bu gecenin hatasını
+        // (uçuştaki ödemeyi kesmek → 19,80 çift tahsilat) aynen tekrar ettirir.
+        var (h, _, _) = Kur(new PaymentDetailResult.Ok(Detail()));
+        var istek = new TicketQueryRequest("svc12345", "kasa-1", "t1", null, DateTimeOffset.UtcNow);
+
+        var bosta = System.Text.Json.JsonDocument.Parse(h.HandleTicketQuery(istek)).RootElement
+            .GetProperty("SaleToPOIResponse").GetProperty("Restomenum");
+        Assert.False(bosta.GetProperty("deviceBusy").GetBoolean());
+
+        using (var mesgul = h.TryAcquire())
+        {
+            Assert.NotNull(mesgul);
+            var esnasinda = System.Text.Json.JsonDocument.Parse(h.HandleTicketQuery(istek)).RootElement
+                .GetProperty("SaleToPOIResponse").GetProperty("Restomenum");
+            Assert.True(esnasinda.GetProperty("deviceBusy").GetBoolean());
+        }
+
+        // Kilit bırakılınca yine boşta — sorgu kilidi ALMIYOR, yalnız okuyor.
+        var sonra = System.Text.Json.JsonDocument.Parse(h.HandleTicketQuery(istek)).RootElement
+            .GetProperty("SaleToPOIResponse").GetProperty("Restomenum");
+        Assert.False(sonra.GetProperty("deviceBusy").GetBoolean());
+    }
+
+    [Fact]
     public void Kilit_tavani_kasanin_180_saniyesinin_ALTINDA()
     {
         // Aritmetik çivi: tavan 180'i aşarsa kasa yine cevapsız kalır ve bu düzeltmenin

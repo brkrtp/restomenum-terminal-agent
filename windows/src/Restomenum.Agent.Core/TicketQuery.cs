@@ -62,10 +62,27 @@ public sealed record TicketQueryRequest(
 /// Fiş baskı hatası yüzünden TAMAMLANMAYI BEKLİYORSA kaçıncı denemede. <c>null</c> = beklemiyor.
 /// Kasa buradan "arıza sürüyor ama üzerinde çalışılıyor" diyebilir — sessiz bir bekleme değil.
 /// </param>
+/// <param name="DeviceBusy">
+/// <b>W115 — ŞU AN cihazda uçuşta bir iş var mı?</b> (satış, iptal, tamamlama…)
+///
+/// <para><b>Neden var — bu gecenin kök sebebi:</b> 2026-09-10 02:05'te ajanı yayım için
+/// durdurdum ve tam o anda cihazda bir NAKİT ödeme uçuştaydı. Yanıt kayboldu, kasa
+/// "bilinmiyor"da kaldı, uzlaştırma turu YENİ bir paymentId ile tekrar denedi ve sonuçta
+/// aynı masaya <b>iki ayrı mali fiş, toplam 19,80 TL</b> kesildi. Kasa da o gece kendini
+/// altı kez yeniden başlatmış ve hiçbirinde uçuşta iş var mı diye bakmamış.</para>
+///
+/// <para>Ne olduğunu "kasa boşta görünüyordu" diye TAHMİN ederek anladık; oysa sorulabilir
+/// bir olguymuş. Bu alan onu sorulabilir yapıyor: yeniden başlatmadan önce bak, meşgulse
+/// bekle. Cihaza gitmez — yalnız işlem kilidinin tutulup tutulmadığına bakar.</para>
+///
+/// <para>⚠️ <b>Anlık bir fotoğraftır.</b> Sorgudan bir milisaniye sonra iş başlayabilir;
+/// "meşgul değil" bir garanti değil, bir gözlemdir. Ama körlemesine durdurmaktan iyidir.</para>
+/// </param>
 public sealed record TicketQueryResult(
     string Durum, string? TicketId, string? SaleSessionId,
     long? TotalMinor, long? PaidMinor, bool? LedgerWritten,
-    int? PendingFinishAttempts, string? PendingFinishStep, string? PendingFinishCode);
+    int? PendingFinishAttempts, string? PendingFinishStep, string? PendingFinishCode,
+    bool DeviceBusy = false);
 
 /// <summary><c>MessageCategory: "TicketQuery"</c> zarfının ayrıştırılması.</summary>
 public static class TicketQueryParser
@@ -116,7 +133,8 @@ public static class TicketQueryHandler
     /// </summary>
     public const string AcikFisYok = "NO_OPEN_TICKET";
 
-    public static TicketQueryResult Cevapla(CommandStore defter, TicketQueryRequest istek)
+    public static TicketQueryResult Cevapla(CommandStore defter, TicketQueryRequest istek,
+        bool cihazMesgul = false)
     {
         // ── 1. BU TERMİNALDE AÇIK BAĞ VAR MI ──────────────────────────────────────
         var acikFis = defter.ReadOpenTicketId(istek.PoiId);
@@ -127,7 +145,8 @@ public static class TicketQueryHandler
         if (hedef is null)
             // Kimliksiz soru + defterde bağ yok = "bağlı açık fiş YOK". Bunu `UNKNOWN` ile aynı
             // kelimeye koymak, kasanın iki ayrı olguyu ayırt edememesi demekti.
-            return new TicketQueryResult(AcikFisYok, null, null, null, null, null, null, null, null);
+            return new TicketQueryResult(AcikFisYok, null, null, null, null, null, null, null, null,
+                cihazMesgul);
 
         var bekleyen = defter.PendingFinishes(long.MaxValue).FirstOrDefault(x => x.TicketId == hedef);
         int? denemeler = bekleyen.TicketId == hedef ? bekleyen.Attempts : null;
@@ -135,27 +154,33 @@ public static class TicketQueryHandler
         // ── 2. AÇIK MI ────────────────────────────────────────────────────────────
         if (hedef == acikFis)
             return new TicketQueryResult("OPEN", hedef, acikOturum, null, null, null,
-                denemeler, bekleyen.LastStep, bekleyen.LastCode);
+                denemeler, bekleyen.LastStep, bekleyen.LastCode, cihazMesgul);
 
         // ── 3. KAPANDI MI ─────────────────────────────────────────────────────────
         var kapanis = defter.ReadClosedTicket(hedef);
         if (kapanis is { } k)
             return new TicketQueryResult("CLOSED", hedef, k.Row.SaleSessionId,
                 k.Row.TotalMinor, k.Row.PaidMinor, k.Notified,
-                denemeler, bekleyen.LastStep, bekleyen.LastCode);
+                denemeler, bekleyen.LastStep, bekleyen.LastCode, cihazMesgul);
 
         // ── 4. DEFTERDE İZ YOK ────────────────────────────────────────────────────
         // ⚠️ Bu "AÇIK" DEĞİLDİR. Kapanmış ve saklama süresi (7 gün) dolmuş olabilir, ya da bu
         // ajanın hiç görmediği bir fiş olabilir. "Bilmiyorum" demek, yanlış bir kesinlik
         // yaymaktan iyidir — kasanın yanlış uyarısı tam olarak öyle bir kesinlikten doğdu.
         return new TicketQueryResult("UNKNOWN", hedef, null, null, null, null,
-            denemeler, bekleyen.LastStep, bekleyen.LastCode);
+            denemeler, bekleyen.LastStep, bekleyen.LastCode, cihazMesgul);
     }
 
     /// <summary>Yanıt gövdesi — <c>SaleToPOIResponse</c> zarfı, veriler <c>Restomenum</c> altında.</summary>
     public static string Govde(TicketQueryRequest istek, TicketQueryResult sonuc, DateTimeOffset now)
     {
-        var ek = new JsonObject { ["ticketState"] = sonuc.Durum };
+        var ek = new JsonObject
+        {
+            ["ticketState"] = sonuc.Durum,
+            // W115: HER ZAMAN konur (ölçülmeyen değil, ölçülen bir olgu — kilit ya tutuluyordur
+            // ya tutulmuyordur). Yeniden başlatmadan ÖNCE buna bakılmalı.
+            ["deviceBusy"] = sonuc.DeviceBusy,
+        };
         // Ölçülmeyen alan KONMAZ. Alanın yokluğu "bilinmiyor" demektir; 0 ya da false koymak
         // kasaya olmayan bir kesinlik satmak olurdu.
         if (sonuc.TicketId is not null) ek["ticketId"] = sonuc.TicketId;

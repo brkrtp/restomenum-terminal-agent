@@ -171,6 +171,29 @@ public class TicketQueryTests : IDisposable
         Assert.Equal("0xF003", s.PendingFinishCode);
     }
 
+    [Fact]
+    public void deviceBusy_HER_ZAMAN_govdede_olur()
+    {
+        // ← ÇİVİ: BU GECENİN KÖK SEBEBİ. 02:05'te ajanı yayım için durdurdum ve tam o anda
+        // cihazda NAKİT bir ödeme uçuştaydı. Yanıt kayboldu, kasa "bilinmiyor"da kaldı,
+        // uzlaştırma turu YENİ bir paymentId ile tekrar denedi ve aynı masaya İKİ ayrı mali
+        // fiş — toplam 19,80 TL — kesildi. "Kasa boşta görünüyordu" diye TAHMİN etmiştim;
+        // oysa sorulabilir bir olguymuş. Bu alan onu sorulabilir yapıyor.
+        //
+        // Alan ölçülmeyen değil ÖLÇÜLEN bir olgu (kilit ya tutuluyordur ya tutulmuyordur),
+        // o yüzden "ölçülmeyen alan konmaz" kuralına GİRMEZ: her zaman konur.
+        var mesgul = new TicketQueryResult("OPEN", "tkt_1", null, null, null, null, null, null, null,
+            DeviceBusy: true);
+        var bos = new TicketQueryResult("NO_OPEN_TICKET", null, null, null, null, null, null, null, null);
+
+        Assert.True(Ek(mesgul).GetProperty("deviceBusy").GetBoolean());
+        Assert.False(Ek(bos).GetProperty("deviceBusy").GetBoolean());
+    }
+
+    private static JsonElement Ek(TicketQueryResult s) =>
+        JsonDocument.Parse(TicketQueryHandler.Govde(Istek(), s, DateTimeOffset.UtcNow))
+            .RootElement.GetProperty("SaleToPOIResponse").GetProperty("Restomenum");
+
     // ── GÖVDE ───────────────────────────────────────────────────────────────────
 
     [Fact]
