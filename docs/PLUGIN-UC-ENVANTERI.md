@@ -321,6 +321,20 @@ Bunlar üretici belgesinde yazmıyor; sahada ölçülüp burada kayda geçti.
   dept 10 (%10) 891 kuruşluk kalem → `TotalReceiptTax` **81** = 891×10/110.
 - **`bankBkmId = 0` = "cihaz seçsin"** ve cihaz aynı fişte art arda iki denemede **farklı**
   banka seçebiliyor (GARANTİ 62 → AKBANK 46).
+- **Cihaz yeniden başlatıldığında açık fişin numarasına/sayacına ne olduğu ÖLÇÜLMEDİ.**
+  Bir gözlemde (2026-09-09, 8 saatlik kesinti) `FNo` **1 arttı** (8 → 9) ve fişteki başarısız
+  ödeme satırı **düştü** (`odemeSayisi` 1 → 0); ajan bu sırada cihaza **hiçbir çağrı yapmamıştı**
+  (son başarılı temas 06:34:52, sonraki 14:42:14). Fişin kendisi mali kayıtta hayatta kaldı ve
+  sonradan iptal edilerek 9 numarayı tüketti. **Cihazın yeniden başlarken fişe müdahale ettiği
+  makul ama kanıtlanmadı** — ölçmek kontrollü bir deney (fiş aç → terminali kapat-aç →
+  `GetTicket`) ve bir FNo gerektirir.
+- **Terminal ulaşılamazken her cihaz çağrısı ~66 saniye bloke eder** ve bu **bizim
+  `timeout` parametremiz DEĞİLDİR.** 27 başarısız çağrıda ölçüldü (2026-09-09 kesintisi):
+  en kısa 66118 ms, en uzun 66197 ms, yayılım yalnız 79 ms. Geçirdiğimiz süre etkisiz —
+  `OptionFlags`/`GetTicket` **10000 ms** ile, `GetDepartments` **0** ile çağrıldığı hâlde üçü de
+  aynı 66 saniyeyi harcadı. Süre DLL'in alt katmanından (TCP) geliyor; **"daha kısa zaman aşımı
+  geçelim" bir çözüm değil.** `Echo`'nun (10000 ms) da 66 saniye sürüp sürmediği **ölçülmedi**.
+  Hata sınıfı doğru: `PortNotOpen` → `Declined`/`UnavailableDevice`, para riski yok.
 - **Kart ödemesinde `bankBkmId = 0` gönderilirse cihaz OPERATÖRDEN banka seçimi ister.**
   Ekranda "BANKA SEÇİMİ İÇİN GİRİŞ TUŞUNA BASINIZ" çıkar; basılmazsa `FP3_Payment` uzun
   süre bloke olur (ölçüm: 10,9 sn ve 31,7 sn) ve başarısız döner. Cihazın fişe yazdığı
