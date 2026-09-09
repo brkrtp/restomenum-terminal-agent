@@ -430,9 +430,44 @@ public readonly record struct GmpItem(string Name, long UnitPriceMinor, int Quan
     /// eklerdi; indirim zaten gönderdiğimiz gövdede taşınabiliyor.</para>
     /// </summary>
     long DiscountMinor = 0,
-    /// <summary>Fişe basılacak indirim metni (<c>promotion.ticketMsg</c>), ör. "%10 İndirim".
-    /// Yalnız <see cref="DiscountMinor"/> &gt; 0 iken anlamlı.</summary>
-    string? DiscountText = null);
+    /// <summary>Fişe basılacak indirim metni (<c>promotion.ticketMsg</c>). Yalnız
+    /// <see cref="HasDiscount"/> iken anlamlı.</summary>
+    string? DiscountText = null)
+{
+    /// <summary>
+    /// Cihaza <c>ST_ITEM.promotion</c> nesnesi kurulacak mı?
+    ///
+    /// <para><b>Karar burada, sarmalayıcıda DEĞİL</b> — çünkü sarmalayıcı P/Invoke katmanı ve
+    /// birim testi yok; oradaki bir kayma hiçbir teste yakalanmazdı (mutasyonla ölçüldü: koşulu
+    /// <c>&gt;= 0</c> yapmak hiçbir testi kırmıyordu). Kural veriyle birlikte, testlenebilir
+    /// yerde duruyor.</para>
+    ///
+    /// <para><b>Neden sıfırda kurulmuyor:</b> boş bir <c>promotion</c> göndermek cihaza
+    /// "0 TL indirim var" demek olur ve fişe satır bastırabilir. İndirim yokken alan <c>null</c>
+    /// kalmalı — bugünkü davranış (izde <c>Type:Null</c> olarak görünüyor).</para>
+    /// </summary>
+    public bool HasDiscount => DiscountMinor > 0;
+}
+
+/// <summary>
+/// Cihaza giden kalem alanlarının sabitleri.
+/// </summary>
+public static class GmpItemDefaults
+{
+    /// <summary>
+    /// <c>ST_ITEM.promotion.ticketMsg</c> — fişe basılacak indirim metni.
+    ///
+    /// <para><b>BOŞ, ve bilinçli.</b> Kullanıcı kararı (2026-09-09): <i>"Fişte ne yazacağını zaten
+    /// sen belirleyemezsin, terminal otomatik çıkarır."</i> Platform da metin göndermiyor
+    /// (sözleşmede <c>DiscountLabel</c> YOK). Buraya kendi uydurduğumuz bir metni koymak, mali
+    /// belgeye bizim yazdığımız bir cümleyi bastırmak olurdu.</para>
+    ///
+    /// <para>Alan <c>null</c> değil <b>boş dize</b>: cihaz sözleşmesinde <c>promotion</c> nesnesi
+    /// dolu olduğunda üç alanı da bekliyor; metin alanını hiç göndermemek ile boş göndermek
+    /// arasındaki farkı ölçmedik, boş olan güvenli taraf.</para>
+    /// </summary>
+    public const string DiscountText = "";
+}
 
 /// <summary>Ödeme isteği.</summary>
 /// <param name="BankBkmId">

@@ -110,7 +110,9 @@ public sealed partial class GmpWrapper : IGmpWrapper
             // İndirim YOKKEN alan `null` KALIR — bugünkü davranışın ta kendisi ve izde de öyle
             // görünüyor (`Index:19 - Type:Null - Name: promotion`). Boş bir promotion nesnesi
             // göndermek, cihaza "0 TL indirim var" demek olurdu ve fişe satır bastırabilirdi.
-            promotion = item.DiscountMinor > 0
+            // Karar `GmpItem.HasDiscount`ta (Core, testli). Burada yalnız MARSHALLING var:
+            // bu katmanın birim testi yok, kural burada dursaydı bir kayma yakalanmazdı.
+            promotion = item.HasDiscount
                 ? new promotion
                 {
                     type = (byte)EItemPromotionType.ITEM_PROMOTION_DISCOUNT,

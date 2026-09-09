@@ -529,6 +529,105 @@ public class GmpTerminalTransportTests
         Assert.Equal(62, r.ClosedTicketPayments![0].BankBkmId);
     }
 
+    // ── W70: İNDİRİM CİHAZA SATIR TOPLAMI OLARAK GİDER ──────────────────────────
+
+    [Theory]
+    [InlineData(1, 100, 100)]     // adet 1 → satır = birim
+    [InlineData(2, 100, 200)]     // adet 2 → 2 × 100
+    [InlineData(3,  50, 150)]
+    public async Task Indirim_SATIR_TOPLAMI_olarak_gonderilir(int adet, long birimIndirim, long beklenenSatir)
+    {
+        // ← ÇİVİ: cihazın `promotion.amount` alanı SATIR toplamıdır — yoklamada ölçüldü
+        // (2026-09-09 14:57, adım 6): `count 2, amount 990, promotion 100` → fiş toplamı
+        // 2×990−100 arttı, indirim toplamı 100 oldu. Birim bazlı olsaydı 200 olurdu.
+        // `FiscalLine.LineDiscountMinor` ise BİRİM başına; çarpmayı unutmak indirimi adet katı
+        // kadar EKSİK uygulamak, yani müşteriden fazla tahsilat demek.
+        var (t, gmp, _) = Kur();
+        gmp.Ticket = new GmpTicket(990 * adet, 0, 0, 0);
+
+        await t.SaleAsync(Req(amount: 100, lines: new[]
+        {
+            new FiscalLine("prod1", "Kahve", adet, 990, 20m, DepartmentNo: 1, LineDiscountMinor: birimIndirim),
+        }));
+
+        Assert.Equal(beklenenSatir, gmp.ItemSales[0].DiscountMinor);
+        Assert.Equal(990, gmp.ItemSales[0].UnitPriceMinor);   // birim fiyat DEĞİŞMEZ
+        Assert.Equal(adet, gmp.ItemSales[0].Quantity);
+    }
+
+    [Fact]
+    public async Task BOLUNMUS_satirlarda_her_alt_satir_KENDI_toplamini_tasir()
+    {
+        // ← ÇİVİ: kuruş dağıtımı satırı ikiye bölebiliyor ve alt satırların adetleri FARKLI.
+        // Her birine kendi `birim × adet`i gitmeli; toplamları platformun gönderdiği satır
+        // indirimini TAM vermeli, yoksa fişteki indirim birkaç kuruş sapar.
+        var (t, gmp, _) = Kur();
+        gmp.Ticket = new GmpTicket(1000, 0, 0, 0);
+
+        await t.SaleAsync(Req(amount: 100, lines: new[]
+        {
+            new FiscalLine("p", "Ürün", 2, 333, 20m, DepartmentNo: 1, LineDiscountMinor: 33),
+            new FiscalLine("p", "Ürün", 1, 334, 20m, DepartmentNo: 1, LineDiscountMinor: 34),
+        }));
+
+        Assert.Equal(66, gmp.ItemSales[0].DiscountMinor);    // 2 × 33
+        Assert.Equal(34, gmp.ItemSales[1].DiscountMinor);    // 1 × 34
+        Assert.Equal(100, gmp.ItemSales.Sum(i => i.DiscountMinor));   // ← ÇİVİ: toplam TAM
+    }
+
+    [Fact]
+    public async Task Indirim_YOKKEN_cihaza_SIFIR_gider_promotion_kurulmaz()
+    {
+        // ← ÇİVİ: `GmpWrapper` `promotion`ı yalnız `DiscountMinor > 0` iken kuruyor. Sıfır
+        // gitmezse alan `null` kalır — bugünkü davranışın ta kendisi (izde `Type:Null`).
+        // Boş bir promotion nesnesi göndermek cihaza "0 TL indirim var" demek olurdu.
+        var (t, gmp, _) = Kur();
+
+        await t.SaleAsync(Req());
+
+        Assert.Equal(0, gmp.ItemSales[0].DiscountMinor);
+        Assert.Equal("", gmp.ItemSales[0].DiscountText);
+    }
+
+    [Fact]
+    public async Task TAM_IKRAM_cihaza_satir_tutarina_ESIT_gider()
+    {
+        // ← ÇİVİ: yoklamada ölçüldü — cihaz `promotion == kalem tutarı`nı KABUL ediyor (rc 0) ve
+        // fiş toplamı hiç artmıyor. Sınırı `<` yapmak ikramı imkânsız kılardı.
+        var (t, gmp, _) = Kur();
+        gmp.Ticket = new GmpTicket(0, 0, 0, 0);
+
+        await t.SaleAsync(Req(amount: 100, lines: new[]
+        {
+            new FiscalLine("p", "İkram", 2, 990, 20m, DepartmentNo: 1, LineDiscountMinor: 990),
+        }));
+
+        Assert.Equal(1980, gmp.ItemSales[0].DiscountMinor);
+        Assert.Equal(1980, gmp.ItemSales[0].UnitPriceMinor * gmp.ItemSales[0].Quantity);
+    }
+
+    [Theory]
+    [InlineData(0, false)]      // ← ÇİVİ: SIFIRDA promotion KURULMAZ
+    [InlineData(-1, false)]     // negatif zaten kapıda elenir; burada da kurulmaz
+    [InlineData(1, true)]
+    [InlineData(990, true)]
+    public void Promotion_YALNIZ_indirim_varken_kurulur(long indirim, bool beklenen)
+    {
+        // ← ÇİVİ: boş bir `promotion` göndermek cihaza "0 TL indirim var" demek ve fişe satır
+        // bastırabilir. Bu karar sarmalayıcıda (P/Invoke, birim testi YOK) duruyordu; mutasyon
+        // orada `> 0`'ı `>= 0` yapınca HİÇBİR test kırılmadı. Karar Core'a taşındı ki çivilensin.
+        Assert.Equal(beklenen, new GmpItem("x", 990, 1, 1, indirim).HasDiscount);
+    }
+
+    [Fact]
+    public void Fis_metni_BOS_ve_bilincli()
+    {
+        // ← ÇİVİ: kullanıcı kararı — "fişte ne yazacağını sen belirleyemezsin, terminal otomatik
+        // çıkarır". Platform da metin göndermiyor. Buraya uydurma bir cümle koymak, mali belgeye
+        // bizim yazdığımız bir metni bastırmak olurdu.
+        Assert.Equal("", GmpItemDefaults.DiscountText);
+    }
+
     private static SaleRequest Req(long amount = 3000, int paymentType = GmpPaymentTypes.Card,
         IReadOnlyList<FiscalLine>? lines = null, string? oturum = null, long? satisToplam = null,
         string komut = "c1", string odeme = "p1", int? banka = null) =>

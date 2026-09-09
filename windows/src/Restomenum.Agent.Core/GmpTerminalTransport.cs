@@ -145,7 +145,18 @@ public sealed partial class GmpTerminalTransport : ITerminalTransport
 
             foreach (var l in request.FiscalLines)
             {
-                r = _gmp.ItemSale(handle, new GmpItem(l.Name, l.UnitPriceMinor, l.Quantity, l.DepartmentNo), out _);
+                // ── W70: İNDİRİM CİHAZA GİDİYOR ─────────────────────────────────────
+                // `FiscalLine.LineDiscountMinor` BİRİM başınadır (kuruş dağıtımı satırı ikiye/üçe
+                // bölebiliyor; her alt satırın kendi birim indirimi var). Cihazın
+                // `ST_ITEM.promotion.amount` alanı ise SATIR toplamıdır — yoklamada ölçüldü
+                // (2026-09-09 14:57, adım 6): `count 2, amount 990, promotion 100` gönderildi ve
+                // fiş toplamı 2×990−**100** arttı, indirim toplamı **100** oldu. Birim bazlı
+                // olsaydı 200 olurdu.
+                //
+                // Bu yüzden `× Quantity`. Çarpmayı unutmak, indirimi adet katı kadar EKSİK
+                // uygulamak demek — müşteriden fazla tahsilat ve geri alınamaz mali kayıt.
+                r = _gmp.ItemSale(handle, new GmpItem(l.Name, l.UnitPriceMinor, l.Quantity, l.DepartmentNo,
+                    DiscountMinor: l.LineDiscountMinor * l.Quantity, DiscountText: GmpItemDefaults.DiscountText), out _);
                 if (!r.Ok) return TemizleVeCevir(handle, r, "ItemSale", GmpStep.BeforePayment);
             }
 
