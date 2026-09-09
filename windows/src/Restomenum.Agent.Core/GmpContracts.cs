@@ -1,4 +1,4 @@
-namespace Restomenum.Agent.Core;
+﻿namespace Restomenum.Agent.Core;
 
 /// <summary>
 /// Ödeme öncesi fiş görüntüsünün <b>kalıcı</b> deposu.
@@ -504,6 +504,38 @@ public static class PrinterCopy
     /// </summary>
     public static string Maskele(string s) =>
         System.Text.RegularExpressions.Regex.Replace(s, @"\d{6,}", "***");
+
+    /// <summary>Satır sınırını gösteren ayraç (U+2502) — sondaki boşluk görünür kalsın diye.</summary>
+    private const char Ayrac = '│';
+
+    /// <summary>
+    /// Satırların GÜNLÜĞE YAZILABİLİR hâli.
+    ///
+    /// <para><b>Neden burada, çağıranın içinde değil (2026-09-09 16:07'de ölçüldü):</b> W73 ilk
+    /// gerçek satışında <c>satirlar = System.Collections.Generic.List`1[System.String]</c> bastı —
+    /// yani fişin içeriğini görünür kılmak için eklenen özellik, tam da içeriği göstermedi. Kusur
+    /// dikişteydi: taşıma katmanı yapılandırılmış bir nesne veriyor, host onu
+    /// <c>LogInformation("{Msg} {Arg}", …)</c> ile <c>ToString()</c>'liyor ve koleksiyon içeren HER
+    /// alan böyle tip adına dönüşüyor. Taşıma testi yeşil kaldı çünkü listeyi okuyordu, hostun
+    /// ürettiği METNİ değil.</para>
+    ///
+    /// <para><b>Neden <c>│</c> ile sarılı:</b> fiş satırları sütun hizalı ve <b>sondaki boşluk
+    /// anlamlıdır</b> (<c>"…*9,90 "</c>). Çıplak birleştirmede o boşluk görünmez olur ve kâğıtla
+    /// karşılaştıran kişi hizayı yanlış okur. Numara da var: "cihaz 3 satır bastı, 2'sini gördük"
+    /// ayrımı gözle sayılabilsin.</para>
+    /// </summary>
+    public static string Yazdirilabilir(IReadOnlyList<string>? satirlar)
+    {
+        // "gelmedi" ile "geldi ama boş" ayrımı burada da korunuyor — ikisini aynı metne
+        // indirgemek, teşhiste yanlış yere bakmaya yol açar.
+        if (satirlar is null) return "(cihaz göndermedi)";
+        if (satirlar.Count == 0) return "(satır yok)";
+        var sb = new System.Text.StringBuilder();
+        for (var i = 0; i < satirlar.Count; i++)
+            sb.AppendLine().Append("  ").Append(i + 1)
+              .Append(Ayrac).Append(satirlar[i]).Append(Ayrac);
+        return sb.ToString();
+    }
 }
 
 /// <summary>

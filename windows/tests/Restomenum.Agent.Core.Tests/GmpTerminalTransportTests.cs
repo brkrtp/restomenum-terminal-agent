@@ -1,4 +1,4 @@
-using Restomenum.Agent.Core;
+﻿using Restomenum.Agent.Core;
 using Xunit;
 
 namespace Restomenum.Agent.Core.Tests;
@@ -557,8 +557,15 @@ public class GmpTerminalTransportTests
 
         var veri = loglar.LastOrDefault(l => l.Item1.Contains("fişe basılan satırlar")).Item2;
         Assert.NotNull(veri);
-        var satirlar = (IReadOnlyList<string>?)veri!.GetType().GetProperty("satirlar")!.GetValue(veri);
-        Assert.Equal(SahaKopyasi, satirlar);            // ← ÇİVİ: BİREBİR, kırpılmadan
+
+        // ← ÇİVİ (dikiş): host TAM OLARAK bunu basıyor — `LogInformation("{Msg} {Arg}", m, a)`,
+        // yani nesnenin `ToString()`'i. Bu test daha önce `satirlar` ALANINI okuyordu ve yeşildi;
+        // sahada ise `satirlar = System.Collections.Generic.List`1[System.String]` basıldı
+        // (2026-09-09 16:07:22.693). Alanı okumak, hostun ne yazdığını ÖLÇMEZ.
+        var metin = veri!.ToString()!;
+        Assert.DoesNotContain("System.Collections", metin);
+        foreach (var satir in SahaKopyasi)
+            Assert.Contains(satir, metin);              // ← ÇİVİ: BİREBİR, kırpılmadan, sondaki boşlukla
         Assert.False((bool)veri.GetType().GetProperty("eksik")!.GetValue(veri)!);
     }
 
@@ -610,6 +617,26 @@ public class GmpTerminalTransportTests
         // belirlemiyoruz. Kural sarmalayıcıda (P/Invoke, testsiz) duruyordu; mutasyon orada
         // satırları düşürünce HİÇBİR test kırılmadı. Karar Core'a taşındı.
         Assert.Equal(beklenen, PrinterCopy.Maskele(girdi));
+    }
+
+    [Fact]
+    public void Yazdirilabilir_satirlari_SONDAKI_BOSLUKLA_gosterir()
+    {
+        // ← ÇİVİ: fiş satırları sütun hizalı ve sondaki boşluk anlamlı ("…*9,90 "). Çıplak
+        // birleştirmede o boşluk kaybolur; kâğıtla karşılaştıran kişi hizayı yanlış okur.
+        var m = PrinterCopy.Yazdirilabilir(SahaKopyasi);
+
+        Assert.Contains("1│Espresso               %10      *9,90 │", m);
+        Assert.Contains("2│İNDİRİM                         *0,99-│", m);
+    }
+
+    [Fact]
+    public void Yazdirilabilir_GELMEDI_ile_BOS_GELDI_ayrimini_KORUR()
+    {
+        // ← ÇİVİ: "cihaz göndermedi" ile "gönderdi ama satır yok" ayrı olgular. Aynı metne
+        // indirgemek, teşhiste yanlış yere baktırır — bu ayrımı bu kod tabanında üç kez kaybettik.
+        Assert.NotEqual(PrinterCopy.Yazdirilabilir(null), PrinterCopy.Yazdirilabilir(Array.Empty<string>()));
+        Assert.DoesNotContain("│", PrinterCopy.Yazdirilabilir(Array.Empty<string>()));
     }
 
     [Fact]

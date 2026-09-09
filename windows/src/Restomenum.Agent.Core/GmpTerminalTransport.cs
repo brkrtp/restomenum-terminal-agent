@@ -1,4 +1,4 @@
-namespace Restomenum.Agent.Core;
+﻿namespace Restomenum.Agent.Core;
 
 /// <summary>
 /// **Türkiye / Ingenico GMP-3 taşıması** — <see cref="IGmpWrapper"/> üzerinden mali akışı sürer.
@@ -277,7 +277,9 @@ public sealed partial class GmpTerminalTransport : ITerminalTransport
                         adet = yazici.Count,
                         cihazinBildirdigi = kapanisFisi.PrinterLineCount,
                         eksik = yazici.Count < kapanisFisi.PrinterLineCount,
-                        satirlar = yazici,
+                        // Liste DEĞİL metin: host `{Arg}` ile ToString'liyor ve koleksiyon
+                        // orada tip adına dönüşüyordu (16:07'de ölçüldü) — satırlar görünmüyordu.
+                        satirlar = PrinterCopy.Yazdirilabilir(yazici),
                     });
                 // Cihazın TAHSİL EDİLMİŞ satır sayısı (tutarı 0 olanlar başarısız denemedir).
                 // Kendi defterimizle tutmuyorsa bu gürültü değil ALARM: gerçekleşmiş bir tahsilat
