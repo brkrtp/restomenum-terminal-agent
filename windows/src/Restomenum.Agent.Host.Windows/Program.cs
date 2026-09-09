@@ -21,6 +21,12 @@ bool paymentAppsModu = args.Contains("--payment-apps");
 bool capabilityProbeModu = args.Contains("--capability-probe");
 // --discount-probe: indirimin cihaz sözleşmesini ölçer (W60). MALİ FİŞ AÇAR — `--onayla` şart.
 bool discountProbeModu = args.Contains("--discount-probe");
+// --replay-ticket-cancel <saleSessionId> <ticketId> <serviceId> <poiId> [ticketCancelId]:
+// kalıcı reddedilmiş bir fiş iptali bildirimini yeniden gönderir (W69). CİHAZA DOKUNMAZ.
+var replayIdx = Array.IndexOf(args, "--replay-ticket-cancel");
+var replayArgs = replayIdx >= 0
+    ? args.Skip(replayIdx + 1).TakeWhile(a => !a.StartsWith("--", StringComparison.Ordinal)).ToArray()
+    : Array.Empty<string>();
 // --retract <commandId>: daha önce onaylı bildirilmiş bir komutun düzeltmesini platforma yollar.
 var retractIdx = Array.IndexOf(args, "--retract");
 string? retractKomut = retractIdx >= 0 && retractIdx + 1 < args.Length ? args[retractIdx + 1] : null;
@@ -35,7 +41,7 @@ string? taxDosya = taxIdx >= 0 && taxIdx + 1 < args.Length ? args[taxIdx + 1] : 
 var configArgs = args
     .Where(a => a != "--pair" && a != "--void" && a != "--config-smoke" && a != "--ticket"
              && a != "--onayla" && a != "--payment-apps" && a != "--capability-probe"
-             && a != "--discount-probe"
+             && a != "--discount-probe" && a != "--replay-ticket-cancel" && !replayArgs.Contains(a)
              && a != "--retract" && a != retractKomut
              && a != "--cancel-ticket" && a != cancelOturum
              && a != "--check-tax" && a != taxDosya)
@@ -99,6 +105,14 @@ if (capabilityProbeModu)
 if (discountProbeModu)
 {
     Environment.ExitCode = WindowsDiscountProbe.Run(host.Services, voidOnayi) ? 0 : 1;
+    return;
+}
+
+// FİŞ İPTALİ YENİDEN GÖNDERİM (--replay-ticket-cancel): platform 400 ile reddettiği için
+// deftere yazılamamış bir iptali yeniden bildirir. CİHAZA DOKUNMAZ, FNo YAKMAZ.
+if (replayIdx >= 0)
+{
+    Environment.ExitCode = await WindowsReplayTicketCancel.RunAsync(host.Services, replayArgs, voidOnayi) ? 0 : 1;
     return;
 }
 
