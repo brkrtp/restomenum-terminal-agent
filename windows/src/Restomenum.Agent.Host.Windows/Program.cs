@@ -1,4 +1,4 @@
-using Microsoft.Extensions.DependencyInjection;
+﻿using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Restomenum.Agent.Core;
 using Restomenum.Agent.Host;
@@ -14,6 +14,10 @@ bool eslesModu = args.Contains("--pair");
 bool voidModu = args.Contains("--void");
 bool configSmoke = args.Contains("--config-smoke");
 bool ticketModu = args.Contains("--ticket");
+// --finish-ticket: baskı adımı patladığı için AÇIK kalmış, üzerinde GERÇEK TAHSİLAT olan fişi
+// üreticinin kurtarma akışıyla (GMP3OlumsuzDurumYönetimi §2) TAMAMLAR. `--onayla` olmadan yalnız
+// okur ve planı yazar. `VoidAll`/`VoidPayment` bu yolda YOK — para geri verilmez, fiş kapatılır.
+bool finishTicketModu = args.Contains("--finish-ticket");
 bool voidOnayi = args.Contains("--onayla");
 bool paymentAppsModu = args.Contains("--payment-apps");
 // --capability-probe: hangi ödeme tiplerini cihazın KABUL ettiğini ölçer (W57). MALİ FİŞ AÇAR —
@@ -40,6 +44,7 @@ var taxIdx = Array.IndexOf(args, "--check-tax");
 string? taxDosya = taxIdx >= 0 && taxIdx + 1 < args.Length ? args[taxIdx + 1] : null;
 var configArgs = args
     .Where(a => a != "--pair" && a != "--void" && a != "--config-smoke" && a != "--ticket"
+             && a != "--finish-ticket"
              && a != "--onayla" && a != "--payment-apps" && a != "--capability-probe"
              && a != "--discount-probe" && a != "--replay-ticket-cancel" && !replayArgs.Contains(a)
              && a != "--retract" && a != retractKomut
@@ -80,6 +85,15 @@ if (voidModu)
 if (ticketModu)
 {
     Environment.ExitCode = WindowsVoidTicket.Report(host.Services) ? 0 : 1;
+    return;
+}
+
+// KURTARMA (--finish-ticket): baskı yarıda kaldığı için AÇIK kalmış, ÜZERİNDE PARA olan fişi
+// tamamlar. `--onayla` yoksa KURU PROVA (okur, planı yazar, cihaza baskı yapmaz).
+// `--void`den AYRI tutuldu bilerek: `--void`in niyeti parayı geri vermek, bunun niyeti korumak.
+if (finishTicketModu)
+{
+    Environment.ExitCode = WindowsFinishTicket.Run(host.Services, voidOnayi) ? 0 : 1;
     return;
 }
 

@@ -31,6 +31,19 @@ public sealed partial class GmpWrapper : IGmpWrapper
     private const int TimeoutVoid    = TimeoutCard;   // FP3_VoidPayment, FP3_VoidAll
     private const int TimeoutEcho    = 10000;
     private const int TimeoutPrintMf = 100000;
+    // W104 — DİĞER İKİ BASKI ADIMI DA AYNI YAZICIYI SÜRÜYOR, aynı süreyi hak ediyor.
+    // Ölçüm 2026-09-09 23:07 (cihaz izi, tek fiş):
+    //     23:07:17:892  PrintTotalsAndPayments (TO 10000)  ->      0  TRAN_RESULT_OK
+    //     23:07:18:461  PrintBeforeMF          (TO 10000)  ->  61443  DLL_RETCODE_TIMEOUT  [10 113 ms]
+    // `PrintMF` ve `Close` HİÇ çağrılmadı; fiş 990 kuruş gerçek tahsilatla AÇIK kaldı, masa kilitlendi.
+    // Asimetri kendi kendini ele veriyordu: aynı zincirin üçüncü adımı `PrintMF` **100 000 ms**
+    // alırken ilk ikisi 10 000 ms alıyordu — üçü de aynı termal yazıcıyı sürer, biri diğerinden
+    // on kat hızlı olmak zorunda değildir. W87'nin (ters işlem 10 sn -> 90 sn) birebir kardeşi.
+    // ⚠️ Üretici belgesinde bu iki çağrı için önerilen bir süre YOK (131 fonksiyonluk başlık +
+    // GMP.XML tarandı); dayanak bu asimetri ve o tek ölçüm.
+    // ⚠️ Süre uzatmak arızayı ÇÖZMEZ, ihtimalini azaltır — 100 sn'de de kesilebilir. Kesilirse
+    // fiş yine açık kalır; ikinci savunma `TicketFinish` kurtarma akışıdır (W104).
+    private const int TimeoutPrint   = TimeoutPrintMf;
     private const ushort CurrencyTl = 949;
 
     // Arayüz alınamazsa (GMP.XML eksik/bozuk ya da DLL arayüzü yükleyemedi) çağırana ayırt
@@ -209,14 +222,14 @@ public sealed partial class GmpWrapper : IGmpWrapper
     {
         uint h = AcquireInterface();
         if (h == 0) return GmpCodes.PortNotOpen;
-        return GMPSmartDLL.FP3_PrintTotalsAndPayments(h, handle, TimeoutDefault);
+        return GMPSmartDLL.FP3_PrintTotalsAndPayments(h, handle, TimeoutPrint);
     }
 
     public GmpResult PrintBeforeMF(ulong handle)
     {
         uint h = AcquireInterface();
         if (h == 0) return GmpCodes.PortNotOpen;
-        return GMPSmartDLL.FP3_PrintBeforeMF(h, handle, TimeoutDefault);
+        return GMPSmartDLL.FP3_PrintBeforeMF(h, handle, TimeoutPrint);
     }
 
     public GmpResult PrintUserMessage(ulong handle)
@@ -566,7 +579,8 @@ public sealed partial class GmpWrapper : IGmpWrapper
         if (count > 0 && (payments is null || count > PaymentWindow.Capacity))
             return new GmpTicket(total, paid, -1, 0, null, null,
                 TotalDiscountMinor: indirim, TotalTaxMinor: kdv,
-                PrinterLines: yaziciSatirlari, PrinterLineCount: t.totalNumberOfPrinterLines);
+                PrinterLines: yaziciSatirlari, PrinterLineCount: t.totalNumberOfPrinterLines,
+                TransactionFlags: t.TransactionFlags);
 
         var satirlar = new List<GmpPaymentLine>();
         int lastType = 0;
@@ -650,7 +664,10 @@ public sealed partial class GmpWrapper : IGmpWrapper
         return new GmpTicket(total, paid, count, lastType, rrn, last4, errCode, errText, appErrCode,
             appErrText, satirlar, PaymentsAreComplete: dolu == count && uzunluk >= count,
             TotalDiscountMinor: indirim, TotalTaxMinor: kdv,
-            PrinterLines: yaziciSatirlari, PrinterLineCount: t.totalNumberOfPrinterLines);
+            PrinterLines: yaziciSatirlari, PrinterLineCount: t.totalNumberOfPrinterLines,
+            // W104: HAM taşınır. Ödeme satırlarının aksine burada pencere/kırpma yok — cihazın
+            // gönderdiği 32 bit olduğu gibi geçer; yorumu Core'da (`TicketFlags`).
+            TransactionFlags: t.TransactionFlags);
     }
 
     private static bool Bos(string? s) => string.IsNullOrWhiteSpace(s);

@@ -150,8 +150,14 @@ public sealed partial class GmpTerminalTransport
     /// (1) platform o fişin ödemelerini deftere yazar — oysa fiş hâlâ iptal edilebilir durumda;
     /// (2) bağ silindiği için aynı satışın bir sonraki ödemesi kendi fişini "başkasının bayat
     /// fişi" sanıp <c>TICKET_ALREADY_OPEN</c> ile reddedilir ve kasa manuel ödemeye düşer.</para>
+    ///
+    /// <para><b>W104 — <c>Adim</c>/<c>Kod</c>:</b> zincir yarıda kaldıysa HANGİ çağrıda ve HANGİ
+    /// kodla kaldığı taşınır. Eskiden bu bilgi yalnız günlüğe yazılıyordu; kasaya dönen yanıt
+    /// <c>result:"Success"</c> + <c>reason:null</c> olduğu için kasa arızayı ancak "kalan 0 ama
+    /// fiş açık" ÇELİŞKİSİNDEN çıkarabiliyordu — ve kısmi ödemede o çelişki hiç oluşmaz
+    /// (kalan zaten 0 değildir), yani arıza kasada GÖRÜNMEZDİ.</para>
     /// </returns>
-    private (TransportResult? Hata, bool Kapandi) Kapat(ulong handle)
+    private (TransportResult? Hata, bool Kapandi, string? Adim, GmpResult? Kod) Kapat(ulong handle)
     {
         foreach (var (ad, cagri) in new (string, Func<GmpResult>)[]
         {
@@ -180,23 +186,36 @@ public sealed partial class GmpTerminalTransport
             {
                 _log("[gmp] baskı adımı başarısız (ödeme ALINDI, fiş AÇIK kaldı)",
                     new { ad, code = r.ToString() });
-                return (null, false);
+                return (null, false, ad, r);
             }
         }
 
+        // `PrintMF` sahada 3 denemeye kadar tekrarlanıyor. Üçü de başarısızsa `Close` YİNE denenir
+        // (eski davranış korunuyor — değiştirmek ölçülmemiş bir alanda kör bir değişiklik olurdu),
+        // ama başarısızlık artık YUTULMUYOR: fiş kapansa bile mali dip bilgisi basılamamıştır ve
+        // bunun kasada görünmesi gerekir.
+        GmpResult? mfKodu = null;
         for (var i = 0; i < 3; i++)
         {
-            if (_gmp.PrintMF(handle).Ok) break;
-            _log("[gmp] PrintMF tekrar", new { deneme = i + 1 });
+            var mf = _gmp.PrintMF(handle);
+            if (mf.Ok) { mfKodu = null; break; }
+            mfKodu = mf;
+            _log("[gmp] PrintMF tekrar", new { deneme = i + 1, code = mf.ToString() });
         }
+        if (mfKodu is { } mfBasarisiz)
+            _log("[gmp] PrintMF ÜÇ DENEMEDE DE başarısız (ödeme ALINDI) — Close yine deneniyor",
+                new { code = mfBasarisiz.ToString() });
+
         var kapanis = _gmp.Close(handle);
         if (!kapanis.Ok)
         {
             // Ödeme alındı ama fiş kapanmadı: açık fiş olarak bildirilir, bağ KORUNUR.
             _log("[gmp] Close başarısız (ödeme ALINDI, fiş AÇIK kaldı)", new { code = kapanis.ToString() });
-            return (null, false);
+            // Kök sebep `PrintMF` ise onu bildir — `Close`, ondan sonra gelen İKİNCİ belirti.
+            return mfKodu is { } k ? (null, false, "PrintMF", k) : (null, false, "Close", kapanis);
         }
         lock (_gate) _handle = 0;
-        return (null, true);
+        // Fiş KAPANDI ama `PrintMF` başarısızsa bunu da taşı: kapanmak, basılmış olmak demek değil.
+        return (null, true, mfKodu is null ? null : "PrintMF", mfKodu);
     }
 }

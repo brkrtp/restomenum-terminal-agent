@@ -231,6 +231,8 @@ public sealed partial class GmpTerminalTransport : ITerminalTransport
         // kasiyer kalanı ekleyecek. Fişi burada kapatmak, yarım ödenmiş fiş üretmek olurdu.
         // Fiş durumu ödemeden SONRA belirlenir; `CLOSED` yalnız `Close` gerçekten başarılıysa.
         var fisDurumu = "OPEN";
+        // W104: baskı/kapatma zinciri yarıda kalırsa NEREDE kaldığı kasaya taşınır. `null` = sorun yok.
+        string? baskiSebebi = null, baskiAdimi = null, baskiKodu = null;
         IReadOnlyList<TicketPaymentRow>? kapanisOdemeleri = null;
         long? cihazTahsil = null, cihazToplam = null, cihazKalan = null;
 
@@ -337,8 +339,17 @@ public sealed partial class GmpTerminalTransport : ITerminalTransport
                         new { request.CommandId, fisId, cihazSatir, bizim = bizim.Count });
             }
 
-            var (kapanisHatasi, kapandi) = Kapat(handle);
+            var (kapanisHatasi, kapandi, baskiAdim, baskiKod) = Kapat(handle);
             if (kapanisHatasi is not null) return kapanisHatasi;
+            baskiAdimi = baskiAdim;
+            baskiKodu = baskiKod?.ToString();
+            if (baskiAdim is not null && baskiKod is { } bk)
+                // ⚠️ Zaman aşımı ile RET ayrı sebeplerdir: "cevap gelmedi" ile "cevap geldi ve
+                // hayır dedi" farklı olgular. `Close` ayrı: orada kâğıt/yazıcı sorusu yoktur.
+                baskiSebebi = baskiAdim == "Close"
+                    ? RestomenumReasons.TicketCloseFailed
+                    : GmpCodes.IsTimeout(bk.Code) ? RestomenumReasons.PrintTimeout
+                                                  : RestomenumReasons.PrintFailed;
             if (kapandi)
             {
                 fisDurumu = "CLOSED";
@@ -397,6 +408,10 @@ public sealed partial class GmpTerminalTransport : ITerminalTransport
             CardLast4: tk.CardLast4,
             ProviderResultCode: pr.ToString(),
             Info: bilgi,
+            // W104: ödeme ALINDI (sonuç `Approved` KALIR) ama fiş basılamadı/kapanamadı.
+            Reason: baskiSebebi,
+            PrintFailedStep: baskiAdimi,
+            PrintFailedCode: baskiKodu,
             UsedBankBkmId: banka,
             TicketState: fisDurumu,
             TicketId: fisId,

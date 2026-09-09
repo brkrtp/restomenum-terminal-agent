@@ -524,6 +524,29 @@ public sealed class CommandStore : ITicketSnapshotStore, IDisposable
     }
 
     /// <summary>
+    /// <b>W104</b> — cihazda AÇIK görünen fişlerin TÜM bağları.
+    ///
+    /// <para><b>Neden gerekli:</b> <see cref="ReadOpenTicketId"/> terminal kimliğini ÖNCEDEN
+    /// bilmeyi şart koşuyor. Bakım komutu (<c>--finish-ticket</c>) ise bir satış isteğinden
+    /// doğmuyor; elinde yalnız CİHAZ var, terminal kimliği yok. Kimliği tahmin ettirmek yerine
+    /// defterden okutuyoruz — tahmin edilen bir terminal kimliği yanlış fişi kapatabilirdi.</para>
+    /// </summary>
+    public IReadOnlyList<(string TerminalId, string? SaleSessionId, string? TicketId)> AllOpenTicketBindings()
+    {
+        lock (_gate)
+        {
+            using var cmd = _conn.CreateCommand();
+            cmd.CommandText = "SELECT terminal_id, sale_session_id, ticket_id FROM open_ticket";
+            var liste = new List<(string, string?, string?)>();
+            using var r = cmd.ExecuteReader();
+            while (r.Read())
+                liste.Add((r.GetString(0), r.IsDBNull(1) ? null : r.GetString(1),
+                    r.IsDBNull(2) ? null : r.GetString(2)));
+            return liste;
+        }
+    }
+
+    /// <summary>
     /// Bir fişe düşen ÖDEMEYİ kaydeder — cihazın bilmediği tek şey: bizim <c>paymentId</c>'miz.
     /// Aynı (fiş, ödeme) ikinci kez yazılmaz.
     /// </summary>

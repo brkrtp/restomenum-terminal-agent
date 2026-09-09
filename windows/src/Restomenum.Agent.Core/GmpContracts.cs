@@ -310,7 +310,30 @@ public readonly record struct GmpTicket(
     /// <summary><c>ST_TICKET.totalNumberOfPrinterLines</c> — cihazın bildirdiği TOPLAM satır sayısı.
     /// <see cref="PrinterLines"/> bundan kısaysa kopya EKSİKTİR; "iki satır bastı" ile "iki satırını
     /// gördük" ayrı şeyler (aynı ayrım ödeme satırlarında bir kez ısırdı).</summary>
-    int PrinterLineCount = 0)
+    int PrinterLineCount = 0,
+
+    /// <summary>
+    /// <c>ST_TICKET.TransactionFlags</c> — <b>HAM</b>, yorumlanmadan. Fişin cihazdaki baskı
+    /// aşamasını söyleyen tek alan; çözümü <see cref="TicketFlags"/>'te (Core, testli).
+    ///
+    /// <para><b>Neden eklendi (W104, 2026-09-09 23:07 ölçümü):</b> <c>PrintBeforeMF</c> 10 113 ms'de
+    /// zaman aşımına uğradı, <c>PrintMF</c>/<c>Close</c> hiç çağrılmadı ve fiş üzerinde <b>990 kuruş
+    /// gerçek tahsilatla AÇIK kaldı</b>. Üreticinin kurtarma akışı
+    /// (<c>GMP3OlumsuzDurumYönetimi_v1.2</c> §2 adım 3-5) hangi adımdan devam edileceğini
+    /// <b>tam bu bayraklardan</b> okutuyor — alan cihazdan zaten geliyordu, biz <b>atıyorduk</b>.
+    /// Bayrak olmadan kurtarma "hangi adımdayız" sorusunu ancak TAHMİNLE cevaplayabilirdi; bu
+    /// oturumda tahminle karar vermek üç kez yanlış çıktı.</para>
+    ///
+    /// <para><b>Neden ham <c>uint</c>:</b> cihazın gönderdiği değer aynen taşınır. Bilinmeyen bitler
+    /// düşürülmez — sahada <c>131074</c> (= <c>GMP3</c> | <c>TICKET_HEADER_PRINTED</c>) görüldü;
+    /// tanımadığımız bir bit çıkarsa günlükte ham hâliyle görünür.</para>
+    ///
+    /// <para><c>0</c> iki ayrı şey olabilir: "hiçbir bayrak set değil" ya da "cihaz bu yanıtta
+    /// alanı doldurmadı" — <c>FP3_VoidPayment</c> hatasında tüm <c>ST_TICKET</c> sıfır geldi
+    /// (W102). Bu yüzden <b>bayrak yokluğu tek başına karar dayanağı yapılmaz</b>;
+    /// <see cref="TicketFlags"/> yalnız SET olan bitlere bakar.</para>
+    /// </summary>
+    uint TransactionFlags = 0)
 {
     public bool IsFullyPaid => TotalAmountMinor > 0 && PaidAmountMinor >= TotalAmountMinor;
     public long RemainingMinor => Math.Max(0, TotalAmountMinor - PaidAmountMinor);

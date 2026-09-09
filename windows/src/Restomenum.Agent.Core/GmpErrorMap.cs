@@ -273,4 +273,36 @@ public static class RestomenumReasons
     /// tekrar denemek yarım kalmış bir ters işlemin üstüne ikinciyi bindirebilir.
     /// </summary>
     public const string VoidIncomplete = "VOID_INCOMPLETE";
+
+    // ── W104: ÖDEME ALINDI AMA FİŞ BASILAMADI/KAPANMADI ───────────────────────────
+    // Ölçüm 2026-09-09 23:07: `PrintBeforeMF` 10 113 ms'de zaman aşımına uğradı, fiş 990 kuruş
+    // gerçek tahsilatla AÇIK kaldı ve kasa masayı kapatamadı. Kasanın gördüğü yanıt
+    // `result:"Success"` + `reason:null` idi; arızayı ancak "kalan 0 ama fiş açık" ÇELİŞKİSİNDEN
+    // çıkarabiliyordu. O çıkarım kırılgan: kısmi ödeme sırasında baskı patlarsa kalan 0 olmaz,
+    // çelişki hiç oluşmaz ve arıza kasada GÖRÜNMEZ.
+    //
+    // ⚠️ Sonuç yine `Approved` kalır — para ALINDI. Bu sebepler "ödeme olmadı" DEMEZ;
+    // "ödeme oldu, fişin baskısı/kapanışı olmadı" der. İkisini karıştırmak alınmış parayı
+    // reddedilmiş göstermek olurdu.
+
+    /// <summary>
+    /// Baskı adımı <b>ZAMAN AŞIMINA UĞRADI</b> (<c>0xF003</c>/<c>0xF004</c>) — ödeme alındı, fiş
+    /// açık kaldı. Cihaz cevap vermedi; SEBEBİ bilinmiyor (kâğıt, kapak, mekanik, hat).
+    /// <b><c>OUT_OF_PAPER</c> DEĞİL</b>: cihaz kâğıt bittiğinde <c>TRAN_RESULT_NO_PAPER</c>
+    /// (0x0020) döndürebiliyor ama hiçbir izde bu kod ölçülmedi — kâğıt iddiası uydurma olurdu.
+    /// </summary>
+    public const string PrintTimeout = "PRINT_TIMEOUT";
+
+    /// <summary>
+    /// Baskı adımı hata koduyla <b>REDDEDİLDİ</b> (zaman aşımı DEĞİL) — ödeme alındı, fiş açık
+    /// kaldı. Zaman aşımından ayrı tutuluyor: "cevap gelmedi" ile "cevap geldi ve hayır dedi"
+    /// farklı olgular ve farklı müdahale gerektirir.
+    /// </summary>
+    public const string PrintFailed = "PRINT_FAILED";
+
+    /// <summary>
+    /// Baskı TAMAMLANDI ama <c>FP3_Close</c> başarısız — ödeme alındı, fiş açık kaldı.
+    /// Baskı hatalarından ayrı: burada kâğıt/yazıcı sorusu yoktur, fiş kapanmamıştır.
+    /// </summary>
+    public const string TicketCloseFailed = "TICKET_CLOSE_FAILED";
 }

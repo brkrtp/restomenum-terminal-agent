@@ -1,4 +1,4 @@
-using System.Text.Json;
+﻿using System.Text.Json;
 using Restomenum.Agent.Core;
 using Xunit;
 
@@ -49,6 +49,44 @@ public class SaleToPoiResponseBuilderTests
         var card = res.GetProperty("PaymentInstrumentData").GetProperty("CardData");
         Assert.Equal("1234", card.GetProperty("MaskedPan").GetString());    // ≤4 hane — ham PAN YOK
         Assert.Equal("VISA", card.GetProperty("PaymentBrand").GetString());
+    }
+
+    [Fact]
+    public void W104_baski_patladiginda_govde_SEBEBI_ve_ADIMI_tasir()
+    {
+        // Saha (2026-09-09 23:07): `PrintBeforeMF` zaman aşımı; fiş 990 kuruş tahsilatla açık
+        // kaldı. Kasanın gördüğü gövde `Result:"Success"` + `reason:null` idi ve arıza ancak
+        // "kalan 0 ama fiş açık" ÇELİŞKİSİNDEN çıkarılabiliyordu.
+        var root = Build(new TransportResult(TransportOutcome.Approved, ApprovedAmountMinor: 990,
+            ProviderResultCode: "0x0000", TicketState: "OPEN",
+            Reason: RestomenumReasons.PrintTimeout,
+            PrintFailedStep: "PrintBeforeMF", PrintFailedCode: "0xF003"));
+
+        var resp = root.GetProperty("PaymentResponse").GetProperty("Response");
+        // ← ÇİVİ: sonuç `Success` KALIR — para ALINDI. Sebep taşımak "reddedildi" demek değildir.
+        Assert.Equal("Success", resp.GetProperty("Result").GetString());
+
+        var ek = root.GetProperty("Restomenum");
+        Assert.Equal("PRINT_TIMEOUT", ek.GetProperty("reason").GetString());
+        // ← ÇİVİ: kasiyere gösterilecek cümleyi kuran iki alan. Yoklarsa kasa yalnız "bir şey
+        // oldu" der; hangi adımda kalındığını ve cihazın ham kodunu söyleyemez.
+        Assert.Equal("PrintBeforeMF", ek.GetProperty("printFailedStep").GetString());
+        Assert.Equal("0xF003", ek.GetProperty("printFailedCode").GetString());
+        Assert.Equal("OPEN", ek.GetProperty("ticketState").GetString());
+    }
+
+    [Fact]
+    public void W104_baski_sorunsuzsa_govdede_baski_alanlari_YOKTUR()
+    {
+        var root = Build(new TransportResult(TransportOutcome.Approved, ApprovedAmountMinor: 990,
+            ProviderResultCode: "0x0000", TicketState: "CLOSED"));
+
+        var ek = root.GetProperty("Restomenum");
+        // ← ÇİVİ: her gövdeye boş alan koymak, alanı "bazen anlamlı bazen gürültü" bir veriye
+        // çevirirdi. Alanın YOKLUĞU "sorun yok" demektir ve bu da bir beyandır.
+        Assert.False(ek.TryGetProperty("printFailedStep", out _));
+        Assert.False(ek.TryGetProperty("printFailedCode", out _));
+        Assert.False(ek.TryGetProperty("reason", out _));
     }
 
     [Fact]

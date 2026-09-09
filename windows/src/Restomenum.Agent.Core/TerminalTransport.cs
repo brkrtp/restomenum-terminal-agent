@@ -282,7 +282,25 @@ public sealed record TransportResult(
     /// DEĞİL — kasiyer başka bir kasadan kalmış fişi iptal etmiş olabilir ve platform doğru
     /// oturumun satırlarını düşürmeli. Bağ yoksa <c>null</c>: "bilmiyorum" da bir cevaptır.
     /// </summary>
-    string? CancelledSaleSessionId = null);
+    string? CancelledSaleSessionId = null,
+
+    /// <summary>
+    /// <b>W104</b> — baskı/kapatma zincirinde hangi adımda kalındı (<c>"PrintBeforeMF"</c>,
+    /// <c>"PrintMF"</c>, <c>"Close"</c>…). Cihaz çağrısının ADI, olduğu gibi; çevrilmez.
+    /// <c>null</c> = zincir tamamlandı.
+    ///
+    /// <para><b>Neden <see cref="Reason"/>'dan ayrı:</b> <c>reason</c> sözlükten gelen kapalı bir
+    /// küme (serbest metin YASAK) ve "hangi adım" bilgisini oraya sıkıştırmak sözlüğü çağrı adı
+    /// kadar dallandırırdı. Kasa <c>reason</c> ile <b>ne yapacağını</b>, bu alanla <b>neyi
+    /// söyleyeceğini</b> bilir.</para>
+    /// </summary>
+    string? PrintFailedStep = null,
+
+    /// <summary>
+    /// <b>W104</b> — o adımın HAM dönüş kodu (ör. <c>"0xF003"</c>). Yorumlanmaz.
+    /// Üreticinin kendi tavsiyesi: <i>"Always show return code and corresponding message"</i>.
+    /// </summary>
+    string? PrintFailedCode = null);
 
 /// <summary>
 /// Terminalin ödeme modeli — <b>pazara göre değişir ve belirsizlik çözümünü değiştirir.</b>

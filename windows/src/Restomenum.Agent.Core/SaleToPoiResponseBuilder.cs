@@ -125,6 +125,11 @@ public static class SaleToPoiResponseBuilder
                 });
             ek["taxMismatches"] = dizi;
         }
+        // W104: baskı/kapatma zinciri yarıda kaldıysa NEREDE kaldığı. `reason` zaten `Ek(...)`
+        // ile gitti; bu iki alan kasiyere gösterilecek cümleyi kurar ("Yazıcıyı ve ruloyu kontrol
+        // edin"). Ölçülmediyse KONMAZ — boş bir adım adı, "adım bilinmiyor"u "adım yok"a çevirirdi.
+        if (result.PrintFailedStep is string pfs) ek["printFailedStep"] = pfs;
+        if (result.PrintFailedCode is string pfc) ek["printFailedCode"] = pfc;
         if (result.DeviceTicketTotalMinor is long dt) ek["deviceTicketTotalMinor"] = dt;
         if (result.DeviceRemainingMinor is long dk) ek["deviceRemainingMinor"] = dk;
         // ── W79: istenen / tahsil edilen / üye işyeri indirimi ────────────────────

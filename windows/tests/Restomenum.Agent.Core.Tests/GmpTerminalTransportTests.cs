@@ -1941,4 +1941,124 @@ public class GmpTerminalTransportTests
         Assert.Equal(RestomenumReasons.TicketAlreadyOpen, r.Reason);
         Assert.DoesNotContain("Payment", g.Calls);
     }
+
+    // ── W104: BASKI PATLARSA KASA BUNU DOĞRUDAN GÖRSÜN ──────────────────────────
+    //
+    // Saha (2026-09-09 23:07): `PrintBeforeMF` zaman aşımına uğradı, fiş 990 kuruş tahsilatla açık
+    // kaldı. Kasaya giden yanıt `result:"Success"` + `reason:null` idi; kasa arızayı ancak
+    // "kalan 0 ama fiş açık" ÇELİŞKİSİNDEN çıkarabiliyordu. O çıkarım KIRILGAN: kısmi ödemede
+    // baskı patlarsa kalan zaten 0 olmaz, çelişki hiç oluşmaz, arıza kasada GÖRÜNMEZ.
+
+    /// <summary>Tam ödenmiş bir satış kurar; kapanış zinciri çalışır.</summary>
+    private static (GmpTerminalTransport, FakeGmp) TamOdemeKur()
+    {
+        var g = new FakeGmp();
+        var snap = new FakeSnapshots();
+        g.Ticket = new GmpTicket(990, 0, 0, 0);
+        g.AfterPayment = new GmpTicket(990, 990, 1, GmpPaymentTypes.Cash);
+        return (new GmpTerminalTransport(g, snap), g);
+    }
+
+    [Fact]
+    public async Task BASKI_ZAMAN_ASIMI_kasaya_PRINT_TIMEOUT_olarak_doner()
+    {
+        var (t, g) = TamOdemeKur();
+        g.Codes["PrintBeforeMF"] = GmpCodes.Timeout;   // 0xF003 — sahada ölçülen kod
+
+        var r = await t.SaleAsync(Req(amount: 990, paymentType: GmpPaymentTypes.Cash, satisToplam: 990));
+
+        // ← ÇİVİ: sonuç `Approved` KALIR. Para ALINDI; "reddedildi" demek alınmış bir tahsilatı
+        // yok saymak olurdu — yanlış yön, tehlikeli yön.
+        Assert.Equal(TransportOutcome.Approved, r.Outcome);
+        Assert.Equal("OPEN", r.TicketState);
+        // ← ÇİVİ: sebep artık DOĞRUDAN geliyor, çelişkiden çıkarılmıyor.
+        Assert.Equal(RestomenumReasons.PrintTimeout, r.Reason);
+        Assert.Equal("PrintBeforeMF", r.PrintFailedStep);
+        Assert.Equal("0xF003", r.PrintFailedCode);
+        // ← ÇİVİ: `OUT_OF_PAPER` DEĞİL. Cihaz hiçbir izde kâğıt kodu döndürmedi; kâğıt iddiası
+        // uydurma olurdu (kullanıcı 23:07 fişini elinde tutuyordu: rulo bitmemişti).
+        Assert.DoesNotContain("PAPER", r.Reason);
+    }
+
+    [Fact]
+    public async Task BASKI_RED_zaman_asimindan_AYRI_sebep_alir()
+    {
+        var (t, g) = TamOdemeKur();
+        g.Codes["PrintTotalsAndPayments"] = 2119u;   // zaman aşımı DEĞİL: cevap geldi ve hayır dedi
+
+        var r = await t.SaleAsync(Req(amount: 990, paymentType: GmpPaymentTypes.Cash, satisToplam: 990));
+
+        // ← ÇİVİ: "cevap gelmedi" ile "cevap geldi ve hayır dedi" FARKLI olgular ve farklı
+        // müdahale gerektirir. Tek sebebe katlamak teşhisi kör bırakırdı.
+        Assert.Equal(RestomenumReasons.PrintFailed, r.Reason);
+        Assert.Equal("PrintTotalsAndPayments", r.PrintFailedStep);
+        Assert.Equal("0x0847", r.PrintFailedCode);
+    }
+
+    [Fact]
+    public async Task CLOSE_basarisizsa_baski_sebebinden_AYRI_bildirilir()
+    {
+        var (t, g) = TamOdemeKur();
+        g.Codes["Close"] = GmpCodes.Timeout;
+
+        var r = await t.SaleAsync(Req(amount: 990, paymentType: GmpPaymentTypes.Cash, satisToplam: 990));
+
+        Assert.Equal(TransportOutcome.Approved, r.Outcome);
+        Assert.Equal("OPEN", r.TicketState);
+        // ← ÇİVİ: burada kâğıt/yazıcı sorusu YOKTUR — baskı tamamlandı, fiş kapanmadı. Kasiyere
+        // "ruloyu kontrol edin" dedirtmek yanlış işe yönlendirmek olurdu.
+        Assert.Equal(RestomenumReasons.TicketCloseFailed, r.Reason);
+        Assert.Equal("Close", r.PrintFailedStep);
+    }
+
+    [Fact]
+    public async Task PrintMF_UC_DENEMEDE_de_patlarsa_fis_kapansa_BILE_bildirilir()
+    {
+        var (t, g) = TamOdemeKur();
+        g.PrintMfFailures = 3;   // üçü de başarısız; `Close` yine denenir (eski davranış)
+
+        var r = await t.SaleAsync(Req(amount: 990, paymentType: GmpPaymentTypes.Cash, satisToplam: 990));
+
+        // ← ÇİVİ: fiş KAPANDI ama mali dip BASILAMADI. Eskiden bu tamamen yutuluyordu; kapanmak,
+        // basılmış olmak demek değildir ve fark yalnız buradan görülebilir.
+        Assert.Equal("CLOSED", r.TicketState);
+        Assert.Equal(RestomenumReasons.PrintFailed, r.Reason);
+        Assert.Equal("PrintMF", r.PrintFailedStep);
+    }
+
+    [Fact]
+    public async Task Zincir_TAMAMLANIRSA_sebep_YOKTUR()
+    {
+        var (t, _) = TamOdemeKur();
+
+        var r = await t.SaleAsync(Req(amount: 990, paymentType: GmpPaymentTypes.Cash, satisToplam: 990));
+
+        // ← ÇİVİ: olağan satışa sebep iliştirmek, her başarılı fişi platformda arıza gibi
+        // gösterirdi (`reason` "neden başarısız" sorusunun cevabıdır).
+        Assert.Equal("CLOSED", r.TicketState);
+        Assert.Null(r.Reason);
+        Assert.Null(r.PrintFailedStep);
+        Assert.Null(r.PrintFailedCode);
+    }
+
+    [Fact]
+    public async Task KISMI_odemede_baski_patlarsa_CELISKI_olusmaz_ama_sebep_YINE_gelir()
+    {
+        // ← ÇİVİ: bu testin var olma sebebi kasanın uyarısı. Kısmi ödemede `kalan` zaten 0
+        // değildir; "kalan 0 ama fiş açık" çelişkisi HİÇ oluşmaz. Sebep alanı olmasaydı arıza
+        // kasada tamamen görünmez kalırdı.
+        var g = new FakeGmp();
+        var snap = new FakeSnapshots();
+        g.Ticket = new GmpTicket(2380, 0, 0, 0);
+        g.AfterPayment = new GmpTicket(2380, 990, 1, GmpPaymentTypes.Cash);   // kısmi
+        var t = new GmpTerminalTransport(g, snap);
+
+        var r = await t.SaleAsync(Req(amount: 990, paymentType: GmpPaymentTypes.Cash, satisToplam: 2380));
+
+        // Fiş zaten AÇIK kalır (kısmi ödeme Türkiye'de NORMAL) — ve baskı hiç çalışmadığı için
+        // sebep de yoktur. Çelişki yolu burada kör: kasa bir sorun OLMADIĞINI da göremezdi.
+        Assert.Equal("OPEN", r.TicketState);
+        Assert.Null(r.Reason);
+        Assert.Equal(1390, r.DeviceRemainingMinor);
+    }
 }
