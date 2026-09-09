@@ -757,6 +757,33 @@ public sealed class CommandStore : ITicketSnapshotStore, IDisposable
     /// Kapanış gövdesi outbox'a YAZILDI — bu tablonun görevi bitti. Gönderim garantisi artık
     /// outbox'ta; burada "gönderildi" değil "devredildi" işaretlenir.
     /// </summary>
+    /// <summary>
+    /// <b>W106</b> — TEK bir kapanmış fişin kaydı + bildiriminin devredilip devredilmediği.
+    ///
+    /// <para><c>null</c> = defterde iz YOK. Bu <b>"fiş açık" demek DEĞİLDİR</b>: kapanmış ve
+    /// saklama süresi (7 gün) dolmuş olabilir, ya da bu ajanın hiç görmediği bir fiş olabilir.
+    /// İkisi ayırt edilemez; çağıran "bilmiyorum" demeli. Kasada bugün görülen yanlış uyarı
+    /// tam olarak böyle bir boşluğu "açık" diye yorumlamaktan doğdu.</para>
+    /// </summary>
+    public (ClosedTicketRow Row, bool Notified)? ReadClosedTicket(string ticketId)
+    {
+        lock (_gate)
+        {
+            using var cmd = _conn.CreateCommand();
+            cmd.CommandText = """
+                SELECT ticket_id, terminal_id, sale_session_id, total_minor, paid_minor, notified_at
+                FROM closed_tickets WHERE ticket_id = $f
+                """;
+            cmd.Parameters.AddWithValue("$f", ticketId);
+            using var r = cmd.ExecuteReader();
+            if (!r.Read()) return null;
+            return (new ClosedTicketRow(r.GetString(0), r.GetString(1),
+                r.IsDBNull(2) ? null : r.GetString(2),
+                r.IsDBNull(3) ? null : r.GetInt64(3),
+                r.IsDBNull(4) ? null : r.GetInt64(4)), !r.IsDBNull(5));
+        }
+    }
+
     public void ConfirmTicketClosed(string ticketId, long? now = null)
     {
         lock (_gate)
