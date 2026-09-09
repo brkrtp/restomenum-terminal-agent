@@ -389,14 +389,29 @@ Kaynak: `--discount-probe` (2026-09-09 14:57, tek fiş, altı adım) + canlı sa
   `ticketMsg` ile kendi etiketini basıyor — satır `İNDİRİM` adıyla, tutar sonunda `-` işaretiyle:
   `"İNDİRİM                         *0,99-"`. Yani kendi etiketimizi göndermeye gerek yok
   (W72 bu yüzden iptal edildi).
+- 🔴 **BANKA UYGULAMASI FİŞİN MALİ TOPLAMINI DEĞİŞTİREBİLİR** (`typeOfPayment 4`, ölçüm
+  2026-09-09 16:56, fiş 88/2). `payAmount 7150` gönderildi; GARANTİ BBVA fişe
+  `İŞYERİ İND. *3,57-` bastı ve cihaz sayaçları **7150 → 6793**, KDV **979 → 930**,
+  `TotalReceiptDiscount` **0 → 357**, `TotalReceiptPayment` **6793** oldu. İndirim ne bizden ne
+  platformdan geldi. **KDV matrahını da düşürüyor** (satır indirimi gibi).
+  ⚠️ **AJAN BUNU BİLDİRMİYOR:** `ApprovedAmountMinor` = `request.AmountMinor`
+  (`GmpTerminalTransport.cs`), yani platforma **İSTENEN** tutar gidiyor, tahsil edilen değil;
+  `ticket_payments` satırı da istenen tutarı yazıyor. Ölçülen sonuç: aynı fişte ödeme satırı
+  **7150**, fiş toplamı **6793** — 357 kuruşluk sessiz ıraksama, alarm YOK.
+  Kısmen tutan koruma: banka atıfı `sat.AmountMinor == request.AmountMinor` şartına bağlı olduğu
+  için **banka İDDİA EDİLMEDİ** (`bank_bkm_id` NULL). Yani kod tutarsızlığı GÖRDÜ ama yalnız
+  "bankayı söyleme" kararında kullandı. **Açık:** "tahsil edilen ≠ istenen" durumunun
+  bildirilmesi (W79 adayı). Bu indirimin her kartlı satışta olup olmadığı **ÖLÇÜLMEDİ**.
 - **Cihaz fişe bastığı satırları HER FİŞTE zaten gönderiyor** (`ST_TICKET.stPrinterCopy`,
   `OptionFlags(Reload)` → `ECHO_PRINTER`). Ek bir çağrı gerekmez; kapanış `GetTicket`'inde gelir.
   `totalNumberOfPrinterLines` cihazın BİLDİRDİĞİ toplam, gelen dizi ondan kısa olabilir —
   *"üç satır bastı"* ile *"üç satırını gördük"* ayrı şeylerdir (günlükte `eksik` alanı).
-  ⚠️ **YANKI YALNIZ KALEM SATIRLARINI KAPSAR — TOPLAM BLOĞUNU DEĞİL.** Fiş 17'de ölçüldü:
-  dört yankının dördünde de aynı iki kalem satırı var, `totalNumberOfPrinterLines` hep 2; TOPLAM /
-  KDV / NAKİT / ÖDENEN satırlarının hiçbiri hiçbir yankıda geçmiyor. Sebebi de görünüyor: son
-  yankı, toplam bloğunu basan `PrintTotalsAndPayments`tan **7 ms ÖNCE** alınıyor. Üstelik
+  ⚠️ **YANKI, SON `GetTicket` ANINA KADAR BASILMIŞ HER ŞEYİ TAŞIR — NİHAİ TOPLAM BLOĞUNU DEĞİL.**
+  Son yankı, toplam bloğunu basan `PrintTotalsAndPayments`tan **7 ms ÖNCE** alınıyor; dolayısıyla
+  TOPLAM / KDV / NAKİT / ÖDENEN satırları hiçbir yankıda geçmez. Ama "yalnız kalem satırları" da
+  DEĞİL: kartlı bir fişte (88/2) yankı **9 satır** getirdi ve içinde `ARATOPLAM *71,50`,
+  `GARANTİ BBVA`, `İŞYERİ İND. *3,57-` vardı. Yani ödeme sırasında basılan satırlar yankıya
+  GİRER. Üstelik
   `PrintTotalsAndPayments`/`PrintBeforeMF`/`PrintMF`/`Close` **saf komuttur** — ne parametre
   gönderilir ne gövde döner, yalnız `return 0`. Sonuç: **kâğıttaki TOPLAM satırı hiçbir senaryoda
   otomatik doğrulanamaz; elimizdeki tek şey cihazın SAYAÇLARIDIR** (`TotalReceiptAmount` vb.) ve
