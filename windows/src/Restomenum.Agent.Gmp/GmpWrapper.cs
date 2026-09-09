@@ -544,9 +544,21 @@ public sealed partial class GmpWrapper : IGmpWrapper
         long indirim = t.TotalReceiptDiscount;
         long kdv = t.TotalReceiptTax;
 
+        // ── W73: CİHAZIN FİŞE BASTIĞI SATIRLAR ────────────────────────────────────────
+        // Veri zaten geliyordu (`OptionFlags(Reload)` → `ECHO_PRINTER`) ve atılıyordu. `null` =
+        // gelmedi; boş liste = "geldi ama satır yok". `PrinterLineCount` cihazın BİLDİRDİĞİ toplam:
+        // dizi ondan kısaysa kopya eksiktir ve bunu görebilmek gerekir.
+        //
+        // MASKELEME: satırlar fişin kendisi (kart verisi taşımaları beklenmez) ama kural yine de
+        // uygulanıyor — 6+ ardışık rakam `***`. Tutarlar "9,90" gibi ayraçlı olduğu için etkilenmez.
+        // Pencere seçimi ve maskeleme `PrinterCopy` (Core, testli). Burada yalnız marshalling var.
+        var yaziciSatirlari = PrinterCopy.Read(
+            t.stPrinterCopy?.Select(x => x?.line).ToList(), t.numberOfPrinterLinesInThis);
+
         if (count > 0 && (payments is null || count > PaymentWindow.Capacity))
             return new GmpTicket(total, paid, -1, 0, null, null,
-                TotalDiscountMinor: indirim, TotalTaxMinor: kdv);
+                TotalDiscountMinor: indirim, TotalTaxMinor: kdv,
+                PrinterLines: yaziciSatirlari, PrinterLineCount: t.totalNumberOfPrinterLines);
 
         var satirlar = new List<GmpPaymentLine>();
         int lastType = 0;
@@ -623,8 +635,10 @@ public sealed partial class GmpWrapper : IGmpWrapper
         // okunmuş olmalı hem de dizi o kadarını taşıyabilmiş olmalı.
         return new GmpTicket(total, paid, count, lastType, rrn, last4, errCode, errText, appErrCode,
             appErrText, satirlar, PaymentsAreComplete: dolu == count && uzunluk >= count,
-            TotalDiscountMinor: indirim, TotalTaxMinor: kdv);
+            TotalDiscountMinor: indirim, TotalTaxMinor: kdv,
+            PrinterLines: yaziciSatirlari, PrinterLineCount: t.totalNumberOfPrinterLines);
     }
 
     private static bool Bos(string? s) => string.IsNullOrWhiteSpace(s);
+
 }

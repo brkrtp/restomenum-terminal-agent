@@ -529,6 +529,131 @@ public class GmpTerminalTransportTests
         Assert.Equal(62, r.ClosedTicketPayments![0].BankBkmId);
     }
 
+    // ── W73: CİHAZIN FİŞE BASTIĞI SATIRLAR ──────────────────────────────────────
+
+    /// <summary>Sahadan okunan GERÇEK yazıcı kopyası (F70-R, 2026-09-09 15:27:01).</summary>
+    private static readonly string[] SahaKopyasi =
+    {
+        "Espresso               %10      *9,90 ",
+        "İNDİRİM                         *0,99-",
+    };
+
+    [Fact]
+    public async Task Fise_basilan_satirlar_GUNLUGE_yazilir()
+    {
+        // ← ÇİVİ: 2026-09-09'da "indirim fişte çıktı mı" sorusunu saatlerce cevaplayamadık; elimizde
+        // yalnız toplamlar vardı ve kâğıt kullanıcıdaydı. Oysa cihaz bastığı satırları ZATEN
+        // gönderiyordu (`OptionFlags(Reload)` → `ECHO_PRINTER`) ve `Map` onları atıyordu.
+        // Bu test o satırların kaybolmamasını çiviliyor.
+        var (t, gmp, _) = Kur();
+        var loglar = new List<(string, object?)>();
+        var tt = new GmpTerminalTransport(gmp, log: (m, o) => loglar.Add((m, o)));
+        // Kapanış okuması `GetTicket`ten geliyor → sahtede `Ticket` alanı.
+        gmp.Ticket = new GmpTicket(990, 990, 1, GmpPaymentTypes.Cash,
+            PaymentsAreComplete: true, PrinterLines: SahaKopyasi, PrinterLineCount: 2);
+        gmp.AfterPayment = new GmpTicket(990, 990, 1, GmpPaymentTypes.Cash, PaymentsAreComplete: true);
+
+        await tt.SaleAsync(Req(amount: 990, paymentType: GmpPaymentTypes.Cash));
+
+        var veri = loglar.LastOrDefault(l => l.Item1.Contains("fişe basılan satırlar")).Item2;
+        Assert.NotNull(veri);
+        var satirlar = (IReadOnlyList<string>?)veri!.GetType().GetProperty("satirlar")!.GetValue(veri);
+        Assert.Equal(SahaKopyasi, satirlar);            // ← ÇİVİ: BİREBİR, kırpılmadan
+        Assert.False((bool)veri.GetType().GetProperty("eksik")!.GetValue(veri)!);
+    }
+
+    [Fact]
+    public async Task EKSIK_kopya_EKSIK_diye_isaretlenir()
+    {
+        // ← ÇİVİ: "üç satır bastı" ile "üç satırını gördük" AYRI şeyler. Eksik bir kopyayı tam
+        // sanmak yanlış teşhis üretir — aynı ayrım ödeme satırlarında bir kez ısırdı.
+        var (t, gmp, _) = Kur();
+        var loglar = new List<(string, object?)>();
+        var tt = new GmpTerminalTransport(gmp, log: (m, o) => loglar.Add((m, o)));
+        gmp.Ticket = new GmpTicket(990, 990, 1, GmpPaymentTypes.Cash,
+            PaymentsAreComplete: true, PrinterLines: new[] { SahaKopyasi[0] }, PrinterLineCount: 5);
+        gmp.AfterPayment = new GmpTicket(990, 990, 1, GmpPaymentTypes.Cash, PaymentsAreComplete: true);
+
+        await tt.SaleAsync(Req(amount: 990, paymentType: GmpPaymentTypes.Cash));
+
+        var veri = loglar.LastOrDefault(l => l.Item1.Contains("fişe basılan satırlar")).Item2;
+        Assert.True((bool)veri!.GetType().GetProperty("eksik")!.GetValue(veri)!);
+        Assert.Equal(5, veri.GetType().GetProperty("cihazinBildirdigi")!.GetValue(veri));
+    }
+
+    [Fact]
+    public async Task Satir_YOKSA_gunluge_de_YAZILMAZ()
+    {
+        // Gürültü yok: `null` = "cihaz göndermedi". Boş bir satır dizisi loglamak, her satışta
+        // anlamsız bir kayıt biriktirirdi.
+        var (t, gmp, _) = Kur();
+        var loglar = new List<(string, object?)>();
+        var tt = new GmpTerminalTransport(gmp, log: (m, o) => loglar.Add((m, o)));
+        gmp.Ticket = new GmpTicket(990, 990, 1, GmpPaymentTypes.Cash, PaymentsAreComplete: true);
+        gmp.AfterPayment = new GmpTicket(990, 990, 1, GmpPaymentTypes.Cash, PaymentsAreComplete: true);
+
+        await tt.SaleAsync(Req(amount: 990, paymentType: GmpPaymentTypes.Cash));
+
+        Assert.DoesNotContain(loglar, l => l.Item1.Contains("fişe basılan satırlar"));
+    }
+
+    [Theory]
+    [InlineData("Espresso  *9,90 ", "Espresso  *9,90 ")]                 // tutar ayraçlı → dokunulmaz
+    [InlineData("KART: 1234", "KART: 1234")]                             // 4 hane → dokunulmaz
+    [InlineData("PAN 4508034508034508", "PAN ***")]                      // 16 hane → maskelenir
+    [InlineData("SN 123456", "SN ***")]                                  // 6 hane → sınır
+    [InlineData("SN 12345", "SN 12345")]                                 // 5 hane → sınırın altı
+    public void Yazici_satirinda_ARDISIK_RAKAM_maskelenir(string girdi, string beklenen)
+    {
+        // ← ÇİVİ: bu satırlar artık GÜNLÜĞE gidiyor. Fiş satırlarında kart verisi beklenmiyor —
+        // ama "beklenmiyor" bir güvence değil: banka uygulamasının fişe ne yazacağını biz
+        // belirlemiyoruz. Kural sarmalayıcıda (P/Invoke, testsiz) duruyordu; mutasyon orada
+        // satırları düşürünce HİÇBİR test kırılmadı. Karar Core'a taşındı.
+        Assert.Equal(beklenen, PrinterCopy.Maskele(girdi));
+    }
+
+    [Fact]
+    public void Yazici_kopyasi_YALNIZ_dolu_pencereyi_okur()
+    {
+        // ← ÇİVİ: dizi kapasite kadar uzun olabilir; okunacak olan cihazın DOLDURDUĞU kadarıdır.
+        // Fazlasını okumak boş satırları "fişte var" saymak olurdu.
+        var dizi = new string?[] { "A", "B", null, null };
+        Assert.Equal(new[] { "A", "B" }, PrinterCopy.Read(dizi, 2));
+        Assert.Equal(new[] { "A" }, PrinterCopy.Read(dizi, 1));
+        Assert.Empty(PrinterCopy.Read(dizi, 0)!);
+        Assert.Equal(new[] { "A", "B" }, PrinterCopy.Read(dizi, 99));   // taşma kırpılır
+    }
+
+    [Fact]
+    public void Yazici_kopyasi_GELMEDIYSE_null_BOSTAN_ayri()
+    {
+        // ← ÇİVİ: "gelmedi" ile "geldi ama satır yok" ayrı olgular; ikisini eşitlemek, cihazın
+        // hiç göndermediği bir kopyayı "fiş boştu" diye okumak olurdu.
+        Assert.Null(PrinterCopy.Read(null, 3));
+        Assert.NotNull(PrinterCopy.Read(Array.Empty<string?>(), 0));
+    }
+
+    // ── W74: BAYRAK ADLARI DLL BİTLERİYLE HİZALI ────────────────────────────────
+
+    [Fact]
+    public void Echo_bayraklari_DLL_bitleriyle_AYNI()
+    {
+        // ← ÇİVİ: adlar bir zamanlar TERS eşlenmişti — `ItemDetails` bit 1'e, `PaymentDetails`
+        // bit 2'ye bakıyordu; DLL'de tam tersi (`GmpInterop.cs`: ECHO_PAYMENT_DETAILS = 1<<1,
+        // ECHO_ITEM_DETAILS = 1<<2). Her yerde üçü birden gönderildiği için zararsızdı, ama biri
+        // tek başına kullansaydı istediğinin TERSİNİ alır ve bunu hiçbir şey söylemezdi.
+        Assert.Equal(1UL, (ulong)GmpEchoFlags.Printer);          // ECHO_PRINTER        = 1<<0
+        Assert.Equal(2UL, (ulong)GmpEchoFlags.PaymentDetails);   // ECHO_PAYMENT_DETAILS= 1<<1
+        Assert.Equal(4UL, (ulong)GmpEchoFlags.ItemDetails);      // ECHO_ITEM_DETAILS   = 1<<2
+    }
+
+    [Fact]
+    public void Reload_UCU_BIRDEN_gonderir_davranis_DEGISMEDI()
+    {
+        // ← ÇİVİ: W74 yalnız ADLARI düzeltti. `Reload` hâlâ 0b111 — sahadaki davranış birebir aynı.
+        Assert.Equal(7UL, (ulong)GmpEchoFlags.Reload);
+    }
+
     // ── W70: İNDİRİM CİHAZA SATIR TOPLAMI OLARAK GİDER ──────────────────────────
 
     [Theory]

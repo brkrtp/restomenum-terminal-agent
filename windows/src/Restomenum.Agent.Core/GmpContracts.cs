@@ -282,7 +282,28 @@ public readonly record struct GmpTicket(
 
     /// <summary><c>ST_TICKET.TotalReceiptTax</c> — fişteki KDV toplamı (kuruş). İndirimin matrahı
     /// düşürüp düşürmediği yalnız bu alanın indirim öncesi/sonrası değerinden okunabilir.</summary>
-    long TotalTaxMinor = 0)
+    long TotalTaxMinor = 0,
+
+    /// <summary>
+    /// <b>Cihazın FİŞE BASTIĞI satırlar</b> (<c>ST_TICKET.stPrinterCopy</c>). <c>null</c> = gelmedi.
+    ///
+    /// <para><b>Neden var (2026-09-09):</b> "indirim fişte çıktı mı" sorusunu saatlerce
+    /// cevaplayamadık; elimizde yalnız toplamlar vardı, kâğıt ise kullanıcıdaydı. Oysa cihaz
+    /// bastığı satırları <b>zaten gönderiyordu</b> — <c>OptionFlags(Reload)</c> içindeki
+    /// <c>ECHO_PRINTER</c> biti sayesinde veri her fişte geliyor ve biz onu <b>atıyorduk</b>.
+    /// Sahadan okunan gerçek örnek:</para>
+    /// <code>
+    /// "Espresso               %10      *9,90 "
+    /// "İNDİRİM                         *0,99-"
+    /// </code>
+    /// <para><b>Ek cihaz çağrısı YOK</b> — bayrak zaten gönderiliyordu, yalnız yanıtı okuyoruz.</para>
+    /// </summary>
+    IReadOnlyList<string>? PrinterLines = null,
+
+    /// <summary><c>ST_TICKET.totalNumberOfPrinterLines</c> — cihazın bildirdiği TOPLAM satır sayısı.
+    /// <see cref="PrinterLines"/> bundan kısaysa kopya EKSİKTİR; "iki satır bastı" ile "iki satırını
+    /// gördük" ayrı şeyler (aynı ayrım ödeme satırlarında bir kez ısırdı).</summary>
+    int PrinterLineCount = 0)
 {
     public bool IsFullyPaid => TotalAmountMinor > 0 && PaidAmountMinor >= TotalAmountMinor;
     public long RemainingMinor => Math.Max(0, TotalAmountMinor - PaidAmountMinor);
@@ -450,6 +471,40 @@ public readonly record struct GmpItem(string Name, long UnitPriceMinor, int Quan
 }
 
 /// <summary>
+/// <b>W73 — cihazın fişe bastığı satırların okunması.</b> Pencere seçimi ve maskeleme burada,
+/// sarmalayıcıda DEĞİL: <c>GmpWrapper</c> P/Invoke katmanı ve birim testi yok — orada duran bir
+/// kural sessizce bozulabilir (mutasyonla ölçüldü: satırları düşürmek hiçbir testi kırmıyordu).
+/// Aynı gerekçeyle <see cref="PaymentWindow"/> de Core'da.
+/// </summary>
+public static class PrinterCopy
+{
+    /// <summary>
+    /// Cihazın DOLDURDUĞU satırlar. <paramref name="lines"/> dizisi bildirilen sayıdan uzun
+    /// olabilir (kapasite); okunacak olan <paramref name="filledCount"/> kadarıdır.
+    /// <c>null</c> girdi → <c>null</c> çıktı: "gelmedi" ile "boş geldi" ayrı şeyler.
+    /// </summary>
+    public static IReadOnlyList<string>? Read(IReadOnlyList<string?>? lines, int filledCount)
+    {
+        if (lines is null) return null;
+        var adet = Math.Clamp(filledCount, 0, lines.Count);
+        var liste = new List<string>(adet);
+        for (var i = 0; i < adet; i++)
+            if (lines[i] is string satir) liste.Add(Maskele(satir));
+        return liste;
+    }
+
+    /// <summary>
+    /// 6+ ardışık rakamı <c>***</c> ile maskeler.
+    ///
+    /// <para><b>Neden:</b> bu satırlar artık günlüğe gidiyor. Fiş satırlarında kart verisi
+    /// beklenmiyor — ama "beklenmiyor" bir güvence değildir; banka uygulamasının fişe ne yazacağını
+    /// biz belirlemiyoruz. Tutarlar ayraçlı olduğu için (<c>9,90</c>) etkilenmez.</para>
+    /// </summary>
+    public static string Maskele(string s) =>
+        System.Text.RegularExpressions.Regex.Replace(s, @"\d{6,}", "***");
+}
+
+/// <summary>
 /// Cihaza giden kalem alanlarının sabitleri.
 /// </summary>
 public static class GmpItemDefaults
@@ -482,9 +537,23 @@ public readonly record struct GmpPaymentRequest(long AmountMinor, int PaymentTyp
 public enum GmpEchoFlags : ulong
 {
     None = 0,
+
+    /// <summary><c>GMP3_OPTION_ECHO_PRINTER</c> — cihazın FİŞE BASTIĞI satırları geri döndürür
+    /// (<see cref="GmpTicket.PrinterLines"/>).</summary>
     Printer = 1 << 0,
-    ItemDetails = 1 << 1,
-    PaymentDetails = 1 << 2,
+
+    /// <summary>
+    /// <c>GMP3_OPTION_ECHO_PAYMENT_DETAILS</c> (<c>GmpInterop.cs</c>, bit 1).
+    ///
+    /// <para>⚠️ <b>Adlar bir zamanlar TERS eşlenmişti</b> (W74): bu bit <c>ItemDetails</c> diye
+    /// adlandırılmıştı, bit 2 de <c>PaymentDetails</c>. Zararsızdı çünkü her yerde
+    /// <see cref="Reload"/> (üçü birden) gönderiliyor — ama biri tek başına kullansaydı istediğinin
+    /// tersini alırdı ve bunu hiçbir şey söylemezdi.</para>
+    /// </summary>
+    PaymentDetails = 1 << 1,
+
+    /// <summary><c>GMP3_OPTION_ECHO_ITEM_DETAILS</c> (<c>GmpInterop.cs</c>, bit 2).</summary>
+    ItemDetails = 1 << 2,
 
     /// <summary>
     /// Fişi <b>güvenilir</b> okumak için gereken küme. Tek başına <c>GetTicket</c> ödeme/kalem

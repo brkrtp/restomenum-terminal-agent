@@ -260,6 +260,25 @@ public sealed partial class GmpTerminalTransport : ITerminalTransport
             {
                 cihazTahsil = kapanisFisi.PaidAmountMinor;
                 cihazToplam = kapanisFisi.TotalAmountMinor;
+
+                // ── W73: CİHAZIN FİŞE BASTIĞI SATIRLAR GÜNLÜĞE ───────────────────────
+                // 2026-09-09: "indirim fişte çıktı mı" sorusunu saatlerce cevaplayamadık; elimizde
+                // yalnız toplamlar vardı, kâğıt kullanıcıdaydı. Oysa cihaz bastığı satırları ZATEN
+                // gönderiyordu (`ECHO_PRINTER`) ve biz atıyorduk. Artık yazılıyor — bir daha
+                // "basıldı mı" diye kâğıt beklemeyeceğiz.
+                //
+                // `eksik` ayrımı önemli: cihaz "3 satır bastım" deyip 2 satır göndermiş olabilir.
+                // "Üç satır bastı" ile "üç satırını gördük" ayrı şeyler (ödeme satırlarında bir kez
+                // ısırdı) — eksik kopyayı tam sanmak yanlış teşhis üretir.
+                if (kapanisFisi.PrinterLines is { } yazici)
+                    _log("[gmp] fişe basılan satırlar", new
+                    {
+                        request.CommandId,
+                        adet = yazici.Count,
+                        cihazinBildirdigi = kapanisFisi.PrinterLineCount,
+                        eksik = yazici.Count < kapanisFisi.PrinterLineCount,
+                        satirlar = yazici,
+                    });
                 // Cihazın TAHSİL EDİLMİŞ satır sayısı (tutarı 0 olanlar başarısız denemedir).
                 // Kendi defterimizle tutmuyorsa bu gürültü değil ALARM: gerçekleşmiş bir tahsilat
                 // bizim kaydımızda olmayabilir ve deftere hiç yazılmaz.
