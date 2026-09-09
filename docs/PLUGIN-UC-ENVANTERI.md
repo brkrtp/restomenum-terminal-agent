@@ -321,6 +321,15 @@ Bunlar üretici belgesinde yazmıyor; sahada ölçülüp burada kayda geçti.
   dept 10 (%10) 891 kuruşluk kalem → `TotalReceiptTax` **81** = 891×10/110.
 - **`bankBkmId = 0` = "cihaz seçsin"** ve cihaz aynı fişte art arda iki denemede **farklı**
   banka seçebiliyor (GARANTİ 62 → AKBANK 46).
+- **Cihazın fişe yazdığı saat, ajanın isteği aldığı saatten 2–3,5 sn GERİDEDİR.** Üç fişte
+  ölçüldü: FNo 11 kâğıt 15:26:52 / istek 15:26:54.317 (2,3 sn) · FNo 16 kâğıt 16:07:14 / istek
+  16:07:15.943 (1,9 sn) · FNo 17 kâğıt 16:25:15 / istek 16:25:18.472 (3,5 sn). Kayma hep aynı
+  yönde. **Kâğıttaki saat ile günlükteki saat birebir TUTMAZ**; bunu bilmeden bakan biri "fiş
+  bizim isteğimizden ÖNCE kesilmiş" diye yanlış iz sürer. Sebebi (cihazın kendi RTC'si)
+  **ölçülmedi**. Fişi kimliklendirmek için saat TEK BAŞINA yetmez, `FNo` ile birlikte kullanılır.
+- **Kâğıt = kasa = sayaç eşitliği doğrulandı** (F70-R kapanışı, fiş 16 ve 17): kullanıcı kâğıtta
+  kalem `*9,90`, `İNDİRİM *0,99-` ve TOPLAM **8,91** okudu; cihaz sayacı 891, platform 891.
+  Toplam satırı yankıda olmadığı için bu eşitliği kuran tek kaynak **insan okumasıydı**.
 - **Kâğıt durumu HİÇBİR yerde bildirilmiyor; `PrintMF = 0` kâğıda basıldığının KANITI DEĞİLDİR.**
   DLL'de kâğıt-bitti kodu var (`TRAN_RESULT_NO_PAPER = 0x0020`) ama **hangi çağrının hangi
   koşulda döndürdüğü ÖLÇÜLMEDİ** ve 2026-09-09'un tüm izlerinde bir kez bile görülmedi. Cihaz
