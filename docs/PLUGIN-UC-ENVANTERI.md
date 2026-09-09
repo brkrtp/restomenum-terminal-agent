@@ -365,12 +365,14 @@ Bunlar üretici belgesinde yazmıyor; sahada ölçülüp burada kayda geçti.
   hiçbiri yeni dosya açmadı; 16:01:22'deki yeni dosya önceki 5 MB'a ulaştığı için açıldı.
   **Yeniden başlatmadan sonra izi eski dosyada aramak gerekir.** İz dosyaları **cp1254**
   kodludur (`iconv -f cp1254 -t utf-8`), aksi hâlde Türkçe fiş satırları bozuk okunur.
-  ⚠️ **İZ TAMPONLU YAZILIYOR ve zamanlayıcıyla DEĞİL, SONRAKİ CİHAZ ETKİNLİĞİYLE boşalıyor.**
-  Ölçüldü (2026-09-09 17:19): fiş 88/6 17:19:50'de kapandı, ama dosyanın son yazma damgası
-  17:19:45'te kaldı ve dakikalarca orada durdu — kapanışın `PrintTotalsAndPayments`/`PrintMF`/
-  `Close` çağrıları ize hiç düşmemişti. **Olaydan hemen sonra ize bakmak "çağrı yapılmamış"
-  yanılgısı üretir.** Eksik görünen son fişin izi, bir sonraki cihaz çağrısından sonra
-  tamamlanır. Ajan günlüğü (`agent-*.log`) ise anında yazılır — çelişkide ONA güvenilir.
+  ⚠️ **DÖNÜŞ FİŞİN ORTASINDA OLABİLİR — TEK BİR FİŞİN İZİ İKİ DOSYAYA BÖLÜNÜR.**
+  Ölçüldü (2026-09-09): fiş 88/6 17:19:50'de kapandı; `…_160122.TXT` 5 MB'a ulaştığı için
+  **17:19:49'da döndü** ve kapanışın `PrintTotalsAndPayments`/`PrintMF`/`Close` çağrıları
+  **yeni dosyaya** (`…_171949.TXT`, ilk damgası 17:19:45) yazıldı. Eski dosyaya bakan biri
+  "çağrılar yapılmamış" sanır — nitekim bu oturumda tam olarak bu yanılgıya düşüldü ve
+  yanlışlıkla "iz tamponlu" diye kaydedildi; **öyle bir tamponlama YOK.**
+  **Kural: bir fiş eksik görünüyorsa önce `ls -t GMPDLL_*.TXT` ile yeni dosya arayın.**
+  Ajan günlüğü (`agent-*.log`) tek dosyadır ve anında yazılır — çelişkide ONA güvenilir.
 ### İndirim (`ST_ITEM.promotion`) — hepsi ölçüldü
 
 Kaynak: `--discount-probe` (2026-09-09 14:57, tek fiş, altı adım) + canlı satış F70-R (15:26).
