@@ -164,6 +164,29 @@ public class LocalSaleHandlerTests : IDisposable
     }
 
     [Fact]
+    public async Task DISCOUNT_INVALID_reddi_REASON_ile_tasinir_paymentInvoked_FALSE()
+    {
+        // ← ÇİVİ (sözleşme, c5 ölçtü): platform reddi `AdditionalResponse`tan OKUMUYOR
+        // (`nexoResponse.js:302`). Yalnız `ErrorCondition PaymentRestriction` görürse tablodan
+        // "declined" çıkarıyor ve kasiyere **"banka reddetti"** dedirtiyor — oysa banka hiç
+        // devrede değil (P16 hatasının aynısı). Karar `Restomenum.reason` dalından okunuyor ve o
+        // dal `paymentInvoked: false` ile birlikte "başlamadı" (`notStarted`) üretiyor.
+        //
+        // `paymentInvoked: true` gelirse platformun tutarlılık kapısı sonucu tamamen reddediyor;
+        // yani bu iki alan BİRLİKTE doğru olmak zorunda.
+        var (h, sim, _) = Kur(new PaymentDetailResult.Ok(Indirimli(-1)));
+
+        var govde = await h.HandleAsync(Req());
+        var ek = JsonDocument.Parse(govde).RootElement
+            .GetProperty("SaleToPOIResponse").GetProperty("Restomenum");
+
+        Assert.Equal("DISCOUNT_INVALID", ek.GetProperty("reason").GetString());   // ← ÇİVİ
+        Assert.False(ek.GetProperty("paymentInvoked").GetBoolean());              // ← ÇİVİ
+        Assert.Equal("p1", ek.GetProperty("productCode").GetString());            // hangi kalem
+        Assert.Empty(sim.SaleCalls);                                              // cihaza gidilmedi
+    }
+
+    [Fact]
     public async Task KURUS_ALTI_sapma_reddedilir()
     {
         // ← ÇİVİ: 0,995 lira = 99,5 kuruş ve `Money.ToMinor` onu 100'e yuvarlar — müşteriden yarım
