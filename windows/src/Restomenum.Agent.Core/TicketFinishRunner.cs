@@ -37,7 +37,7 @@ public static class TicketFinishRunner
     public static Sonuc Calistir(IGmpWrapper gmp, ulong handle, bool uygula,
         Action<string, object?>? log = null)
     {
-        void Yaz(string m, object? v = null) => log?.Invoke(m, v);
+        bool Yaz(string m, object? v = null) { log?.Invoke(m, v); return true; }
 
         // `OptionFlags(Reload)` ŞART: tek başına `GetTicket` ödeme detayını eksik döndürebiliyor
         // (ölçüldü) ve karar tam o alanlara dayanıyor. Üreticinin akışında da adım 2 budur.
@@ -59,6 +59,14 @@ public static class TicketFinishRunner
             bayraklar = TicketFlags.Yazdirilabilir(fis.TransactionFlags),
             plan = plan.Adim.ToString(), neden = plan.Neden, ureticiAdimi = plan.UreticiAdimi,
         });
+        // CİHAZIN KÂĞIDA BASTIĞI SATIRLAR (W73 yankısı). Bayrak "basılmadı" derken kâğıtta
+        // toplam satırı VARSA, bayrak ile fiziksel baskı ayrışmış demektir ve tam zinciri
+        // koşmak toplamları İKİNCİ kez basar. Bu ayrımı ancak bu satırlar gösterir.
+        _ = fis.PrinterLines is { } yz
+            ? Yaz("[bitir] cihazın bastığı satırlar", new
+              { adet = yz.Count, cihazBildirdi = fis.PrinterLineCount,
+                satirlar = PrinterCopy.Yazdirilabilir(yz) })
+            : Yaz("[bitir] yazıcı yankısı GELMEDİ (null) — kâğıtta ne olduğu bilinmiyor", null);
 
         if (plan.Adim == FisBitirmeAdimi.Dokunma || !uygula)
             return new Sonuc(false, plan, fis.TransactionFlags,
