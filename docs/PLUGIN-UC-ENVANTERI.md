@@ -354,8 +354,17 @@ Kaynak: `--discount-probe` (2026-09-09 14:57, tek fiş, altı adım) + canlı sa
   `OptionFlags(Reload)` → `ECHO_PRINTER`). Ek bir çağrı gerekmez; kapanış `GetTicket`'inde gelir.
   `totalNumberOfPrinterLines` cihazın BİLDİRDİĞİ toplam, gelen dizi ondan kısa olabilir —
   *"üç satır bastı"* ile *"üç satırını gördük"* ayrı şeylerdir (günlükte `eksik` alanı).
-  W73b bu satırları günlüğe METİN olarak yazar; artık *"indirim fişte çıktı mı"* sorusu kâğıt
-  beklemeden cevaplanır:
+  ⚠️ **YANKI YALNIZ KALEM SATIRLARINI KAPSAR — TOPLAM BLOĞUNU DEĞİL.** Fiş 17'de ölçüldü:
+  dört yankının dördünde de aynı iki kalem satırı var, `totalNumberOfPrinterLines` hep 2; TOPLAM /
+  KDV / NAKİT / ÖDENEN satırlarının hiçbiri hiçbir yankıda geçmiyor. Sebebi de görünüyor: son
+  yankı, toplam bloğunu basan `PrintTotalsAndPayments`tan **7 ms ÖNCE** alınıyor. Üstelik
+  `PrintTotalsAndPayments`/`PrintBeforeMF`/`PrintMF`/`Close` **saf komuttur** — ne parametre
+  gönderilir ne gövde döner, yalnız `return 0`. Sonuç: **kâğıttaki TOPLAM satırı hiçbir senaryoda
+  otomatik doğrulanamaz; elimizdeki tek şey cihazın SAYAÇLARIDIR** (`TotalReceiptAmount` vb.) ve
+  kâğıtla sayaç arasında bir ıraksama ancak insan okumasıyla yakalanır.
+
+  W73b bu satırları günlüğe METİN olarak yazar; *"indirim KALEM olarak fişe çıktı mı"* sorusu
+  artık kâğıt beklemeden cevaplanır (toplam satırı için değil):
   ```
   [gmp] fişe basılan satırlar { CommandId = …, adet = 2, cihazinBildirdigi = 2, eksik = False, satirlar =
     1│Espresso               %10      *9,90 │
