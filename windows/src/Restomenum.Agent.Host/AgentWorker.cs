@@ -167,6 +167,26 @@ public sealed class AgentWorker : BackgroundService
                 return;
             }
 
+            // W110 — ELLE FİŞ TAMAMLAMA. Ödeme yolundan AYRI: niyeti para almak değil, alınmış
+            // parayı taşıyan fişi tamamlamak. İkisini aynı ayrıştırıcıya koymak, tek bir `if`
+            // hatasının satışı da bozması demekti.
+            if (kategori == TicketFinishParser.Category)
+            {
+                var bitir = TicketFinishParser.Parse(body);
+                if (bitir is null)
+                {
+                    // En sık sebep: `ticketFinishId` YOK. Anahtarsız çalıştırmak, tekrar gelen
+                    // bir isteğin cihaza İKİNCİ kez gitmesine izin vermek olurdu.
+                    _log.LogWarning("geçersiz TicketFinish (ticketFinishId zorunlu) [{Kaynak}]", Kaynak());
+                    Respond(ctx, 400, "{\"error\":\"MALFORMED\"}");
+                    return;
+                }
+                _log.LogInformation("[istek] TicketFinish ServiceID={Svc} POIID={Poi} finishId={Fid}",
+                    bitir.ServiceId, bitir.PoiId, bitir.TicketFinishId);
+                Respond(ctx, 200, await _handler.HandleTicketFinishAsync(bitir, ct));
+                return;
+            }
+
             if (kategori == "Reversal")
             {
                 var iptal = ReversalRequestParser.Parse(body);

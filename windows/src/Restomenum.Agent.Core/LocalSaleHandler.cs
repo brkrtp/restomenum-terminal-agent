@@ -910,6 +910,98 @@ public sealed class LocalSaleHandler : IDeviceIdleGate
     }
 
     /// <summary>
+    /// <b>W110 — ELLE FİŞ TAMAMLAMA</b> (<c>TicketFinish</c> zarfı).
+    ///
+    /// <para><b>Neden kasadan tetikleniyor:</b> otomatik süpürme sekiz denemeden sonra susup
+    /// insanı bekliyor (W108) — kâğıt gerçekten bittiyse cihazı süresiz meşgul etmek kasiyeri de
+    /// kilitlerdi. <b>Kâğıdı değiştiren kişi doğru anı bilir, süpürme bilmez.</b></para>
+    ///
+    /// <para><b>Üç koruma:</b>
+    /// ① <b>Tekrar anahtarı</b> (<c>ticketFinishId</c>) — ikinci POST cihaza GİTMEZ, saklanan
+    ///   sonuç replay edilir. Anahtarsız istek ayrıştırıcıda reddedilir.
+    /// ② <b>Kilit tavanı</b> — satışla aynı kilit, aynı tavan; satış sürüyorsa beklenmez.
+    /// ③ <b>Süre bütçesi</b> — kurtarma zinciri de 310 sn'ye çıkabiliyor ve kasanın 180 sn'lik
+    ///   kapısını aşardı; düzeltmeye çalıştığımız arızanın aynısını bu kez kurtarma yolunda
+    ///   üretirdi.</para>
+    /// </summary>
+    public async Task<string> HandleTicketFinishAsync(TicketFinishRequest req, CancellationToken ct = default)
+    {
+        // ① TEKRAR ANAHTARI. `kind = finish`: açılış kurtarması yalnız `sale` okur, bu yüzden
+        // bir tamamlama isteği ASLA "yarım kalmış satış" sanılmaz.
+        var kayit = _store.Save(req.TicketFinishId, "", req.PoiId,
+            _now().ToUnixTimeMilliseconds() + 86_400_000, kind: CommandKinds.Finish);
+        if (kayit is SaveResult.Duplicate d && d.Command.State.IsFinal() && d.Command.ResultJson is string saklanan)
+        {
+            _log("[bitir] tekrar gelen istek — saklanan sonuç replay edildi",
+                new { req.TicketFinishId, req.PoiId });
+            return saklanan;
+        }
+
+        if (_transport is not IStuckTicketFinisher tamamlayici)
+        {
+            _log("[bitir] bu taşıma fiş tamamlamayı DESTEKLEMİYOR", new { req.TicketFinishId });
+            return TicketFinishParser.Govde(req,
+                new StuckTicketResult(false, false, false,
+                    new FisBitirmePlani(FisBitirmeAdimi.Dokunma, "NOT_SUPPORTED", 0), 0),
+                not: "CAPABILITY_NOT_SUPPORTED");
+        }
+
+        // ② KİLİT — satışla AYNI kilit ve AYNI tavan. Satış her zaman öncelikli.
+        if (!await _islemKilidi.WaitAsync(_satisKilitTavani, ct))
+        {
+            _log("[bitir] terminal kilidi alınamadı — cihaza GİDİLMEDİ", new { req.TicketFinishId });
+            return TicketFinishParser.Govde(req,
+                new StuckTicketResult(false, false, Meshgul: true,
+                    new FisBitirmePlani(FisBitirmeAdimi.Dokunma, RestomenumReasons.TerminalBusy, 0), 0),
+                not: RestomenumReasons.TerminalBusy);
+        }
+
+        StuckTicketResult sonuc;
+        try
+        {
+            // ③ BÜTÇE — kurtarma zinciri de kasanın kapısını aşmamalı.
+            sonuc = tamamlayici.FinishStuckTicket(uygula: true, butce: new BaskiButcesi(BaskiButcesi.Varsayilan));
+        }
+        catch (Exception e)
+        {
+            _log("[bitir] tamamlama hata verdi", new { req.TicketFinishId, hata = e.Message });
+            sonuc = new StuckTicketResult(false, false, false,
+                new FisBitirmePlani(FisBitirmeAdimi.Dokunma, "EXCEPTION", 0), 0, "EXCEPTION", e.GetType().Name);
+        }
+        finally { _islemKilidi.Release(); }
+
+        if (sonuc.Kapandi) _store.ClearPendingFinish(sonuc.TicketId ?? req.TicketFinishId);
+
+        _log("[bitir] elle tamamlama sonucu", new
+        {
+            req.TicketFinishId, req.PoiId, kapandi = sonuc.Kapandi, acikDegil = sonuc.FisAcikDegil,
+            bayraklar = TicketFlags.Yazdirilabilir(sonuc.Bayraklar),
+            ureticiAdimi = sonuc.Plan.UreticiAdimi, neden = sonuc.Plan.Neden,
+            adim = sonuc.BasarisizAdim, kod = sonuc.Kod,
+        });
+
+        var govde = TicketFinishParser.Govde(req, sonuc,
+            sonuc.Kapandi || sonuc.FisAcikDegil ? null : sonuc.Plan.Neden);
+
+        // ── SONUÇ YALNIZ KESİNSE SAKLANIR ─────────────────────────────────────────
+        // Fiş kapandıysa ya da zaten açık değilse sonuç KESİNDİR ve ikinci POST onu replay
+        // etmeli — cihaza tekrar gitmek, `FP3_Start` ile yoklama fişi açtırıp MALİ NUMARA
+        // tüketmek olurdu.
+        //
+        // ⚠️ Başarısızlıkta kayıt BİLEREK `RECEIVED`da bırakılır: kâğıt değiştirilip komut
+        // tekrar gönderildiğinde cihaza YENİDEN gidilebilmeli. Başarısız bir denemeyi
+        // "kesin sonuç" diye saklamak, elle kurtarmayı tek denemeye indirirdi — oysa bu
+        // zarfın bütün varlık sebebi insanın doğru anı seçmesi.
+        if (sonuc.Kapandi || sonuc.FisAcikDegil)
+        {
+            _store.Advance(req.TicketFinishId, CommandState.RECEIVED, CommandState.SENT_TO_TERMINAL);
+            _store.Advance(req.TicketFinishId, CommandState.SENT_TO_TERMINAL, CommandState.COMPLETED,
+                resultJson: govde);
+        }
+        return govde;
+    }
+
+    /// <summary>
     /// <b>W106 — SALT-OKUNUR fiş durumu sorgusu.</b> Kasa bayat kaydını bununla tazeler.
     ///
     /// <para><b><c>async</c> DEĞİL ve bilerek:</b> hiçbir I/O yok — ne cihaz, ne ağ, ne kilit.
@@ -978,7 +1070,11 @@ public sealed class LocalSaleHandler : IDeviceIdleGate
             }
 
             StuckTicketResult s;
-            try { s = tamamlayici.FinishStuckTicket(uygula: true); }
+            // W110: süpürme denemesine de BÜTÇE. Kasa beklemiyor ama cihaz KİLİTLİ: bütçesiz
+            // bir deneme cihazı 310 sn'ye kadar tutabilir ve o sırada gelen satış kilit
+            // tavanını (150 sn) doldurup `TERMINAL_BUSY` alır. Bütçeyle en kötü tutma ~175 sn.
+            // Kesilen deneme kaybolmaz — geri çekilmeyle zaten tekrar denenecek.
+            try { s = tamamlayici.FinishStuckTicket(uygula: true, butce: new BaskiButcesi(BaskiButcesi.Varsayilan)); }
             catch (Exception e)
             {
                 // Kayıt DURUYOR. Silmek, üzerinde para olan bir fişi unutmak olurdu.

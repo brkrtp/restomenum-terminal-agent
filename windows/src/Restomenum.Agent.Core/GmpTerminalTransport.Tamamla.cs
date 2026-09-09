@@ -20,7 +20,7 @@ public sealed partial class GmpTerminalTransport : IStuckTicketFinisher
     /// cihaz kilidini <c>Wait(0)</c> ile alır (satış her zaman öncelikli); elle çağrıda
     /// (<c>--finish-ticket</c>) ajan zaten durmuştur.</para>
     /// </summary>
-    public StuckTicketResult FinishStuckTicket(bool uygula)
+    public StuckTicketResult FinishStuckTicket(bool uygula, BaskiButcesi? butce = null)
     {
         var r = _gmp.Start(out var handle);
 
@@ -43,7 +43,7 @@ public sealed partial class GmpTerminalTransport : IStuckTicketFinisher
                 "Start", r.ToString());
         }
 
-        var s = TicketFinishRunner.Calistir(_gmp, handle, uygula, _log);
+        var s = TicketFinishRunner.Calistir(_gmp, handle, uygula, _log, butce);
         if (!s.Kapandi)
             return new StuckTicketResult(false, false, Meshgul: false, s.Plan, s.Bayraklar,
                 s.BasarisizAdim, s.Kod, s.ToplamMinor, s.TahsilMinor);

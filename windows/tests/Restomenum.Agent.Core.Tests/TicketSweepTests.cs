@@ -48,9 +48,11 @@ public class TicketSweepTests : IDisposable
             new FisBitirmePlani(FisBitirmeAdimi.MfVeKapat, TicketFinish.Tamamlanabilir, 5),
             TicketFlags.TotalsAndPaymentsPrinted, ToplamMinor: 990, TahsilMinor: 990);
 
-        public StuckTicketResult FinishStuckTicket(bool uygula)
+        /// <summary>Süpürmenin geçirdiği bütçe — cihazı ne kadar tutabileceğinin çivisi.</summary>
+        public BaskiButcesi? SonButce;
+        public StuckTicketResult FinishStuckTicket(bool uygula, BaskiButcesi? butce = null)
         {
-            Cagrilar.Add(uygula);
+            Cagrilar.Add(uygula); SonButce = butce;
             return Sonuc;
         }
 
@@ -107,6 +109,9 @@ public class TicketSweepTests : IDisposable
         await h.DrainOutboxAsync();
 
         Assert.Equal(new[] { true }, tasima.Cagrilar);   // ← KURU PROVA DEĞİL: gerçekten uygular
+        // ← ÇİVİ: kasa beklemiyor ama CİHAZ KİLİTLİ. Bütçesiz bir deneme cihazı 310 sn'ye kadar
+        // tutar ve o sırada gelen satış kilit tavanını doldurup `TERMINAL_BUSY` alır.
+        Assert.NotNull(tasima.SonButce);
         Assert.Empty(_store.PendingFinishes(_saatMs));
         Assert.True(LogVar("yarım kalmış fiş TAMAMLANDI"));
     }

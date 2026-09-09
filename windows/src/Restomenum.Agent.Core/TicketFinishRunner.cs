@@ -1,4 +1,4 @@
-namespace Restomenum.Agent.Core;
+﻿namespace Restomenum.Agent.Core;
 
 /// <summary>
 /// <see cref="TicketFinish.Planla"/>'nın kararını cihazda UYGULAR.
@@ -34,8 +34,18 @@ public static class TicketFinishRunner
     /// için değiştirmek zorunda kalmamak şart — para taşıyan bir cihazda "ne yapacağını görmek"
     /// tek başına bir yetenektir.</para>
     /// </summary>
+    /// <param name="butce">
+    /// <b>W110</b> — kurtarma zincirinin süre bütçesi. <c>null</c> = sınırsız (elle
+    /// <c>--finish-ticket</c>: ajan durmuş, kimse cevap beklemiyor, kâğıt değiştiren kişi
+    /// başında).
+    ///
+    /// <para><b>Neden gerekli:</b> kurtarma zinciri de en kötü hâlde
+    /// <c>100 + 100 + 100 + 10 = 310 sn</c> sürebiliyor. Kasadan tetiklenen bir tamamlama
+    /// (<c>TicketFinish</c> zarfı) bu süreyle kasanın 180 sn'lik POST kapısını aşardı ve
+    /// düzeltmeye çalıştığımız arızanın aynısını üretirdi — bu kez kurtarma yolunda.</para>
+    /// </param>
     public static Sonuc Calistir(IGmpWrapper gmp, ulong handle, bool uygula,
-        Action<string, object?>? log = null)
+        Action<string, object?>? log = null, BaskiButcesi? butce = null)
     {
         bool Yaz(string m, object? v = null) { log?.Invoke(m, v); return true; }
 
@@ -73,18 +83,32 @@ public static class TicketFinishRunner
                 ToplamMinor: fis.TotalAmountMinor, TahsilMinor: fis.PaidAmountMinor);
 
         // Plana göre çağrı listesi. `VoidAll`/`VoidPayment` hiçbirinde yok.
-        var adimlar = new List<(string Ad, Func<GmpResult> Cagri)>();
+        var adimlar = new List<(string Ad, Func<int?, GmpResult> Cagri)>();
         if (plan.Adim == FisBitirmeAdimi.TumBaskiVeKapat)
         {
-            adimlar.Add(("PrintTotalsAndPayments", () => gmp.PrintTotalsAndPayments(handle)));
-            adimlar.Add(("PrintBeforeMF", () => gmp.PrintBeforeMF(handle)));
+            adimlar.Add(("PrintTotalsAndPayments", t => gmp.PrintTotalsAndPayments(handle, t)));
+            adimlar.Add(("PrintBeforeMF", t => gmp.PrintBeforeMF(handle, t)));
         }
         if (plan.Adim is FisBitirmeAdimi.MfVeKapat or FisBitirmeAdimi.TumBaskiVeKapat)
-            adimlar.Add(("PrintMF", () => gmp.PrintMF(handle)));
+            adimlar.Add(("PrintMF", t => gmp.PrintMF(handle, t)));
 
         foreach (var (ad, cagri) in adimlar)
         {
-            var r = cagri();
+            // W110: bütçe varsa adıma kalanı geçir; bittiyse cihaza HİÇ gitme.
+            int? sure = null;
+            if (butce is { } b)
+            {
+                sure = b.Sure(100_000);
+                if (sure is null)
+                {
+                    Yaz("[bitir] BÜTÇE BİTTİ — adıma girilmedi, fiş AÇIK bırakıldı",
+                        new { ad, kalanMs = b.KalanMs });
+                    return new Sonuc(false, plan, fis.TransactionFlags, ad,
+                        new GmpResult(GmpCodes.BudgetExhausted).ToString(),
+                        fis.TotalAmountMinor, fis.PaidAmountMinor);
+                }
+            }
+            var r = cagri(sure);
             if (r.Ok) { Yaz("[bitir] adım tamam", new { ad }); continue; }
             // ⚠️ SONRAKİ ADIMA GEÇİLMEZ ve `Close` DENENMEZ. Basılamamış bir fişi kapatmak,
             // eksik bir mali belgeyi kesinleştirmek olurdu; fiş açık kalırsa tekrar denenebilir.

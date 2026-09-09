@@ -891,4 +891,11 @@ public static class CommandKinds
     public const string Sale = "sale";
     public const string Void = "void";
     public const string Status = "status";
+
+    /// <summary>
+    /// <b>W110</b> — elle fiş tamamlama (<c>TicketFinish</c>). Kendi tekrar anahtarı var
+    /// (<c>ticketFinishId</c>) ve açılış kurtarması bunu ASLA "yarım kalmış satış" sanmamalı:
+    /// kurtarma yalnız <see cref="Sale"/> okur.
+    /// </summary>
+    public const string Finish = "finish";
 }

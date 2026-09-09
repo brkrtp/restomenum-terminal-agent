@@ -1,4 +1,4 @@
-namespace Restomenum.Agent.Core;
+﻿namespace Restomenum.Agent.Core;
 
 /// <summary>
 /// Cihazda AÇIK kalmış, üzerinde GERÇEK TAHSİLAT olan fişi tamamlayabilen taşıma.
@@ -14,7 +14,12 @@ public interface IStuckTicketFinisher
     /// Cihazdaki açık fişi üreticinin kurtarma akışıyla tamamlar ve — kapandıysa — deftere yazar.
     /// </summary>
     /// <param name="uygula"><c>false</c> = KURU PROVA: okur, planı döner, cihazı DEĞİŞTİRMEZ.</param>
-    StuckTicketResult FinishStuckTicket(bool uygula);
+    /// <param name="butce">
+    /// Süre bütçesi. <c>null</c> = sınırsız — elle kurtarmada (<c>--finish-ticket</c>) ajan
+    /// durmuştur ve kimse cevap beklemez. Kasadan tetiklenen tamamlamada ZORUNLU: kurtarma
+    /// zinciri de 310 sn'ye çıkabilir ve kasanın 180 sn'lik kapısını aşardı.
+    /// </param>
+    StuckTicketResult FinishStuckTicket(bool uygula, BaskiButcesi? butce = null);
 }
 
 /// <param name="FisAcikDegil">

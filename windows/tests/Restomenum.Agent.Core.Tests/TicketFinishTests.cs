@@ -207,6 +207,39 @@ public class TicketFinishTests
     }
 
     [Fact]
+    public void BUTCE_bittiyse_kurtarma_zinciri_CIHAZA_GITMEZ()
+    {
+        // ← ÇİVİ: kurtarma zinciri de en kötü hâlde 100+100+100+10 = 310 sn sürebiliyor.
+        // Kasadan tetiklenen bir tamamlama (`TicketFinish` zarfı) bu süreyle kasanın 180 sn'lik
+        // POST kapısını aşardı — yani düzeltmeye çalıştığımız arızanın AYNISINI, bu kez
+        // kurtarma yolunda üretirdi. Süpürmede de cihazı 310 sn kilitli tutardı.
+        var g = Cihaz(Fis(990, 990, TicketFlags.TotalsAndPaymentsPrinted));
+        long tik = 0;
+        var butce = new BaskiButcesi(TimeSpan.FromMilliseconds(500), () => tik += 1_000);
+
+        var s = TicketFinishRunner.Calistir(g, 42, uygula: true, butce: butce);
+
+        Assert.False(s.Kapandi);
+        Assert.Equal("PrintMF", s.BasarisizAdim);
+        // Fiş OKUNDU (bu zaten olmuştu) ama baskıya HİÇ girilmedi ve `Close` denenmedi.
+        Assert.Equal(new[] { "OptionFlags", "GetTicket" }, g.Calls);
+    }
+
+    [Fact]
+    public void Butce_YOKSA_zincir_TAM_kosar_elle_kurtarmada_kimse_beklemiyor()
+    {
+        // ← ÇİVİ: `--finish-ticket` elle çalıştırılır; ajan durmuştur, kasa cevap beklemez ve
+        // kâğıdı değiştiren kişi cihazın başındadır. Orada bütçe dayatmak, tam da işe yarayacak
+        // anı kesmek olurdu.
+        var g = Cihaz(Fis(990, 990, TicketFlags.TotalsAndPaymentsPrinted));
+
+        var s = TicketFinishRunner.Calistir(g, 42, uygula: true);
+
+        Assert.True(s.Kapandi);
+        Assert.Equal(new[] { "OptionFlags", "GetTicket", "PrintMF", "Close" }, g.Calls);
+    }
+
+    [Fact]
     public void Fis_OKUNAMAZSA_hicbir_seye_dokunulmaz()
     {
         var g = Cihaz(Fis(990, 990, TicketFlags.TotalsAndPaymentsPrinted));
