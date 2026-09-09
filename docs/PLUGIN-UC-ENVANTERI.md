@@ -321,6 +321,29 @@ Bunlar üretici belgesinde yazmıyor; sahada ölçülüp burada kayda geçti.
   dept 10 (%10) 891 kuruşluk kalem → `TotalReceiptTax` **81** = 891×10/110.
 - **`bankBkmId = 0` = "cihaz seçsin"** ve cihaz aynı fişte art arda iki denemede **farklı**
   banka seçebiliyor (GARANTİ 62 → AKBANK 46).
+### İndirim (`ST_ITEM.promotion`) — hepsi ölçüldü
+
+Kaynak: `--discount-probe` (2026-09-09 14:57, tek fiş, altı adım) + canlı satış F70-R (15:26).
+
+- **`promotion.amount` SATIR toplamıdır, birim DEĞİL.** `count 2, amount 990, promotion 100`
+  gönderildi; fiş toplamı `2×990 − **100**` arttı ve `TotalReceiptDiscount` **100** oldu. Birim
+  bazlı olsaydı 200 olurdu. → Platformun satır indirimi doğrudan geçirilir; **birime bölmek
+  YANLIŞ** (ajan tarafında `FiscalLine.LineDiscountMinor` birim başınadır ve `× adet` ile
+  çevrilir).
+- **Fiş toplamı NET döner.** İndirimsiz 990'lık bir kalemden sonra `990 + promotion 100` eklenince
+  toplam **+890** arttı. `TotalReceiptDiscount` ayrı bir alanda tutulur.
+- **İndirim KDV MATRAHINI düşürür.** Aynı adımda KDV +148 arttı (890 × 20/120 = 148,33 → 148);
+  990 üzerinden olsaydı 165 olurdu. Canlı satışta da doğrulandı: 891 → KDV **81** (= 891×10/110).
+- **Tam ikram KABUL EDİLİR:** `promotion.amount == kalem tutarı` (990 → net 0) rc **0** döndü,
+  fiş toplamı hiç artmadı, indirim toplamı +990 oldu. Ayrı bir `PAYMENT_IKRAM` yoluna gerek yok.
+- ⚠️ **`IndexOfItem = 0` "bütün fiş" DEĞİL, BİRİNCİ KALEMDİR.** `Dec(%10, IndexOfItem 0)` ara
+  toplam (1780) üzerinden 178 değil, **89** döndürdü — yani birinci kalemin o anki net tutarının
+  (890) %10'u. `Minus`/`Dec` ile **ara toplam indirimi yapılamaz**; indeks 0-tabanlı kalem
+  indeksidir. (Hem bizim hem karşı tarafın ilk varsayımı "bütün fiş"ti; ölçüm çürüttü.)
+- **`ticketMsg` boş gönderilir** — kullanıcı kararı: *"fişte ne yazacağını zaten sen
+  belirleyemezsin, terminal otomatik çıkarır"*. **Cihazın kâğıda ne bastığı henüz GÖRÜLMEDİ**
+  (yoklamada yazdırma yapılmadı); kanıt gerçek fişte.
+
 - **Cihaz yeniden başlatıldığında açık fişin numarasına/sayacına ne olduğu ÖLÇÜLMEDİ.**
   Bir gözlemde (2026-09-09, 8 saatlik kesinti) `FNo` **1 arttı** (8 → 9) ve fişteki başarısız
   ödeme satırı **düştü** (`odemeSayisi` 1 → 0); ajan bu sırada cihaza **hiçbir çağrı yapmamıştı**
