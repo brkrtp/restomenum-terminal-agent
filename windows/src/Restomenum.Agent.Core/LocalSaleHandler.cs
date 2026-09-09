@@ -412,7 +412,11 @@ public sealed class LocalSaleHandler : IDeviceIdleGate
             var t0 = _now();
             var bildirim = await _notifier.NotifyTicketCancelAsync(govde, ct);
             var sureMs = (long)(_now() - t0).TotalMilliseconds;
-            if (bildirim.IsFinal) _outbox.Confirm(eid);
+            // W68: 400 → damgala ve SAKLA. Bu yol sahada tam olarak bunu yaşadı (2026-09-09 14:42):
+            // fiş cihazda iptal edildi, bildirim `invalidResult` ile reddedildi, kayıt SİLİNDİ ve
+            // iptalin platformda hiçbir izi kalmadı. Kayıt dursaydı düzeltme sonrası gönderilebilirdi.
+            if (bildirim.IsPermanentGap) _outbox.MarkPermanentlyRejected(eid);
+            else if (bildirim.IsFinal) _outbox.Confirm(eid);
             else _outbox.MarkAttempt(eid);
             if (bildirim.IsProblem)
                 _log("[iptal] fiş iptali bildirimi SORUNU (alarm)", new
@@ -778,7 +782,11 @@ public sealed class LocalSaleHandler : IDeviceIdleGate
             var t0 = _now();
             var bildirim = await _notifier.NotifyTicketClosedAsync(govde, ct);
             var sureMs = (long)(_now() - t0).TotalMilliseconds;
-            if (bildirim.IsFinal) _outbox.Confirm(eid);
+            // W68: fiş kapanışı reddedilirse boşluk daha da ağır — kapanmış bir fişin ödemeleri
+            // deftere hiç yazılmaz ve bunu keşfedecek bir kurtarma turu YOK (kapanmış fişi cihaza
+            // sorup "ödemeleri neydi" diye öğrenemeyiz). Kayıt saklanır.
+            if (bildirim.IsPermanentGap) _outbox.MarkPermanentlyRejected(eid);
+            else if (bildirim.IsFinal) _outbox.Confirm(eid);
             else _outbox.MarkAttempt(eid);
             if (bildirim.IsProblem)
                 _log("[yerel] fiş kapandı bildirimi SORUNU (alarm)", new
@@ -897,7 +905,10 @@ public sealed class LocalSaleHandler : IDeviceIdleGate
                     OutboxKinds.TicketClosed => await _notifier.NotifyTicketClosedAsync(e.PayloadJson, ct),
                     _ => await _notifier.NotifyAsync(e.PaymentId, e.PayloadJson, ct),
                 };
-                if (res.IsFinal) _outbox.Confirm(e.EventId);
+                // W68: "tekrar anlamsız" ≠ "kayıt silinsin". 400'de kayıt DAMGALANIR, silinmez —
+                // platformda karşılığı yok ve kendiliğinden oluşmayacak.
+                if (res.IsPermanentGap) _outbox.MarkPermanentlyRejected(e.EventId);
+                else if (res.IsFinal) _outbox.Confirm(e.EventId);
                 else Ertele(e);
                 if (res.IsProblem)
                     _log("[yerel] outbox bildirim SORUNU (alarm)", new { e.PaymentId, outcome = res.Outcome.ToString(), res.StatusCode });
@@ -927,7 +938,9 @@ public sealed class LocalSaleHandler : IDeviceIdleGate
         {
             NotifyResult res;
             res = await _notifier.NotifyAsync(paymentId, body, ct);
-            if (res.IsFinal) _outbox.Confirm(eid);
+            // W68: 400 → damgala ve SAKLA (defter boşluğu); diğer kesin sonuçlar → sil.
+            if (res.IsPermanentGap) _outbox.MarkPermanentlyRejected(eid);
+            else if (res.IsFinal) _outbox.Confirm(eid);
             else _outbox.MarkAttempt(eid);   // NetworkError/RateLimited → kalsın, arka plan replay eder
             if (res.IsProblem)
                 _log("[yerel] bildirim SORUNU (alarm)", new { paymentId, outcome = res.Outcome.ToString(), res.StatusCode, res.Message });

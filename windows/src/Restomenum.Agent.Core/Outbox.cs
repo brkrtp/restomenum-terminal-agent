@@ -79,6 +79,19 @@ public sealed class Outbox : IDisposable
                 cmd.ExecuteNonQuery();
             }
 
+            // ── W68: KALICI RET DAMGASI ───────────────────────────────────────────────
+            // Platform gövdeyi 400 ile reddettiyse kayıt SİLİNMEZ, damgalanır. Sebebi sahada
+            // ölçüldü (2026-09-09 14:42): başarılı bir fiş iptali 400 `invalidResult` aldı, kayıt
+            // silindi ve `Depth()` **0** gösterdi — yani defter platformda eksikken kuyruk
+            // "her şey yolunda" diyordu. Sayının kendisi yanıltıcıydı.
+            //
+            // `NULL` = damgalanmamış (normal kayıt). Eski dosyalar da öyle açılır.
+            if (!kolonlar.Contains("rejected_at"))
+            {
+                cmd.CommandText = "ALTER TABLE outbox ADD COLUMN rejected_at INTEGER";
+                cmd.ExecuteNonQuery();
+            }
+
             // Gönderim sırası kuyruk sırasıdır: en eski sonuç en önce yazılmalı.
             cmd.CommandText = "CREATE INDEX IF NOT EXISTS ix_outbox_created ON outbox(created_at)";
             cmd.ExecuteNonQuery();
@@ -151,9 +164,12 @@ public sealed class Outbox : IDisposable
         {
             using var cmd = _conn.CreateCommand();
             // Sıra DEĞİŞMEDİ: en eski önce. Süzgeç yalnız "vakti geldi mi" sorusunu ekliyor.
+            // W68: kalıcı reddedilenler kuyruktan DIŞLANIR. Dışlanmasalardı her turda aynı 400'ü
+            // yiyen bir fırtına kurulurdu — 409'da 252 turluk bir örneğini izledik (02:19-06:50).
+            // "Sakla" ile "yeniden dene" AYRI kararlar; kayıt yalnız operatör eylemiyle gönderilir.
             cmd.CommandText = ignoreBackoff
-                ? "SELECT * FROM outbox ORDER BY created_at ASC LIMIT $n"
-                : "SELECT * FROM outbox WHERE next_attempt_at <= $now ORDER BY created_at ASC LIMIT $n";
+                ? "SELECT * FROM outbox WHERE rejected_at IS NULL ORDER BY created_at ASC LIMIT $n"
+                : "SELECT * FROM outbox WHERE rejected_at IS NULL AND next_attempt_at <= $now ORDER BY created_at ASC LIMIT $n";
             if (!ignoreBackoff)
                 cmd.Parameters.AddWithValue("$now", now ?? DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
             cmd.Parameters.AddWithValue("$n", limit);
@@ -245,13 +261,71 @@ public sealed class Outbox : IDisposable
     }
 
     /// <summary>Kuyruk derinliği. Sıfırdan büyük kalması <b>çözülmemiş tahsilat</b> demektir.</summary>
+    /// <summary>
+    /// <b>W68 — kalıcı ret damgası.</b> Platform gövdeyi <c>400</c> ile reddetti: tekrar denemek
+    /// anlamsız <b>ama kayıt silinmemeli</b>, çünkü platformda o olayın karşılığı YOK ve kendiliğinden
+    /// oluşmayacak. Kayıt kuyruktan düşer (<see cref="Pending"/> dışlar) ama diskte durur;
+    /// yeniden gönderim yalnız operatör eylemiyle olur.
+    /// </summary>
+    public bool MarkPermanentlyRejected(string eventId, long? now = null)
+    {
+        lock (_gate)
+        {
+            using var cmd = _conn.CreateCommand();
+            cmd.CommandText = "UPDATE outbox SET rejected_at = $now WHERE event_id = $eid AND rejected_at IS NULL";
+            cmd.Parameters.AddWithValue("$eid", eventId);
+            cmd.Parameters.AddWithValue("$now", now ?? DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+            return cmd.ExecuteNonQuery() == 1;
+        }
+    }
+
+    /// <summary>
+    /// Gönderilmeyi BEKLEYEN kayıt sayısı — kalıcı reddedilenler <b>HARİÇ</b>.
+    ///
+    /// <para>Damgalıları buraya katmak sayıyı yine belirsiz yapardı: "3" hem "üç bildirim yolda"
+    /// hem "üç bildirim asla gitmeyecek" demek olurdu. İkisi ayrı olgu, ayrı sayı
+    /// (<see cref="RejectedCount"/>).</para>
+    /// </summary>
     public int Depth()
     {
         lock (_gate)
         {
             using var cmd = _conn.CreateCommand();
-            cmd.CommandText = "SELECT COUNT(*) FROM outbox";
+            cmd.CommandText = "SELECT COUNT(*) FROM outbox WHERE rejected_at IS NULL";
             return Convert.ToInt32(cmd.ExecuteScalar());
+        }
+    }
+
+    /// <summary>Kalıcı reddedilmiş kayıt sayısı — <b>defter platformda eksik olabilir</b> demektir.
+    /// Açılışta ve teşhiste GÖRÜNÜR olmalı; bu sayı sessiz kalırsa ıraksama saatlerce fark edilmez
+    /// (2026-09-09'da tam olarak öyle oldu).</summary>
+    public int RejectedCount()
+    {
+        lock (_gate)
+        {
+            using var cmd = _conn.CreateCommand();
+            cmd.CommandText = "SELECT COUNT(*) FROM outbox WHERE rejected_at IS NOT NULL";
+            return Convert.ToInt32(cmd.ExecuteScalar());
+        }
+    }
+
+    /// <summary>Kalıcı reddedilmiş kayıtlar — operatör yeniden gönderimi (W69) ve teşhis için.</summary>
+    public IReadOnlyList<OutboxEntry> Rejected(int limit = 50)
+    {
+        lock (_gate)
+        {
+            using var cmd = _conn.CreateCommand();
+            cmd.CommandText = "SELECT * FROM outbox WHERE rejected_at IS NOT NULL ORDER BY created_at ASC LIMIT $n";
+            cmd.Parameters.AddWithValue("$n", limit);
+            using var r = cmd.ExecuteReader();
+            var liste = new List<OutboxEntry>();
+            while (r.Read())
+                liste.Add(new OutboxEntry(
+                    r.GetString(r.GetOrdinal("event_id")), r.GetString(r.GetOrdinal("payment_id")),
+                    r.GetString(r.GetOrdinal("status")), r.GetString(r.GetOrdinal("payload_json")),
+                    r.GetString(r.GetOrdinal("provider_plugin_id")),
+                    r.GetInt64(r.GetOrdinal("created_at")), r.GetInt32(r.GetOrdinal("attempts"))));
+            return liste;
         }
     }
 

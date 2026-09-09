@@ -47,6 +47,17 @@ public sealed class AgentWorker : BackgroundService
 
         var bekleyen = _outbox.Depth();
         if (bekleyen > 0) _log.LogWarning("outbox'ta {Adet} bildirilmemiş sonuç var — drain edilecek", bekleyen);
+
+        // ── W68: KALICI RET AÇILIŞTA GÖRÜNÜR ──────────────────────────────────────
+        // 2026-09-09 14:42: başarılı bir fiş iptalinin bildirimi 400 ile reddedildi, kayıt silindi
+        // ve kuyruk 0 gösterdi — defter platformda eksikken her şey yolunda görünüyordu ve bu
+        // saatlerce fark edilmedi. Sayı artık saklanıyor ve BURADA söyleniyor: sessizlik, bu sınıf
+        // için "sorun yok" ile "sorun görünmez" arasındaki farkı yok ediyordu.
+        var reddedilen = _outbox.RejectedCount();
+        if (reddedilen > 0)
+            _log.LogError("{Adet} bildirim KALICI REDDEDİLDİ (platform gövdeyi 400 ile geri çevirdi) — " +
+                "DEFTER PLATFORMDA EKSİK OLABİLİR. Bunlar kendiliğinden gönderilmez; " +
+                "sebep giderildikten sonra operatör yeniden göndermeli.", reddedilen);
         var yarim = _store.Pending().Count;
         if (yarim > 0) _log.LogWarning("{Adet} komut yarım kalmış — açılışta terminale sorulacak", yarim);
 

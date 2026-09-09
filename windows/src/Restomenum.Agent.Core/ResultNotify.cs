@@ -50,8 +50,30 @@ public sealed record NotifyResult(NotifyOutcome Outcome, string? State, string? 
     string Message, bool? Replayed = null, int? AlreadyPosted = null,
     long? SessionMs = null, long? PostMs = null)
 {
-    /// <summary>Outbox kaydı silinmeli mi? Kesin (yazıldı/bayat/çelişki/red/notfound) → EVET; ağ/hız → HAYIR.</summary>
+    /// <summary>
+    /// Tekrar denemek anlamlı mı? Kesin sonuç (yazıldı/bayat/çelişki/red/notfound) → <b>hayır</b>;
+    /// ağ/hız → <b>evet</b>.
+    ///
+    /// <para>⚠️ <b>Bu bayrak "kayıt silinsin mi" sorusunun cevabı DEĞİLDİR</b> — bir zamanlar öyle
+    /// kullanılıyordu ve iki ayrı karar tek bayrağa binmişti. Silme kararı için
+    /// <see cref="IsPermanentGap"/>'e bakın (W68).</para>
+    /// </summary>
     public bool IsFinal => Outcome is not (NotifyOutcome.RateLimited or NotifyOutcome.NetworkError);
+
+    /// <summary>
+    /// <b>Platformda karşılığı YOK ve kendiliğinden oluşmayacak</b> — yani kayıt silinirse defter
+    /// kalıcı olarak ıraksar. Bugün yalnız <c>400 Rejected</c>.
+    ///
+    /// <para><b>Neden yalnız 400 (ölçüldü 2026-09-09 14:42):</b> platform gövdeyi reddetti ve
+    /// <b>hiçbir şey yazmadı</b>; kayıt silinince o iptalin izi tamamen kayboldu ve <c>Depth()</c>
+    /// <b>0</b> gösterdi. <c>409 Conflict</c> farklı: platformun o denemeye ait <b>kendi nihai
+    /// sonucu var</b>, boşluk yok. <c>404 NotFound</c> da farklı: ödeme bu cihazın değil ya da hiç
+    /// yok — saklamak çöp biriktirmek olurdu.</para>
+    ///
+    /// <para>Aynı desen bu kod tabanında üçüncü kez çıktı (bkz. W65 <c>acikRet</c>): tek bir
+    /// boolean'a iki ayrı soru sordurmak.</para>
+    /// </summary>
+    public bool IsPermanentGap => Outcome is NotifyOutcome.Rejected;
 
     /// <summary>Operatör/alarm gerektiren kalıcı sorun mu? (çelişki/red/notfound)</summary>
     public bool IsProblem => Outcome is NotifyOutcome.Conflict or NotifyOutcome.Rejected or NotifyOutcome.NotFound;
