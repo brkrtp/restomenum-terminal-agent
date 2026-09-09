@@ -1,4 +1,4 @@
-using System.Net;
+﻿using System.Net;
 using System.Text;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
@@ -148,7 +148,26 @@ public sealed class AgentWorker : BackgroundService
             // KATEGORİYE GÖRE YOL AYRIMI. Zarfın başındaki `MessageCategory` okunur ve iki ayrı
             // ayrıştırıcıdan biri seçilir. Ödeme yolu paranın geçtiği yol ve çalışıyor; iptali oraya
             // `if` ile eklemek, tek bir hatanın satışı da bozması demekti.
-            if (ReversalRequestParser.PeekCategory(body) == "Reversal")
+            // W106 — SALT-OKUNUR FİŞ SORGUSU. Ödeme ve iptal yollarının İKİSİNDEN de önce
+            // bakılıyor çünkü hiçbir şey DENEMİYOR: cihaza gitmez, kilit almaz, defteri
+            // değiştirmez. Bu yüzden satış sürerken bile anında cevaplanabilir.
+            var kategori = ReversalRequestParser.PeekCategory(body);
+            if (kategori == TicketQueryParser.Category)
+            {
+                var sorgu = TicketQueryParser.Parse(body);
+                if (sorgu is null)
+                {
+                    _log.LogWarning("geçersiz TicketQuery [{Kaynak}]", Kaynak());
+                    Respond(ctx, 400, "{\"error\":\"MALFORMED\"}");
+                    return;
+                }
+                _log.LogInformation("[istek] TicketQuery ServiceID={Svc} POIID={Poi} ticketId={Fis}",
+                    sorgu.ServiceId, sorgu.PoiId, sorgu.TicketId ?? "(açık fiş)");
+                Respond(ctx, 200, _handler.HandleTicketQuery(sorgu));
+                return;
+            }
+
+            if (kategori == "Reversal")
             {
                 var iptal = ReversalRequestParser.Parse(body);
                 if (iptal is ReversalParseResult.Invalid ig)

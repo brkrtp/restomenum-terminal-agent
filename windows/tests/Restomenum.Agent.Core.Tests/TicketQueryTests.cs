@@ -68,6 +68,25 @@ public class TicketQueryTests : IDisposable
         Assert.Null(TicketQueryParser.Parse(Zarf(null).Replace("\"POIID\":\"t1\"", "\"POIID\":\"\"")));
     }
 
+    [Fact]
+    public void HTTP_YOL_AYRIMI_TicketQuery_zarfini_dogru_dala_gonderir()
+    {
+        // ← ÇİVİ: BU TESTİN VAR OLMA SEBEBİ GERÇEK BİR KAÇAK. W106 ilk yazıldığında ayrıştırıcı,
+        // işleyici ve gövde testliydi ve 560/560 yeşildi — ama `AgentWorker`'daki YOL AYRIMI
+        // hiç eklenmemişti (yama betiği ilk çapada durmuştu). Testlerin hiçbiri HTTP dikişine
+        // dokunmadığı için bunu görmediler; canlı ajana gerçek bir POST atınca ortaya çıktı
+        // (`{"error":"UnsupportedCategory"}` / HTTP 400).
+        //
+        // `AgentWorker` Host projesinde ve test projesi yok; burada dikişin KARAR NOKTASI
+        // çivileniyor: kategori bakışı bu zarfı TicketQuery diye tanımalı, ve ödeme ayrıştırıcısı
+        // onu REDDETMELİ (yani dal olmazsa istek 400'e düşer — kaçağın birebir imzası).
+        Assert.Equal(TicketQueryParser.Category, ReversalRequestParser.PeekCategory(Zarf(null)));
+
+        var odemeYolu = SaleToPoiRequestParser.Parse(Zarf(null));
+        var red = Assert.IsType<SaleToPoiParseResult.Invalid>(odemeYolu);
+        Assert.Equal(SaleToPoiRejectReason.UnsupportedCategory, red.Reason);
+    }
+
     // ── CEVAP: DEFTERDEN ────────────────────────────────────────────────────────
 
     [Fact]

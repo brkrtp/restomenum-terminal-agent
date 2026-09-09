@@ -878,6 +878,28 @@ public sealed class LocalSaleHandler : IDeviceIdleGate
     }
 
     /// <summary>
+    /// <b>W106 — SALT-OKUNUR fiş durumu sorgusu.</b> Kasa bayat kaydını bununla tazeler.
+    ///
+    /// <para><b><c>async</c> DEĞİL ve bilerek:</b> hiçbir I/O yok — ne cihaz, ne ağ, ne kilit.
+    /// Cevap tamamen defterden. Sahte bir <c>Task</c> döndürmek, çağırana "bu bekleyebilir"
+    /// diye yanlış bir beklenti kurardı; oysa bu çağrı satışın ortasında bile anında döner.</para>
+    ///
+    /// <para><b>Neden cihaza gitmiyor:</b> <c>FP3_Start</c> açık fiş YOKKEN yeni fiş açar ve
+    /// kapatılsa bile mali numarayı tüketir. Her masa kapanışında bir sorgu = her sorguda bir
+    /// mali numara. Ayrıca cihaza gitmek terminal kilidini alır ve satışı geciktirirdi.</para>
+    /// </summary>
+    public string HandleTicketQuery(TicketQueryRequest istek)
+    {
+        var sonuc = TicketQueryHandler.Cevapla(_store, istek);
+        _log("[sorgu] fiş durumu", new
+        {
+            istek.PoiId, istenen = istek.TicketId ?? "(açık fiş)", durum = sonuc.Durum,
+            fis = sonuc.TicketId, defter = sonuc.LedgerWritten, bekleyen = sonuc.PendingFinishAttempts,
+        });
+        return TicketQueryHandler.Govde(istek, sonuc, _now());
+    }
+
+    /// <summary>
     /// <b>W105 — CİHAZDA YARIM KALMIŞ FİŞİ OTOMATİK TAMAMLAR.</b>
     ///
     /// <para><b>Neden var:</b> baskı zinciri patlayınca fiş ÜZERİNDE GERÇEK PARAYLA açık kalıyor
