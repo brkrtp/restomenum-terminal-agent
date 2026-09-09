@@ -821,7 +821,7 @@ public class GmpTerminalTransportTests
             if (Kapananlar.Any(x => x.TicketId == ticketId)) return;
             Kapananlar.Add(new ClosedTicketRow(ticketId, terminalId, saleSessionId, totalMinor, paidMinor));
         }
-        public IReadOnlyList<ClosedTicketRow> PendingClosedTickets() => Kapananlar;
+        public IReadOnlyList<ClosedTicketRow> PendingClosedTickets(long? enGecKapanis = null) => Kapananlar;
         public void ConfirmTicketClosed(string ticketId, long? now = null)
             => Kapananlar.RemoveAll(x => x.TicketId == ticketId);
     }

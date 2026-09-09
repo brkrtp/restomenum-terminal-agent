@@ -558,15 +558,30 @@ public sealed class CommandStore : ITicketSnapshotStore, IDisposable
     }
 
     /// <summary>Kapanmış ama bildirimi henüz outbox'a düşmemiş fişler (açılışta kurtarılır).</summary>
-    public IReadOnlyList<ClosedTicketRow> PendingClosedTickets()
+    /// <summary>
+    /// Kapanış bildirimi HİÇ yazılamamış fişler.
+    ///
+    /// <param name="enGecKapanis">
+    /// Yalnız bu damgadan ESKİ kapanışlar döner (W76). <c>null</c> = hepsi.
+    ///
+    /// <para><b>Neden yaş kapısı (sahada ölçüldü, 2026-09-09 15:44):</b> normal akışta fiş kapanışı
+    /// ile bildirimin outbox'a yazılması arasında ~800 ms geçiyor (cihaz <c>Close</c> 49.873 →
+    /// <c>fiş KAPANDI</c> 50.698). Arka plan drain'i tam o aralıkta dönerse satırı "kayıp" sanıp
+    /// gövdeyi ikinci kez kurup gönderiyor — bir yarış. Bu kurtarmanın koruduğu vaka
+    /// <b>"süreç öldü ve gövde hiç kurulamadı"</b>dır ve o, tanımı gereği 800 ms'de çözülmez.
+    /// Yaş kapısı yarışı tamamen kaldırır, korumadan hiçbir şey eksiltmez.</para>
+    /// </param>
+    /// </summary>
+    public IReadOnlyList<ClosedTicketRow> PendingClosedTickets(long? enGecKapanis = null)
     {
         lock (_gate)
         {
             using var cmd = _conn.CreateCommand();
             cmd.CommandText = """
                 SELECT ticket_id, terminal_id, sale_session_id, total_minor, paid_minor
-                FROM closed_tickets WHERE notified_at IS NULL ORDER BY closed_at
+                FROM closed_tickets WHERE notified_at IS NULL AND closed_at <= $esik ORDER BY closed_at
                 """;
+            cmd.Parameters.AddWithValue("$esik", enGecKapanis ?? long.MaxValue);
             var liste = new List<ClosedTicketRow>();
             using var r = cmd.ExecuteReader();
             while (r.Read())

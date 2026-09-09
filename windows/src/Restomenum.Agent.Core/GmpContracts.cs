@@ -94,7 +94,9 @@ public interface ITicketSnapshotStore
         long? totalMinor, long? paidMinor, long? now = null);
 
     /// <summary>Kapanmış ama bildirimi outbox'a düşmemiş fişler — açılışta kurtarılır.</summary>
-    IReadOnlyList<ClosedTicketRow> PendingClosedTickets();
+    /// <summary>Kapanış bildirimi HİÇ yazılamamış fişler. <paramref name="enGecKapanis"/> verilirse
+    /// yalnız o damgadan ESKİ olanlar (W76 yaş kapısı; gerekçe <c>CommandStore</c>'da).</summary>
+    IReadOnlyList<ClosedTicketRow> PendingClosedTickets(long? enGecKapanis = null);
 
     /// <summary>Kapanış gövdesi outbox'a yazıldı; gönderim garantisi artık outbox'ta.</summary>
     void ConfirmTicketClosed(string ticketId, long? now = null);

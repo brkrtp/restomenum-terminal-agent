@@ -267,6 +267,68 @@ public class LocalSaleHandlerTests : IDisposable
         Assert.All(sim.SaleCalls[0].FiscalLines!, l => Assert.Equal(0, l.LineDiscountMinor));
     }
 
+    // ── W76: KAYIP KAPANIŞ KURTARMASINDA YAŞ KAPISI ─────────────────────────────
+
+    /// <summary>Sabit duvar saati — yaş kapısı sınırları buna göre kuruluyor.</summary>
+    private const long T0 = 1_700_000_000_000;
+
+    [Fact]
+    public void TAZE_kapanis_TOPLANMAZ_yaris_yok()
+    {
+        // ← ÇİVİ (sahada görüldü 2026-09-09 15:44): normal akışta fiş kapanışı ile bildirimin
+        // outbox'a yazılması arasında ~800 ms var (cihaz `Close` 49.873 → `fiş KAPANDI` 50.698).
+        // Arka plan drain'i tam o aralıkta dönünce satırı "kayıp" sanıp gövdeyi İKİNCİ KEZ kurdu
+        // ve gönderdi. Zarar olmadı (aynı olay kimliği, platform tekrarı gördü) ama yarış gerçek.
+        _store.MarkTicketClosed("tkt-taze", "term-01", "otr", 990, 990, now: T0);
+
+        // 800 ms sonra bakılıyor: eşik 30 sn geriden.
+        var esik = T0 + 800 - 30_000;
+
+        Assert.Empty(_store.PendingClosedTickets(esik));
+    }
+
+    [Fact]
+    public void ESKI_kapanis_TOPLANIR_koruma_duruyor()
+    {
+        // ← ÇİVİ: yaş kapısı yarışı kaldırırken korumayı da kaldırmamalı. Bu kurtarmanın var oluş
+        // sebebi "süreç öldü ve gövde hiç kurulamadı" — o kayıt SONSUZA KADAR kuyrukta görünmez,
+        // tek izi `closed_tickets`tir ve mutlaka toplanmalıdır.
+        _store.MarkTicketClosed("tkt-eski", "term-01", "otr", 990, 990, now: T0 - 31_000);
+
+        var esik = T0 - 30_000;
+        var bekleyen = Assert.Single(_store.PendingClosedTickets(esik));
+
+        Assert.Equal("tkt-eski", bekleyen.TicketId);
+    }
+
+    [Fact]
+    public async Task DRAIN_taze_kapanisi_TOPLAMAZ_yaris_kapandi()
+    {
+        // ← ÇİVİ: kapı deponun sorgusunda değil, KULLANILDIĞI yerde de doğru olmalı. Depoyu tek
+        // başına sınamak yetmiyordu — mutasyon "eşiği hiç geçirme" ve "eşiği 0 yap" dediğinde
+        // depo testleri YEŞİL kalıyordu, çünkü işleyicinin bağlantısını kimse sınamıyordu.
+        // Bu test drain'in tamamından geçiyor: taze bir kapanış GÖNDERİLMEMELİ.
+        var (h, _, notifier) = Kur(new PaymentDetailResult.Ok(Detail()));
+        _store.MarkTicketClosed("tkt_taze", "term-01", "oturum-A", 990, 990, now: _saatMs);
+        _store.RecordTicketPayment("tkt_taze", "pay-1", 990, GmpPaymentTypes.Cash, null);
+
+        await h.DrainOutboxAsync();
+
+        Assert.Empty(notifier.TicketClosedBodies);          // ← ÇİVİ: gönderilmedi
+        Assert.NotEmpty(_store.PendingClosedTickets());      // kayıt DURUYOR, kaybolmadı
+    }
+
+    [Fact]
+    public void Yas_kapisi_BILDIRILMISI_yine_atlar()
+    {
+        // Kapı yaşa bakıyor ama `notified_at` süzgeci YERİNE geçmiyor: bildirilmiş bir kapanış,
+        // ne kadar eski olursa olsun toplanmamalı.
+        _store.MarkTicketClosed("tkt-eski", "term-01", "otr", 990, 990, now: T0 - 60_000);
+        _store.ConfirmTicketClosed("tkt-eski");
+
+        Assert.Empty(_store.PendingClosedTickets(T0));
+    }
+
     // ── W62: KURTARMA UÇUŞTAKİ KOMUTA DOKUNMAZ ──────────────────────────────────
 
     [Fact]
@@ -867,7 +929,11 @@ public class LocalSaleHandlerTests : IDisposable
         // önce süreç ölürse o fiş hiçbir kuyrukta görünmez — tahsilat yapılmış, satır yok, ve
         // keşfedecek başka yol da yok. Kalıcı `closed_tickets` kaydı bu boşluğun tek izi.
         var (h, _, notifier) = Kur(new PaymentDetailResult.Ok(Detail()));
-        _store.MarkTicketClosed("tkt_kayip", "term-01", "oturum-A", 990, 990);
+        // W76: bu testin modellediği vaka "süreç öldü ve gövde hiç kurulamadı" — o kayıt TANIMI
+        // GEREĞİ eskidir. Yaş kapısı (30 sn) tam da taze kayıtları, yani normal akışın 800 ms'lik
+        // penceresini dışarıda bırakmak için var; kaydı 31 sn geriye alıyoruz ki test gerçekten
+        // kurtarma vakasını sınasın, yarış penceresini değil.
+        _store.MarkTicketClosed("tkt_kayip", "term-01", "oturum-A", 990, 990, now: _saatMs - 31_000);
         _store.RecordTicketPayment("tkt_kayip", "pay-1", 200, GmpPaymentTypes.Cash, null);
         _store.RecordTicketPayment("tkt_kayip", "pay-2", 790, GmpPaymentTypes.Card, 62);
 
@@ -888,7 +954,9 @@ public class LocalSaleHandlerTests : IDisposable
         // Aynı fişi iki kez bildirmek platformda tekrar sayılır (güvenli) ama gürültü üretir;
         // asıl mesele kaydın devredildikten sonra kuyrukta ASILI KALMAMASI.
         var (h, _, notifier) = Kur(new PaymentDetailResult.Ok(Detail()));
-        _store.MarkTicketClosed("tkt_bir", "term-01", "oturum-A", 990, 990);
+        // W76: "süreç öldü" vakası TANIMI GEREĞİ eski bir kayıttır; yaş kapısı taze satırları
+        // (normal akışın ~800 ms'lik penceresi) dışarıda bırakmak için var.
+        _store.MarkTicketClosed("tkt_bir", "term-01", "oturum-A", 990, 990, now: _saatMs - 31_000);
 
         await h.DrainOutboxAsync();
         var ilk = notifier.TicketClosedBodies.Count;

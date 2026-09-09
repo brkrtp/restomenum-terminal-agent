@@ -72,6 +72,13 @@ public sealed class LocalSaleHandler : IDeviceIdleGate
     private const int UnknownKurtarmaSaati = 24;
 
     /// <summary>
+    /// Kayıp kapanış kurtarmasının YAŞ EŞİĞİ (saniye, W76). Normal akışın kapanış→outbox aralığı
+    /// sahada ~800 ms ölçüldü; 30 sn onun çok üstünde ve "süreç öldü" vakasını geciktirmesi
+    /// önemsiz (o kayıt zaten bir sonraki drain turunda ya da açılışta toplanır).
+    /// </summary>
+    private const int KayipKapanisYasiSn = 30;
+
+    /// <summary>
     /// Satış öncesi eşleme tazeleyici (W29). <c>null</c> = kapalı (test/eski davranış): satış
     /// diskteki eşlemeyle yapılır.
     /// </summary>
@@ -856,7 +863,12 @@ public sealed class LocalSaleHandler : IDeviceIdleGate
     /// </summary>
     private void KayipKapanislariTopla()
     {
-        foreach (var k in _store.PendingClosedTickets())
+        // W76: YALNIZ eski kapanışlar. Normal akışta kapanış ile bildirimin outbox'a yazılması
+        // arasında ~800 ms var; drain o aralıkta dönerse satırı "kayıp" sanıp gövdeyi ikinci kez
+        // gönderiyordu (sahada görüldü 15:44:50). Bu kurtarma "süreç öldü" vakası için var ve o
+        // 800 ms'de çözülmez — bekleyerek hiçbir şey kaybetmiyoruz.
+        var esik = _now().AddSeconds(-KayipKapanisYasiSn).ToUnixTimeMilliseconds();
+        foreach (var k in _store.PendingClosedTickets(esik))
         {
             try
             {
