@@ -1,4 +1,4 @@
-namespace Restomenum.Agent.Core;
+﻿namespace Restomenum.Agent.Core;
 
 /// <summary>
 /// <b>FİŞ YAŞAM DÖNGÜSÜ</b> — <see cref="GmpTerminalTransport"/>'un parçası (W43 bölmesi).
@@ -41,11 +41,26 @@ public sealed partial class GmpTerminalTransport
             return Hata(TransportOutcome.Declined, "SALE_TOTAL_UNKNOWN",
                 "PaymentRestriction", RestomenumReasons.TicketSaleMismatch);
 
-        if (fis.TotalAmountMinor != satisToplam)
+        // ── W90: BANKA İNDİRİMİ KADAR FARK KABUL EDİLİR ────────────────────────────
+        // Saha (2026-09-09, fiş 88/11): kart bacağında banka fişe "İŞYERİ İND." bastı ve cihazın
+        // fiş toplamını 2380 -> 2331 düşürdü (~%5, dört ölçümde tekrarladı). Platform kalem
+        // listesinden 2380 göndermeye devam ediyor. Birebir eşitlik arandığı için ikinci bacak
+        // reddedildi ve fiş TAMAMLANAMAZ hâle geldi -- üstelik üreticinin kendi kurtarma akışı
+        // (GMP3OlumsuzDurumYönetimi §2 adım 7) tam da "kalan ödemeler tamamlanır" diyor.
+        //
+        // Tolerans DAR ve tek yönlü: fark, cihazın KENDİ bildirdiği indirime (`TotalReceiptDiscount`)
+        // TAM eşit olmalı. Yeni bir kabul dalı ekler, hiçbir eski kabulü kaldırmaz -- yani
+        // "kasiyer kalem ekledi/sildi" koruması olduğu gibi duruyor.
+        //
+        // ⚠️ Artık risk: kasiyer tam indirim tutarı kadar kalem silerse fark yine kapanır. Dar bir
+        // rastlantı; ölçülen kilidin bedeliyle karşılaştırıldığında kabul edildi.
+        var indirimliToplam = fis.TotalAmountMinor + fis.TotalDiscountMinor;
+        if (fis.TotalAmountMinor != satisToplam && indirimliToplam != satisToplam)
         {
             _log("[gmp] fis toplami satis toplamiyla UYUSMUYOR - devam edilmiyor", new
             {
                 request.CommandId, fisToplam = fis.TotalAmountMinor, satisToplam,
+                cihazIndirim = fis.TotalDiscountMinor, indirimliToplam,
             });
             return HataCihazTutarli(
                 $"TICKET_SALE_MISMATCH:fis={fis.TotalAmountMinor},satis={satisToplam}",

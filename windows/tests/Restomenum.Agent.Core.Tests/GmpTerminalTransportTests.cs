@@ -795,6 +795,76 @@ public class GmpTerminalTransportTests
         Assert.Equal("", GmpItemDefaults.DiscountText);
     }
 
+    // ── W90: BANKA İNDİRİMİ DEVAM BACAĞINI KİLİTLEMESİN ────────────────────────────
+    //
+    // Saha (2026-09-09 18:11, fiş 88/11): kart bacağında GARANTİ BBVA fişe "İŞYERİ İND." bastı ve
+    // cihazın fiş toplamını 2380 → **2331** düşürdü. Platform ise kalem listesinden **2380**
+    // göndermeye devam ediyor. `DevamDogrula` ikisini birebir kıyasladığı için ikinci bacak
+    // `TICKET_SALE_MISMATCH` ile reddedildi ve **fiş tamamlanamaz hâle geldi**.
+    //
+    // Bu yalnız bir kısıt değil: üreticinin kendi kurtarma akışı (GMP3OlumsuzDurumYönetimi §2
+    // adım 7) bu durumda "kalan ödemeler tamamlanır" diyor — yani bizim kontrolümüz üreticinin
+    // önerdiği çıkışı tıkıyordu.
+    //
+    // Tolerans DAR: fark, cihazın KENDİ bildirdiği indirime tam eşit olmalı. "Kasiyer kalem
+    // ekledi/sildi" koruması bozulmuyor — aşağıdaki ikinci test onu çiviliyor.
+
+    private static (GmpTerminalTransport, FakeGmp, FakeSnapshots) DevamKur(
+        long cihazToplam, long cihazIndirim)
+    {
+        var (t, g, snap) = Kur();
+        g.Codes["Start"] = GmpCodes.AlreadyDone;          // cihazda AÇIK fiş var
+        snap.BindOpenTicket("t1", "oturum-A");            // ve o fiş BU satışa ait
+        g.Ticket = new GmpTicket(cihazToplam, PaidAmountMinor: 941, PaymentCount: 1,
+            GmpPaymentTypes.Card, TotalDiscountMinor: cihazIndirim);
+        g.AfterPayment = new GmpTicket(cihazToplam, cihazToplam, 2, GmpPaymentTypes.Cash,
+            PaymentsAreComplete: true, TotalDiscountMinor: cihazIndirim);
+        return (t, g, snap);
+    }
+
+    [Fact]
+    public async Task BANKA_INDIRIMI_kadar_fark_devam_bacagini_ENGELLEMEZ()
+    {
+        // ← ÇİVİ: 2331 + 49 = 2380. Cihazın indirimi farkı TAM açıklıyorsa devam edilir.
+        var (t, gmp, _) = DevamKur(cihazToplam: 2331, cihazIndirim: 49);
+
+        var r = await t.SaleAsync(Req(amount: 1390, paymentType: GmpPaymentTypes.Cash,
+            oturum: "oturum-A", satisToplam: 2380));
+
+        Assert.Equal(TransportOutcome.Approved, r.Outcome);
+        Assert.Contains("Payment", gmp.Calls);            // ← ÇİVİ: terminale GERÇEKTEN gidildi
+        Assert.DoesNotContain("TicketHeader", gmp.Calls); // devam yolu: yeni fiş açılmadı
+    }
+
+    [Fact]
+    public async Task INDIRIM_YOKKEN_ayni_fark_HALA_REDDEDILIR()
+    {
+        // ← ÇİVİ: toleransın tek meşru kaynağı cihazın bildirdiği indirimdir. İndirim 0 iken
+        // 49 kuruşluk fark "kalemler değişti" demektir ve devam edilmemelidir. Bu test olmasaydı
+        // düzeltme, korumanın tamamını sessizce kaldırırdı.
+        var (t, gmp, _) = DevamKur(cihazToplam: 2331, cihazIndirim: 0);
+
+        var r = await t.SaleAsync(Req(amount: 1390, paymentType: GmpPaymentTypes.Cash,
+            oturum: "oturum-A", satisToplam: 2380));
+
+        Assert.Equal(TransportOutcome.Declined, r.Outcome);
+        Assert.Contains("TICKET_SALE_MISMATCH", r.ProviderResultCode);
+        Assert.DoesNotContain("Payment", gmp.Calls);      // ← ÇİVİ: terminale HİÇ gidilmedi
+    }
+
+    [Fact]
+    public async Task TAM_ESITLIK_eskisi_gibi_gecer()
+    {
+        // Gerileme çivisi: indirimsiz normal devam bacağı etkilenmemeli.
+        var (t, gmp, _) = DevamKur(cihazToplam: 2380, cihazIndirim: 0);
+
+        var r = await t.SaleAsync(Req(amount: 1390, paymentType: GmpPaymentTypes.Cash,
+            oturum: "oturum-A", satisToplam: 2380));
+
+        Assert.Equal(TransportOutcome.Approved, r.Outcome);
+        Assert.Contains("Payment", gmp.Calls);
+    }
+
     private static SaleRequest Req(long amount = 3000, int paymentType = GmpPaymentTypes.Card,
         IReadOnlyList<FiscalLine>? lines = null, string? oturum = null, long? satisToplam = null,
         string komut = "c1", string odeme = "p1", int? banka = null) =>

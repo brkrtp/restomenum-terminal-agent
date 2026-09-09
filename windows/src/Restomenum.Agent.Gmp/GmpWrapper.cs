@@ -1,4 +1,4 @@
-using System.Text;
+﻿using System.Text;
 using System.Text.RegularExpressions;
 using Restomenum.Agent.Core;
 using Restomenum.Agent.Gmp.Interop;
@@ -21,6 +21,14 @@ public sealed partial class GmpWrapper : IGmpWrapper
 {
     private const int TimeoutDefault = 10000;
     private const int TimeoutCard    = 90000;   // FP3_Payment
+    // W87 — TERS İŞLEM DE BANKA TRAFİĞİDİR, ödemeyle AYNI süreyi hak eder.
+    // Ölçüm 2026-09-09 18:11: `VoidPayment` tam **10 114 ms**'de kesildi (`TimeoutDefault` 10 000)
+    // ve fişte 941 kuruşluk gerçek tahsilat YARIM kaldı; bankaya ulaşıp ulaşmadığı bilinemedi.
+    // Aynı gün ödeme çağrıları 31,3 / 31,6 / 39,9 / 50,4 sn sürdü — yani 10 sn ödeme için de
+    // ters işlem için de yetersiz. Üretici belgesinde `FP3_VoidPayment` için önerilen bir süre
+    // YOK (131 fonksiyonluk başlık + GMP.XML tarandı); dayanak bu asimetri ve o tek ölçüm.
+    // ⚠️ Süre uzatmak arızayı ÇÖZMEZ, ihtimalini azaltır: 90 sn'de de cevapsız kalabilir.
+    private const int TimeoutVoid    = TimeoutCard;   // FP3_VoidPayment, FP3_VoidAll
     private const int TimeoutEcho    = 10000;
     private const int TimeoutPrintMf = 100000;
     private const ushort CurrencyTl = 949;
@@ -235,7 +243,7 @@ public sealed partial class GmpWrapper : IGmpWrapper
         if (h == 0) return GmpCodes.PortNotOpen;
 
         var stTicket = new ST_TICKET();
-        uint rc = Json_GMPSmartDLL.FP3_VoidAll(h, handle, ref stTicket, TimeoutDefault);
+        uint rc = Json_GMPSmartDLL.FP3_VoidAll(h, handle, ref stTicket, TimeoutVoid);
         ticket = Map(stTicket);
         return rc;
     }
@@ -246,7 +254,7 @@ public sealed partial class GmpWrapper : IGmpWrapper
         if (h == 0) return GmpCodes.PortNotOpen;
         // ⚠️ İMZA TAHMİNİ: sahada hiç ölçülmedi. ushort Index eşlemesi DLL'in tipli sarmalayıcısıyla uyumlu.
         var stTicket = new ST_TICKET();
-        return Json_GMPSmartDLL.FP3_VoidPayment(h, handle, checked((ushort)paymentIndex), ref stTicket, TimeoutDefault);
+        return Json_GMPSmartDLL.FP3_VoidPayment(h, handle, checked((ushort)paymentIndex), ref stTicket, TimeoutVoid);
     }
 
     public GmpResult Close(ulong handle)
