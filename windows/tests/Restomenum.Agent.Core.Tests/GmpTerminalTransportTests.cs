@@ -631,6 +631,21 @@ public class GmpTerminalTransportTests
     }
 
     [Fact]
+    public void MASKE_render_edilmis_metinde_de_DURUYOR()
+    {
+        // ← ÇİVİ: maske `Read`'de uygulanıyor, render'da DEĞİL — kural tek yerde durmalı.
+        // Ama "tek yerde duruyor" ile "günlüğe maskeli çıkıyor" ayrı iddialar; ölçülen ikincisi.
+        // Kartlı fişte yazıcı kopyasında maskeli PAN olabilir ve bu metin artık DİSKE yazılıyor.
+        var okunan = PrinterCopy.Read(new[] { "PAN 4508034508034508", "TUTAR *9,90 " }, 2);
+
+        var metin = PrinterCopy.Yazdirilabilir(okunan);
+
+        Assert.DoesNotContain("4508034508034508", metin);
+        Assert.Contains("PAN ***", metin);
+        Assert.Contains("TUTAR *9,90 ", metin);      // tutar ayraçlı → dokunulmadı
+    }
+
+    [Fact]
     public void Yazdirilabilir_GELMEDI_ile_BOS_GELDI_ayrimini_KORUR()
     {
         // ← ÇİVİ: "cihaz göndermedi" ile "gönderdi ama satır yok" ayrı olgular. Aynı metne
