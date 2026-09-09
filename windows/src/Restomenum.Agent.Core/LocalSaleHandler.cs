@@ -1,4 +1,4 @@
-namespace Restomenum.Agent.Core;
+﻿namespace Restomenum.Agent.Core;
 
 /// <summary>
 /// Yerel ödeme akışı (yerel mimari, K-21): kasadan gelen <see cref="SaleToPoiRequest"/>'i işler.
@@ -77,6 +77,16 @@ public sealed class LocalSaleHandler : IDeviceIdleGate
     /// önemsiz (o kayıt zaten bir sonraki drain turunda ya da açılışta toplanır).
     /// </summary>
     private const int KayipKapanisYasiSn = 30;
+
+    /// <summary>
+    /// Kaç başarısız tamamlama denemesinden sonra ALARM yükseltilir (W105). Geri çekilme eğrisiyle
+    /// (30·60·120·240·300 sn) yaklaşık <b>12,5 dakika</b> eder — kasiyerin bir masayı beklemesi
+    /// için uzun, ama cihazın geçici bir meşguliyetini alarma çevirmek için kısa değil.
+    ///
+    /// <para><b>Vazgeçme eşiği DEĞİL.</b> Bu fişte gerçek para var; denemeler sonsuza kadar
+    /// (5 dakikada bir) sürer. Eşik yalnız sesin yükseldiği yerdir.</para>
+    /// </summary>
+    private const int TamamlamaAlarmEsigi = 5;
 
     /// <summary>
     /// Satış öncesi eşleme tazeleyici (W29). <c>null</c> = kapalı (test/eski davranış): satış
@@ -850,6 +860,110 @@ public sealed class LocalSaleHandler : IDeviceIdleGate
     }
 
     /// <summary>
+    /// <b>W105 — CİHAZDA YARIM KALMIŞ FİŞİ OTOMATİK TAMAMLAR.</b>
+    ///
+    /// <para><b>Neden var:</b> baskı zinciri patlayınca fiş ÜZERİNDE GERÇEK PARAYLA açık kalıyor
+    /// ve bugüne kadar onu tekrar deneyecek hiçbir şey yoktu. Ajan çalışmaya devam ediyor, kasa
+    /// masayı kapatamıyor, arıza insan müdahalesine kadar sürüyordu — 2026-09-09'da
+    /// <b>83 dakika</b> (23:07 → 00:30).</para>
+    ///
+    /// <para><b>Neden YOKLAMA değil:</b> cihaza periyodik "açık fiş var mı" diye sormak,
+    /// Türkiye'de NORMAL olan kısmi ödeme aradurumunu da her turda cihaza sordururdu — kasiyer
+    /// ikinci bacağı eklerken cihaz boş yere meşgul edilirdi. Tetik <b>kanıttır</b>: kayıt yalnız
+    /// baskı GERÇEKTEN patladığında yazılır.</para>
+    ///
+    /// <para><b>Üç güvenlik şartı:</b>
+    /// ① <b>Satış her zaman öncelikli</b> — cihaz kilidi <c>Wait(0)</c> ile alınır, meşgulse tur
+    ///   ATLANIR (beklemek, satışın önüne geçmek olurdu). Ayrıca kaydın kendi bekleme süresi var
+    ///   (ilk deneme +15 sn): baskıdan saniyesinde üstüne gitmek aynı duvara toslamaktır.
+    /// ② <b>Geri çekilme ve alarm</b> — her başarısız deneme üstel olarak ertelenir
+    ///   (<see cref="Outbox.Bekleme"/> ile AYNI eğri) ve <see cref="TamamlamaAlarmEsigi"/>'nden
+    ///   sonra ses yükselir. <b>Vazgeçme YOK:</b> fişte para var.
+    /// ③ <b>Ödemesi tamamlanmamış fişe DOKUNULMAZ</b> ve <c>VoidAll</c> hiçbir dalda yok — kararı
+    ///   <see cref="TicketFinish.Planla"/> veriyor, bu tur yalnız onu çalıştırıyor.</para>
+    ///
+    /// <para><b>Cihaz meşgulse başarısızlık SAYILMAZ:</b> <c>RECV_BUSY</c>/zaman aşımında fiş
+    /// hakkında hiçbir şey öğrenilmemiştir; alarm yükseltmek "denendi ve olmadı" demek olurdu.</para>
+    /// </summary>
+    private void YarimFisleriTamamla()
+    {
+        if (_transport is not IStuckTicketFinisher tamamlayici) return;
+        // Saat turun BAŞINDA bir kez okunur ve her yazmaya AYNI değer geçilir. Deponun kendi
+        // varsayılanı `DateTimeOffset.UtcNow`; ona bırakmak, sınıfın enjekte edilmiş saatini
+        // (kasa saat farkı düzeltmesi burada sürülüyor) sessizce baypas etmek olurdu.
+        var simdi = _now().ToUnixTimeMilliseconds();
+        var bekleyenler = _store.PendingFinishes(simdi);
+        if (bekleyenler.Count == 0) return;
+
+        foreach (var f in bekleyenler)
+        {
+            // ŞART ①: satış sürüyorsa CİHAZA GİDİLMEZ. Beklemek yok — bir sonraki tur var.
+            using var kilit = TryAcquire();
+            if (kilit is null)
+            {
+                _log("[tamamla] cihaz satışta — tur atlandı", new { f.TicketId, f.Attempts });
+                return;
+            }
+
+            StuckTicketResult s;
+            try { s = tamamlayici.FinishStuckTicket(uygula: true); }
+            catch (Exception e)
+            {
+                // Kayıt DURUYOR. Silmek, üzerinde para olan bir fişi unutmak olurdu.
+                var n = _store.MarkFinishAttempt(f.TicketId, "EXCEPTION", e.GetType().Name, simdi);
+                _log("[tamamla] deneme hata verdi — kayıt duruyor", new { f.TicketId, deneme = n, hata = e.Message });
+                continue;
+            }
+
+            if (s.FisAcikDegil)
+            {
+                // Fiş başka bir yoldan kapanmış (kasiyer, önceki tur). "Kapandı" diye deftere
+                // yazmıyoruz — bu tur onu kapatmadı ve kapanışı ölçmedi. Yalnız kaydı düşürüyoruz.
+                _store.ClearPendingFinish(f.TicketId);
+                _log("[tamamla] cihazda açık fiş yok — bekleyen kayıt düşürüldü", new { f.TicketId });
+                continue;
+            }
+
+            if (s.Kapandi)
+            {
+                // Defter işini taşıma yaptı (`TicketFinishLedger.Yaz`), bekleyen kayıt orada düştü.
+                // Yine de savunmacı: taşıma bağı çözemediyse kayıt burada düşer, sonsuz dönmesin.
+                _store.ClearPendingFinish(f.TicketId);
+                _log("[tamamla] ✓ yarım kalmış fiş TAMAMLANDI", new
+                {
+                    f.TicketId, deneme = f.Attempts + 1, ureticiAdimi = s.Plan.UreticiAdimi,
+                    bayraklar = TicketFlags.Yazdirilabilir(s.Bayraklar),
+                    toplam = s.ToplamMinor, tahsil = s.TahsilMinor,
+                });
+                continue;
+            }
+
+            // ŞART ②: ertelenir, sayılır; eşiği aşınca ses yükselir. Vazgeçilmez.
+            var deneme = _store.MarkFinishAttempt(f.TicketId, s.BasarisizAdim, s.Kod, simdi);
+            var veri = new
+            {
+                f.TicketId, deneme, adim = s.BasarisizAdim, kod = s.Kod,
+                neden = s.Plan.Neden, ureticiAdimi = s.Plan.UreticiAdimi,
+                sonrakiDenemeSn = (int)Outbox.Bekleme(deneme).TotalSeconds,
+            };
+
+            if (s.Meshgul)
+                // Denenmedi bile: cihaz cevap vermedi. Bunu "başarısız" saymak, olmamış bir
+                // denemeyi alarma çevirmek olurdu.
+                _log("[tamamla] cihaz meşgul/cevapsız — ertelendi (alarm DEĞİL)", veri);
+            else if (s.Plan.Adim == FisBitirmeAdimi.Dokunma)
+                // ŞART ③: ödemesi eksik ya da okuma bozuk. Otomatik yol burada DURUR ve durmalı;
+                // kalanı tahsil etmek kasanın kararıdır, bir bakım turunun değil.
+                _log("[uyarı] yarım fiş TAMAMLANAMAZ — dokunulmadı, insan kararı gerekiyor", veri);
+            else if (deneme >= TamamlamaAlarmEsigi)
+                _log("[uyarı] yarım fiş {0} denemedir kapanmıyor — ÜZERİNDE PARA VAR, yazıcıyı kontrol edin"
+                    .Replace("{0}", deneme.ToString()), veri);
+            else
+                _log("[tamamla] deneme başarısız — ertelendi", veri);
+        }
+    }
+
+    /// <summary>
     /// Fişi kapanmış ama kapanış gövdesi outbox'a HİÇ yazılamamış vakaları kurtarır.
     ///
     /// <para><b>Hangi aralık:</b> taşıma katmanı fişi kapatıp bağı sildikten sonra, üst katman
@@ -901,7 +1015,10 @@ public sealed class LocalSaleHandler : IDeviceIdleGate
     /// </param>
     public async Task DrainOutboxAsync(CancellationToken ct = default, bool ignoreBackoff = false)
     {
-        // ÖNCE yarım kalmış kapanışlar: gövdesi hiç kurulamamış fişler outbox'ta görünmez.
+        // EN ÖNCE cihazda yarım kalmış fişler: kapanış gövdesi ancak fiş KAPANDIKTAN sonra doğar.
+        YarimFisleriTamamla();
+
+        // Sonra yarım kalmış kapanışlar: gövdesi hiç kurulamamış fişler outbox'ta görünmez.
         KayipKapanislariTopla();
 
         foreach (var e in _outbox.Pending(ignoreBackoff: ignoreBackoff))

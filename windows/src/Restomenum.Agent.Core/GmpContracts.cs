@@ -35,6 +35,15 @@ public readonly record struct TicketPaymentRow(
 public readonly record struct ClosedTicketRow(
     string TicketId, string TerminalId, string? SaleSessionId, long? TotalMinor, long? PaidMinor);
 
+/// <summary>
+/// <b>W105</b> — baskı zinciri yarıda kaldığı için ÜZERİNDE PARAYLA açık kalmış, tamamlanmayı
+/// bekleyen fiş. <c>Attempts</c> geri çekilmeyi ve alarm eşiğini sürer; <c>LastStep</c>/<c>LastCode</c>
+/// son denemenin NEREDE ve HANGİ kodla kaldığını taşır — ölçülmediyse <c>null</c>, uydurulmaz.
+/// </summary>
+public readonly record struct PendingFinishRow(
+    string TicketId, string TerminalId, string? SaleSessionId, int Attempts,
+    string? LastStep, string? LastCode);
+
 public interface ITicketSnapshotStore
 {
     /// <param name="saleSessionId">
@@ -66,6 +75,16 @@ public interface ITicketSnapshotStore
 
     /// <summary>Açık fişin kimliği; bağ yoksa <c>null</c>.</summary>
     string? ReadOpenTicketId(string terminalId);
+
+    /// <summary>
+    /// <b>W104/W105</b> — cihazda AÇIK görünen fişlerin TÜM bağları.
+    ///
+    /// <para><b>Neden terminal kimliği ALMIYOR:</b> kurtarma yolları bir satış isteğinden
+    /// doğmuyor; ellerinde yalnız CİHAZ var. Cihaz bizim fiş kimliğimizi bilmez, dolayısıyla
+    /// "az önce kapanan fiş hangisiydi" sorusunun tek kaynağı budur. Terminal kimliğini tahmin
+    /// ettirmek YANLIŞ fişi kapatabilirdi.</para>
+    /// </summary>
+    IReadOnlyList<(string TerminalId, string? SaleSessionId, string? TicketId)> AllOpenTicketBindings();
 
     /// <summary>
     /// Bir fişe düşen ödemeyi <b>bizim <c>paymentId</c>'mizle</b> kaydeder.
@@ -108,6 +127,24 @@ public interface ITicketSnapshotStore
 
     /// <summary>Bağı siler — fiş kapandığında (tam ödeme) ya da iptal edildiğinde.</summary>
     void ClearOpenTicketBinding(string terminalId);
+
+    /// <summary>
+    /// <b>W105</b> — baskı zinciri yarıda kaldı; fiş ÜZERİNDE PARAYLA açık kaldı ve
+    /// TAMAMLANMAYI BEKLİYOR. Bu kayıt olmadan tekrar denemenin hiçbir yolu yok: 2026-09-09'da
+    /// aynı durum <b>83 dakika</b> sürdü ve ancak insan müdahalesiyle çözüldü.
+    /// </summary>
+    void MarkTicketNeedsFinish(string ticketId, string terminalId, string? saleSessionId,
+        string? step, string? code, int ilkBeklemeSn = 15, long? now = null);
+
+    /// <summary>Zamanı GELMİŞ tamamlama kayıtları (en eski önce).</summary>
+    IReadOnlyList<PendingFinishRow> PendingFinishes(long? now = null);
+
+    /// <summary>Denemeyi sayar ve bir sonrakini üstel olarak erteler. <b>Vazgeçme YOK.</b></summary>
+    /// <returns>Artırımdan SONRAKİ deneme sayısı.</returns>
+    int MarkFinishAttempt(string ticketId, string? step, string? code, long? now = null);
+
+    /// <summary>Bekleyen tamamlama kaydını düşürür (tamamlandı ya da ortada fiş kalmadı).</summary>
+    void ClearPendingFinish(string ticketId);
 }
 
 /// <summary>

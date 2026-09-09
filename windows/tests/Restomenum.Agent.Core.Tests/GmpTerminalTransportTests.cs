@@ -1076,6 +1076,47 @@ public class GmpTerminalTransportTests
             _bag.Remove(terminalId); _fisId.Remove(terminalId);
         }
 
+        public IReadOnlyList<(string TerminalId, string? SaleSessionId, string? TicketId)> AllOpenTicketBindings()
+            => _bag.Select(x => (x.Key, (string?)x.Value,
+                _fisId.TryGetValue(x.Key, out var f) ? f : null)).ToList();
+
+        // ── W105: TAMAMLANMAYI BEKLEYEN FİŞ ───────────────────────────────────────
+        /// <summary>İşaretlenen fişler: fiş → (adım, kod, deneme). Sıra da tutulur.</summary>
+        public Dictionary<string, (string? Adim, string? Kod, int Deneme)> Bekleyen { get; } = new();
+        public List<string> BekleyenSirasi { get; } = new();
+
+        public void MarkTicketNeedsFinish(string ticketId, string terminalId, string? saleSessionId,
+            string? step, string? code, int ilkBeklemeSn = 15, long? now = null)
+        {
+            BekleyenSirasi.Add("mark:" + ticketId);
+            // Gerçek deponun `ON CONFLICT` davranışı: ikinci işaretleme deneme sayacını
+            // SIFIRLAMAZ, yalnız hata alanlarını tazeler.
+            var deneme = Bekleyen.TryGetValue(ticketId, out var v) ? v.Deneme : 0;
+            Bekleyen[ticketId] = (step, code, deneme);
+            _bekleyenTerminal[ticketId] = (terminalId, saleSessionId);
+        }
+
+        private readonly Dictionary<string, (string Terminal, string? Oturum)> _bekleyenTerminal = new();
+
+        public IReadOnlyList<PendingFinishRow> PendingFinishes(long? now = null)
+            => Bekleyen.Select(x => new PendingFinishRow(x.Key,
+                _bekleyenTerminal.TryGetValue(x.Key, out var t) ? t.Terminal : "t1",
+                _bekleyenTerminal.TryGetValue(x.Key, out var o) ? o.Oturum : null,
+                x.Value.Deneme, x.Value.Adim, x.Value.Kod)).ToList();
+
+        public int MarkFinishAttempt(string ticketId, string? step, string? code, long? now = null)
+        {
+            if (!Bekleyen.TryGetValue(ticketId, out var v)) return 0;
+            Bekleyen[ticketId] = (step, code, v.Deneme + 1);
+            return v.Deneme + 1;
+        }
+
+        public void ClearPendingFinish(string ticketId)
+        {
+            BekleyenSirasi.Add("clearPending:" + ticketId);
+            Bekleyen.Remove(ticketId);
+        }
+
         /// <summary>Fiş → ödemeler (bizim paymentId'lerimiz).</summary>
         public Dictionary<string, List<TicketPaymentRow>> Odemeler { get; } = new();
         /// <summary>W79: kaydedilen TAHSİL tutarları — defter değişmezinin çivisi bunu okur.</summary>
@@ -2024,6 +2065,178 @@ public class GmpTerminalTransportTests
         Assert.Equal("CLOSED", r.TicketState);
         Assert.Equal(RestomenumReasons.PrintFailed, r.Reason);
         Assert.Equal("PrintMF", r.PrintFailedStep);
+    }
+
+    [Fact]
+    public async Task BASKI_patlayinca_fis_TEKRAR_DENENMEK_UZERE_isaretlenir()
+    {
+        // ← ÇİVİ: bu kayıt olmadan yarım kalmış fişi tekrar deneyecek HİÇBİR ŞEY yok.
+        // 2026-09-09'da tam bu boşluk 83 dakika sürdü (23:07 → 00:30) ve ancak insan
+        // müdahalesiyle kapandı — ajan bütün o süre boyunca sorunsuz çalışıyordu.
+        var g = new FakeGmp();
+        var snap = new FakeSnapshots();
+        g.Ticket = new GmpTicket(990, 0, 0, 0);
+        g.AfterPayment = new GmpTicket(990, 990, 1, GmpPaymentTypes.Cash);
+        g.Codes["PrintBeforeMF"] = GmpCodes.Timeout;
+        var t = new GmpTerminalTransport(g, snap);
+
+        var r = await t.SaleAsync(Req(amount: 990, paymentType: GmpPaymentTypes.Cash,
+            oturum: "oturum-A", satisToplam: 990));
+
+        var fisId = Assert.Single(snap.Bekleyen).Key;
+        Assert.Equal(r.TicketId, fisId);
+        Assert.Equal("PrintBeforeMF", snap.Bekleyen[fisId].Adim);
+        Assert.Equal("0xF003", snap.Bekleyen[fisId].Kod);
+    }
+
+    [Fact]
+    public async Task Baski_SORUNSUZSA_bekleyen_kayit_YAZILMAZ()
+    {
+        var g = new FakeGmp();
+        var snap = new FakeSnapshots();
+        g.Ticket = new GmpTicket(990, 0, 0, 0);
+        g.AfterPayment = new GmpTicket(990, 990, 1, GmpPaymentTypes.Cash);
+        var t = new GmpTerminalTransport(g, snap);
+
+        // OTURUM ŞART: bağ olmadan fiş kimliği doğmaz ve kayıt kapısı hiç sınanmamış olurdu
+        // (ilk yazımda tam bu yüzden mutasyon YEŞİL kaldı — test kapıya hiç değmiyordu).
+        var r = await t.SaleAsync(Req(amount: 990, paymentType: GmpPaymentTypes.Cash,
+            oturum: "oturum-A", satisToplam: 990));
+
+        Assert.NotNull(r.TicketId);          // kapı gerçekten sınanabilir durumda
+        Assert.Equal("CLOSED", r.TicketState);
+        // ← ÇİVİ: her kapanışa kayıt yazsaydık süpürme her satıştan sonra cihaza giderdi.
+        Assert.Empty(snap.Bekleyen);
+    }
+
+    // ── W105: TAMAMLAMA — CİHAZ TARAFI ──────────────────────────────────────────
+
+    [Fact]
+    public void FinishStuckTicket_kapatinca_DEFTERE_yazar_ve_bagi_siler()
+    {
+        var g = new FakeGmp();
+        var snap = new FakeSnapshots();
+        snap.BindOpenTicket("t1", "oturum-A");
+        g.Codes["Start"] = GmpCodes.AlreadyDone;
+        g.Ticket = new GmpTicket(990, 990, 1, GmpPaymentTypes.Cash,
+            TransactionFlags: TicketFlags.TotalsAndPaymentsPrinted);
+        var t = new GmpTerminalTransport(g, snap);
+
+        var s = ((IStuckTicketFinisher)t).FinishStuckTicket(uygula: true);
+
+        Assert.True(s.Kapandi);
+        Assert.Equal(new[] { "Start", "OptionFlags", "GetTicket", "PrintMF", "Close" }, g.Calls);
+        // ← ÇİVİ: cihazda kapatmak masayı AÇMAZ. Defter kaydı olmadan platform fişin
+        // ödemelerini hiç yazmaz ve kullanıcının gördüğü arıza aynen sürer.
+        Assert.Single(snap.Kapananlar);
+        Assert.Equal(990, snap.Kapananlar[0].PaidMinor);
+        Assert.Contains("clear:t1", snap.KapanisSirasi);
+        Assert.DoesNotContain("VoidAll", g.Calls);
+        Assert.DoesNotContain("VoidPayment", g.Calls);
+    }
+
+    [Fact]
+    public void FinishStuckTicket_BIRDEN_COK_bag_varsa_HICBIRI_bildirilmez()
+    {
+        var g = new FakeGmp();
+        var snap = new FakeSnapshots();
+        snap.BindOpenTicket("t1", "oturum-A");
+        snap.BindOpenTicket("t2", "oturum-B");   // ikinci terminal de açık görünüyor
+        g.Codes["Start"] = GmpCodes.AlreadyDone;
+        g.Ticket = new GmpTicket(990, 990, 1, GmpPaymentTypes.Cash,
+            TransactionFlags: TicketFlags.MfPrinted);
+        var t = new GmpTerminalTransport(g, snap);
+
+        var s = ((IStuckTicketFinisher)t).FinishStuckTicket(uygula: true);
+
+        // Fiş cihazda KAPANDI (bu doğru ve geri alınamaz).
+        Assert.True(s.Kapandi);
+        // ← ÇİVİ: ama HANGİ fişin kapandığı belirsiz. Rastgele birini seçip onun ödemelerini
+        // deftere yazmak, BAŞKA BİR MASANIN tahsilatını bu masaya geçirmek olurdu — hiç
+        // yazmamaktan çok daha kötü. Belirsizlikte iddia edilmez.
+        Assert.Empty(snap.Kapananlar);
+        Assert.Null(s.TicketId);
+        Assert.NotNull(snap.ReadOpenTicketBinding("t1"));
+        Assert.NotNull(snap.ReadOpenTicketBinding("t2"));
+    }
+
+    [Fact]
+    public void FinishStuckTicket_ONCE_kapanisi_yazar_SONRA_bagi_siler()
+    {
+        var g = new FakeGmp();
+        var snap = new FakeSnapshots();
+        snap.BindOpenTicket("t1", "oturum-A");
+        g.Codes["Start"] = GmpCodes.AlreadyDone;
+        g.Ticket = new GmpTicket(990, 990, 1, GmpPaymentTypes.Cash,
+            TransactionFlags: TicketFlags.MfPrinted);
+        var t = new GmpTerminalTransport(g, snap);
+
+        ((IStuckTicketFinisher)t).FinishStuckTicket(uygula: true);
+
+        // ← ÇİVİ: SIRA. Bağ önce silinseydi ve ikisi arasında süreç ölseydi, fişi bildirecek
+        // KİMLİK kalmazdı ve o tahsilat deftere HİÇ yazılmazdı. (Aynı gerekçe satış yolunda
+        // da yazılı — burada da geçerli, çünkü kayıp aynı kayıp.)
+        var yaz = snap.KapanisSirasi.FindIndex(x => x.StartsWith("mark:", StringComparison.Ordinal));
+        var sil = snap.KapanisSirasi.IndexOf("clear:t1");
+        Assert.True(yaz >= 0 && sil >= 0, "iki adım da çalışmalı");
+        Assert.True(yaz < sil, "kapanış kaydı bağ silinmeden ÖNCE yazılmalı");
+    }
+
+    [Fact]
+    public void FinishStuckTicket_acik_fis_YOKSA_yoklama_fisini_kapatir_ve_DEFTERE_DOKUNMAZ()
+    {
+        var g = new FakeGmp();
+        var snap = new FakeSnapshots();
+        snap.BindOpenTicket("t1", "oturum-A");
+        var t = new GmpTerminalTransport(g, snap);   // Start → Ok (açık fiş yok)
+
+        var s = ((IStuckTicketFinisher)t).FinishStuckTicket(uygula: true);
+
+        Assert.True(s.FisAcikDegil);
+        Assert.False(s.Kapandi);
+        // ← ÇİVİ: probe fişi AÇIK bırakılırsa sonraki satış onu bayat sanır ve kasa manuel
+        // ödemeye düşer. Ve "kapandı" diye deftere yazmak, ölçmediğimiz bir kapanışı iddia
+        // etmek olurdu — bu tur o fişi kapatmadı.
+        Assert.Equal(new[] { "Start", "Close" }, g.Calls);
+        Assert.Empty(snap.Kapananlar);
+    }
+
+    [Fact]
+    public void FinishStuckTicket_cihaz_MESGULSE_denenmedi_sayilir()
+    {
+        var g = new FakeGmp();
+        g.Codes["Start"] = GmpCodes.RecvBusy;
+        var t = new GmpTerminalTransport(g, new FakeSnapshots());
+
+        var s = ((IStuckTicketFinisher)t).FinishStuckTicket(uygula: true);
+
+        // ← ÇİVİ: "cevap gelmedi" ile "denendi ve olmadı" AYRI. İlkini alarma çevirmek,
+        // olmamış bir denemeyi başarısızlık diye raporlamak olurdu.
+        Assert.True(s.Meshgul);
+        Assert.False(s.Kapandi);
+        Assert.False(s.FisAcikDegil);
+        Assert.Equal(new[] { "Start" }, g.Calls);
+    }
+
+    [Fact]
+    public void FinishStuckTicket_ODEMESI_EKSIK_fise_dokunmaz()
+    {
+        var g = new FakeGmp();
+        g.Codes["Start"] = GmpCodes.AlreadyDone;
+        g.Ticket = new GmpTicket(2380, 990, 1, GmpPaymentTypes.Cash,
+            TransactionFlags: TicketFlags.TotalsAndPaymentsPrinted);
+        var snap = new FakeSnapshots();
+        snap.BindOpenTicket("t1", "oturum-A");
+        var t = new GmpTerminalTransport(g, snap);
+
+        var s = ((IStuckTicketFinisher)t).FinishStuckTicket(uygula: true);
+
+        // ← ÇİVİ (şart ③): kalanı almadan basıp kapatmak, ÖDENMEMİŞ bir tutarı ödenmiş gibi
+        // mali hafızaya yazmak olurdu. Otomatik yol burada DURMALI.
+        Assert.False(s.Kapandi);
+        Assert.Equal(TicketFinish.OdemeTamamlanmamis, s.Plan.Neden);
+        Assert.Equal(new[] { "Start", "OptionFlags", "GetTicket" }, g.Calls);
+        Assert.NotNull(snap.ReadOpenTicketBinding("t1"));   // ← bağ DURUYOR, silinmedi
     }
 
     [Fact]

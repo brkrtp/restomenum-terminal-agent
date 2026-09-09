@@ -343,6 +343,14 @@ public sealed partial class GmpTerminalTransport : ITerminalTransport
             if (kapanisHatasi is not null) return kapanisHatasi;
             baskiAdimi = baskiAdim;
             baskiKodu = baskiKod?.ToString();
+            // ── W105: TEKRAR DENENEBİLİR OLSUN ────────────────────────────────────
+            // Buraya YALNIZ fiş tam ödenmişken gelinir (kapanış zinciri o hâlde çalışır), yani
+            // fişte GERÇEK PARA var ve fiş AÇIK kaldı. Kalıcı kayıt yazılmazsa bu fişi tekrar
+            // deneyecek hiçbir mekanizma yok: 2026-09-09'da tam bu boşluk 83 dakika sürdü ve
+            // ancak insan müdahalesiyle kapandı. Kayıt tetiği KANITTIR, yoklama değil.
+            if (!kapandi && fisId is not null)
+                _snapshots?.MarkTicketNeedsFinish(fisId, request.TerminalId, request.SaleSessionId,
+                    baskiAdim, baskiKodu);
             if (baskiAdim is not null && baskiKod is { } bk)
                 // ⚠️ Zaman aşımı ile RET ayrı sebeplerdir: "cevap gelmedi" ile "cevap geldi ve
                 // hayır dedi" farklı olgular. `Close` ayrı: orada kâğıt/yazıcı sorusu yoktur.

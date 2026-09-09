@@ -170,6 +170,29 @@ public sealed class CommandStore : ITicketSnapshotStore, IDisposable
                 """;
             cmd.ExecuteNonQuery();
 
+            // ── W105: TAMAMLANMAYI BEKLEYEN FİŞ ───────────────────────────────────────
+            // Baskı zinciri yarıda kalınca fiş ÜZERİNDE PARAYLA açık kalır ve bugün onu kimse
+            // tekrar denemez: ajan çalışmaya devam eder, kasa masayı kapatamaz, arıza insan
+            // müdahalesine kadar sürer (2026-09-09 23:07 → 2026-09-10 00:30, ~83 dakika).
+            //
+            // Neden AYRI tablo ve neden YOKLAMA değil: cihazı periyodik olarak "açık fiş var mı"
+            // diye yoklamak, Türkiye'de NORMAL olan kısmi ödeme aradurumunu da her turda cihaza
+            // sordurur — kasiyer ikinci bacağı eklerken cihaz boş yere meşgul edilir. Bu kayıt
+            // ise yalnız BASKI GERÇEKTEN PATLADIĞINDA yazılır: tetik kanıttır, tahmin değil.
+            cmd.CommandText = """
+                CREATE TABLE IF NOT EXISTS pending_finish (
+                    ticket_id       TEXT PRIMARY KEY,
+                    terminal_id     TEXT NOT NULL,
+                    sale_session_id TEXT,
+                    marked_at       INTEGER NOT NULL,
+                    attempts        INTEGER NOT NULL DEFAULT 0,
+                    next_attempt_at INTEGER NOT NULL,
+                    last_step       TEXT,
+                    last_code       TEXT
+                )
+                """;
+            cmd.ExecuteNonQuery();
+
             // ── ŞEMA GEÇİŞİ: `kind` sütunu (genişlet → geçir → daralt) ─────────────────
             // Sütun sonradan eklendi ve varsayılanı 'sale'. Böylece ESKİ kayıtlar bozulmadan
             // satış sayılmaya devam eder; yeni türler (void, status) kendi adlarıyla yazılır.
@@ -524,13 +547,109 @@ public sealed class CommandStore : ITicketSnapshotStore, IDisposable
     }
 
     /// <summary>
-    /// <b>W104</b> — cihazda AÇIK görünen fişlerin TÜM bağları.
+    /// <b>W105</b> — baskı yarıda kaldı: fiş ÜZERİNDE PARAYLA açık kaldı, tamamlanmayı bekliyor.
     ///
-    /// <para><b>Neden gerekli:</b> <see cref="ReadOpenTicketId"/> terminal kimliğini ÖNCEDEN
-    /// bilmeyi şart koşuyor. Bakım komutu (<c>--finish-ticket</c>) ise bir satış isteğinden
-    /// doğmuyor; elinde yalnız CİHAZ var, terminal kimliği yok. Kimliği tahmin ettirmek yerine
-    /// defterden okutuyoruz — tahmin edilen bir terminal kimliği yanlış fişi kapatabilirdi.</para>
+    /// <para><b>Bekleme (<paramref name="ilkBeklemeSn"/>) neden var:</b> cihaz baskı adımından
+    /// hemen sonra hâlâ meşgul olabilir; saniyesinde üstüne gitmek aynı duvara toslamaktır.
+    /// Ayrıca kasiyer o sırada cihaz menüsünde olabilir. Bir soluk beklemek hiçbir şey
+    /// kaybettirmez — fiş zaten açık ve bekliyor.</para>
+    ///
+    /// <para>Aynı fiş ikinci kez işaretlenirse deneme sayacı SIFIRLANMAZ (<c>ON CONFLICT</c> yalnız
+    /// hata alanlarını tazeler): tekrar tekrar patlayan bir fişin geri çekilmesi sıfırlansaydı
+    /// cihaza sonsuza kadar 15 saniyede bir gidilirdi.</para>
     /// </summary>
+    public void MarkTicketNeedsFinish(string ticketId, string terminalId, string? saleSessionId,
+        string? step, string? code, int ilkBeklemeSn = 15, long? now = null)
+    {
+        lock (_gate)
+        {
+            var simdi = now ?? DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            using var cmd = _conn.CreateCommand();
+            cmd.CommandText = """
+                INSERT INTO pending_finish
+                    (ticket_id, terminal_id, sale_session_id, marked_at, attempts, next_attempt_at,
+                     last_step, last_code)
+                VALUES ($f, $t, $o, $now, 0, $sonra, $adim, $kod)
+                ON CONFLICT(ticket_id) DO UPDATE SET last_step = $adim, last_code = $kod
+                """;
+            cmd.Parameters.AddWithValue("$f", ticketId);
+            cmd.Parameters.AddWithValue("$t", terminalId);
+            cmd.Parameters.AddWithValue("$o", (object?)saleSessionId ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("$now", simdi);
+            cmd.Parameters.AddWithValue("$sonra", simdi + ilkBeklemeSn * 1000L);
+            cmd.Parameters.AddWithValue("$adim", (object?)step ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("$kod", (object?)code ?? DBNull.Value);
+            cmd.ExecuteNonQuery();
+        }
+    }
+
+    /// <summary>Zamanı GELMİŞ tamamlama kayıtları (en eski önce).</summary>
+    public IReadOnlyList<PendingFinishRow> PendingFinishes(long? now = null)
+    {
+        lock (_gate)
+        {
+            using var cmd = _conn.CreateCommand();
+            cmd.CommandText = """
+                SELECT ticket_id, terminal_id, sale_session_id, attempts, last_step, last_code
+                FROM pending_finish WHERE next_attempt_at <= $now ORDER BY marked_at
+                """;
+            cmd.Parameters.AddWithValue("$now", now ?? DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+            var liste = new List<PendingFinishRow>();
+            using var r = cmd.ExecuteReader();
+            while (r.Read())
+                liste.Add(new PendingFinishRow(r.GetString(0), r.GetString(1),
+                    r.IsDBNull(2) ? null : r.GetString(2), r.GetInt32(3),
+                    r.IsDBNull(4) ? null : r.GetString(4), r.IsDBNull(5) ? null : r.GetString(5)));
+            return liste;
+        }
+    }
+
+    /// <summary>
+    /// Deneme sayacını artırır ve bir sonrakini üstel olarak erteler (<see cref="Outbox.Bekleme"/>
+    /// ile AYNI eğri — iki ayrı geri çekilme tanımı iki ayrı davranış demekti).
+    /// <b>Vazgeçme YOK, silme YOK:</b> bu fişte gerçek para var; ertelemek başka, unutmak başka.
+    /// </summary>
+    /// <returns>Artırımdan SONRAKİ deneme sayısı — çağıran alarm eşiğini buna göre kurar.</returns>
+    public int MarkFinishAttempt(string ticketId, string? step, string? code, long? now = null)
+    {
+        lock (_gate)
+        {
+            var simdi = now ?? DateTimeOffset.UtcNow.ToUnixTimeMilliseconds();
+            using var oku = _conn.CreateCommand();
+            oku.CommandText = "SELECT attempts FROM pending_finish WHERE ticket_id = $f";
+            oku.Parameters.AddWithValue("$f", ticketId);
+            if (oku.ExecuteScalar() is not long eski) return 0;
+            var yeni = (int)eski + 1;
+            using var cmd = _conn.CreateCommand();
+            cmd.CommandText = """
+                UPDATE pending_finish SET attempts = $n, next_attempt_at = $now + $bekleme,
+                    last_step = $adim, last_code = $kod
+                WHERE ticket_id = $f
+                """;
+            cmd.Parameters.AddWithValue("$f", ticketId);
+            cmd.Parameters.AddWithValue("$n", yeni);
+            cmd.Parameters.AddWithValue("$now", simdi);
+            cmd.Parameters.AddWithValue("$bekleme", (long)Outbox.Bekleme(yeni).TotalMilliseconds);
+            cmd.Parameters.AddWithValue("$adim", (object?)step ?? DBNull.Value);
+            cmd.Parameters.AddWithValue("$kod", (object?)code ?? DBNull.Value);
+            cmd.ExecuteNonQuery();
+            return yeni;
+        }
+    }
+
+    /// <summary>Fiş tamamlandı (ya da artık açık değil) — kayıt düşer.</summary>
+    public void ClearPendingFinish(string ticketId)
+    {
+        lock (_gate)
+        {
+            using var cmd = _conn.CreateCommand();
+            cmd.CommandText = "DELETE FROM pending_finish WHERE ticket_id = $f";
+            cmd.Parameters.AddWithValue("$f", ticketId);
+            cmd.ExecuteNonQuery();
+        }
+    }
+
+    /// <inheritdoc cref="ITicketSnapshotStore.AllOpenTicketBindings" />
     public IReadOnlyList<(string TerminalId, string? SaleSessionId, string? TicketId)> AllOpenTicketBindings()
     {
         lock (_gate)

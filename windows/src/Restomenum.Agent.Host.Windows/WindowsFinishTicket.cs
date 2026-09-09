@@ -25,7 +25,7 @@ public static class WindowsFinishTicket
     {
         var log = services.GetRequiredService<ILoggerFactory>().CreateLogger("FinishTicket");
         var gmp = services.GetRequiredService<IGmpWrapper>();
-        var defter = services.GetRequiredService<CommandStore>();
+        var defter = services.GetRequiredService<ITicketSnapshotStore>();
 
         // Eşleşme SÜRECE bağlı (ölçüldü: süreç bitince düşer, Start → 0xF020). Önce kurulmalı.
         log.LogInformation("yarım fiş tamamlama: eşleşme kuruluyor (süreç-bağlı, önce şart)...");
@@ -123,10 +123,9 @@ public static class WindowsFinishTicket
         }
 
         // Tutarlar cihazın SON okumasından; `Calistir` kapatmadan hemen önce okumuştu.
-        defter.MarkTicketClosed(fisId, terminalId, oturum, sonuc.ToplamMinor, sonuc.TahsilMinor);
-        // SIRA: önce kalıcı "kapandı, bildirilmedi" kaydı, SONRA bağı sil. Ters sırada, ikisi
-        // arasında süreç ölürse fişi bildirecek kimlik kalmazdı (aynı gerekçe taşıma katmanında).
-        defter.ClearOpenTicketBinding(terminalId);
+        // Defter işini TAŞIMAYLA AYNI kod yapar — iki ayrı "kapanış nasıl deftere geçer"
+        // tanımı, biri düzeltilirken diğerinin eskimesi demekti.
+        TicketFinishLedger.Yaz(defter, fisId, terminalId, oturum, sonuc.ToplamMinor, sonuc.TahsilMinor);
 
         log.LogInformation("✓ FİŞ KAPANDI (üretici akışı adım {Adim}). Deftere yazıldı: " +
             "fiş={Fis} oturum={Oturum} toplam={Toplam} tahsil={Tahsil}. Kapanış bildirimi ajanın " +
