@@ -321,6 +321,21 @@ Bunlar üretici belgesinde yazmıyor; sahada ölçülüp burada kayda geçti.
   dept 10 (%10) 891 kuruşluk kalem → `TotalReceiptTax` **81** = 891×10/110.
 - **`bankBkmId = 0` = "cihaz seçsin"** ve cihaz aynı fişte art arda iki denemede **farklı**
   banka seçebiliyor (GARANTİ 62 → AKBANK 46).
+- **Z raporu cihazın KENDİ menüsünden alınabilir; ajan bunu GÖRMEZ ve `FNo` 1'e DÖNER.**
+  2026-09-09 16:25–16:51 arasında ölçüldü: fiş 17 `ZNo 87`, sonraki satış `ZNo 88, FNo 1`.
+  Ajanın günlüğünde Z/rapor satırı yok, cihaz izinde bizden giden rapor çağrısı yok — yani
+  **mali gün, ajanın haberi olmadan dönebilir**. Bugün görülen ZNo'lar: 86, 87, 88.
+  → **`FNo` tabanına dayanan her beklenti Z sonrası GEÇERSİZDİR.** İyi haber: `FNo`/`ZNo`
+  kodda hiçbir yerde ANAHTAR değildir (`closed_tickets` platformun `ticket_id`'siyle
+  anahtarlanır; `src/` taramasında FNo/ZNo yalnız yorumlarda geçiyor), bu yüzden sıfırlanma
+  defterde çakışma üretmez. Fişi kimliklendirirken `FNo` tek başına yetmez — `ZNo` ile birlikte.
+- **`DLL_RETCODE_RECV_BUSY` (61468, "Terminal Meşgul") — 66 saniyelik blokajla AYNI ŞEY DEĞİL.**
+  İlk kez 2026-09-09 16:49'da görüldü: `GetDepartments` dört denemeden sonra ~**5,5 sn**'de
+  vazgeçti (`PortNotOpen` 61440 ise 66 sn sürüyor). Ajan doğru davrandı — *"bölüm tablosu
+  OKUNAMADI — eski tablo korunuyor { rc = 61468 }"* — ve yanıt gövdesindeki **12 `null`**'ı
+  geçerli tablo sanmadı. **"Okunamadı" ile "tablo boşaldı" ayrımının ilk saha sınavıdır**; ayrım
+  olmasaydı platformdaki bölüm eşlemesi silinebilirdi. Terminalin neden meşgul olduğu
+  **ölçülmedi** (zamanlama Z raporuyla örtüşüyor, nedensellik kanıtlanmadı).
 - **Cihazın fişe yazdığı saat, ajanın isteği aldığı saatten 2–3,5 sn GERİDEDİR.** Üç fişte
   ölçüldü: FNo 11 kâğıt 15:26:52 / istek 15:26:54.317 (2,3 sn) · FNo 16 kâğıt 16:07:14 / istek
   16:07:15.943 (1,9 sn) · FNo 17 kâğıt 16:25:15 / istek 16:25:18.472 (3,5 sn). Kayma hep aynı
