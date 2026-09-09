@@ -1,4 +1,4 @@
-namespace Restomenum.Agent.Core;
+﻿namespace Restomenum.Agent.Core;
 
 /// <summary>
 /// <b>FİŞ OKUMA VE BELİRSİZLİK YOKLAMASI</b> — <see cref="GmpTerminalTransport"/>'un parçası (W43 bölmesi).
@@ -229,6 +229,13 @@ public sealed partial class GmpTerminalTransport
 
                 var basarisiz = yeniSatirlar[^1];
                 var acikRet = KullanilabilirKod(basarisiz.AppErrorCode);
+                // ── W79 §7: ÜÇÜNCÜ HÂL — kullanılabilir kod var AMA bankaya hiç gidilmemiş ──
+                // Yetkilendirme yoksa (onay kodu ve RRN boş, tutar 0) bu bir banka reddi DEĞİLDİR.
+                // Koşul yine `Refusal` kalır — para güvenliği aynı, tekrar güvenli — ama kasiyere
+                // söylenen sebep değişir: "banka reddetti" başka kart denetir, doğrusu "tekrar dene".
+                var bankayaGitmedi = string.IsNullOrWhiteSpace(basarisiz.AuthorizeCode)
+                    && string.IsNullOrWhiteSpace(basarisiz.Rrn)
+                    && basarisiz.AmountMinor == 0;
                 var kosul = acikRet ? "Refusal" : "UnreachableHost";
                 _log("[gmp] fişe para YAZILMADI — başarısız deneme satırı okundu", new
                 {
@@ -236,6 +243,7 @@ public sealed partial class GmpTerminalTransport
                     tip = basarisiz.Type, banka = basarisiz.BankName ?? "(yok)",
                     bkm = basarisiz.BankBkmId, uygulamaKodu = basarisiz.AppErrorCode ?? "(bos)",
                     hataMetni = basarisiz.ErrorMessage ?? "(bos)", kosul,
+                    bankayaGitmedi,
                 });
                 // `reason` CİHAZIN SEBEBİ, `info` DURUM. `reason:NOT_LANDED` yazmak yasak:
                 // platform onu "kart hiç çekilmedi, tekrar dene" diye okuyor ve burada
@@ -243,11 +251,15 @@ public sealed partial class GmpTerminalTransport
                 return new PaymentProbe(ProbeVerdict.NotLanded,
                     RemainingMinor: simdi.RemainingMinor, CounterRead: true,
                     ErrorCondition: kosul,
-                    Reason: acikRet ? RestomenumReasons.BankDeclined : RestomenumReasons.NoResponse,
+                    Reason: acikRet
+                        ? (bankayaGitmedi ? RestomenumReasons.NotSentToBank : RestomenumReasons.BankDeclined)
+                        : RestomenumReasons.NoResponse,
                     Info: RestomenumReasons.NotLandedOnTicket,
                     ProviderResultCode: $"NOT_LANDED:{basarisiz.AppErrorCode ?? "-"}:{basarisiz.ErrorMessage ?? "-"}",
                     Note: acikRet
-                        ? $"banka açıkça reddetti ({basarisiz.AppErrorCode}) — fişe para yazılmadı, tekrar güvenli"
+                        ? (bankayaGitmedi
+                            ? $"bankaya HİÇ gidilmedi ({basarisiz.AppErrorCode}; onay kodu ve RRN boş) — fişe para yazılmadı, tekrar güvenli"
+                            : $"banka açıkça reddetti ({basarisiz.AppErrorCode}) — fişe para yazılmadı, tekrar güvenli")
                         : "bankadan cevap gelmedi — fişe para yazılmadı, ama yetim provizyon olabilir: tekrar GÜVENLİ DEĞİL");
             }
             return new PaymentProbe(ProbeVerdict.Landed,

@@ -600,7 +600,13 @@ public sealed partial class GmpWrapper : IGmpWrapper
             var ad = Bos(bp?.bankName) ? null : bp!.bankName;
             var hata = Bos(bp?.stPaymentErrMessage?.ErrorMsg) ? null : bp!.stPaymentErrMessage!.ErrorMsg;
             var uygKod = Bos(bp?.stPaymentErrMessage?.AppErrorCode) ? null : bp!.stPaymentErrMessage!.AppErrorCode;
-            satirlar.Add(new GmpPaymentLine((int)pl.typeOfPayment, pl.payAmount, bkm, ad, hata, uygKod));
+            // W79 §7: "banka açıkça reddetti" ile "bankaya HİÇ gidilmedi" ayrımı bu iki alandan
+            // kuruluyor. Boş olmaları KANITTIR (yetkilendirme yok); `stan` kullanılmaz — ölçümle
+            // çürütüldü (aynı olayda 0 ve 722 geldi).
+            var onay = Bos(bp?.authorizeCode) ? null : bp!.authorizeCode;
+            var satirRrn = Bos(bp?.rrn) ? null : bp!.rrn;
+            satirlar.Add(new GmpPaymentLine((int)pl.typeOfPayment, pl.payAmount, bkm, ad, hata, uygKod,
+                onay, satirRrn));
         }
 
         if (count > 0 && son > 0)

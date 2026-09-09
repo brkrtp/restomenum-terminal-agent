@@ -1,4 +1,4 @@
-namespace Restomenum.Agent.Core;
+﻿namespace Restomenum.Agent.Core;
 
 /// <summary>
 /// <b>İPTAL</b> — <see cref="GmpTerminalTransport"/>'un parçası (W43 bölmesi).
@@ -148,7 +148,12 @@ public sealed partial class GmpTerminalTransport
         var sahibi = _snapshots?.ReadOpenTicketBinding(terminalId);
         // ⚠️ ŞİMDİ oku: aşağıda `ClearOpenTicketBinding` çağrılıyor ve ondan sonra kimlik YOK.
         var iptalEdilenFis = _snapshots?.ReadOpenTicketId(terminalId);
-        var sayi = fis.PaymentCount;
+        // ── W83: "DENEME" ile "GERİ ALINAN ÖDEME" AYRI SAYILAR ──────────────────
+        // Ölçüm 2026-09-09 (fiş 88/10): üç başarısız kart denemesi olan fişin iptalinde gövde
+        // `voidedPaymentCount 3` + `voidedAmountMinor 0` gitti — "üç ödeme geri alındı, sıfır lira".
+        // Cihaz ikisini zaten ayrı tutuyor; biz de öyle tutuyoruz.
+        var deneme = fis.PaymentCount;                                   // tümü (tutarı 0 olanlar dahil)
+        var sayi = fis.Payments?.Count(x => x.AmountMinor > 0) ?? 0;      // yalnız PARASI olanlar
         var tutar = fis.PaidAmountMinor;
         _log("[gmp] fiş iptali — iptal öncesi fiş", new
         {
@@ -163,14 +168,20 @@ public sealed partial class GmpTerminalTransport
             // 2069 = fişte BANKA ödemesi var; önce ters işlem gerekiyor.
             // ⚠️ Bu yol sahada HİÇ ölçülmedi (banka hattı yok) — başarısız olursa YARIM kalır ve
             // tekrar denenmez; operatöre gider.
-            for (var i = sayi - 1; i >= 0; i--)
+            for (var i = deneme - 1; i >= 0; i--)
             {
                 var vp = _gmp.VoidPayment(h, i);
                 if (!vp.Ok)
                 {
                     _log("[gmp] fiş iptali — banka ters işlemi BAŞARISIZ", new { index = i, code = vp.ToString() });
                     return new TicketVoidResult(TransportOutcome.Unknown, TicketWasOpen: true,
-                        VoidedPaymentCount: sayi, VoidedAmountMinor: tutar, CancelledSaleSessionId: sahibi, CancelledTicketId: iptalEdilenFis,
+                        // W88: geri ALINMADI — yalnız DENENDİ. Eskiden burada `tutar` gidiyordu ve gövde
+                        // aynı anda "VOID_INCOMPLETE" ile "941 geri alındı" diyordu; platform onu
+                        // 400 `invalidResult` ile reddetti (ölçüm 18:11). İki ayrı soru, iki ayrı alan.
+                        VoidedPaymentCount: 0, VoidedAmountMinor: 0,
+                        VoidedAttemptCount: deneme,
+                        AttemptedVoidAmountMinor: tutar, AttemptedVoidCount: sayi,
+                        CancelledSaleSessionId: sahibi, CancelledTicketId: iptalEdilenFis,
                         ErrorCondition: "InProgress", Reason: RestomenumReasons.VoidIncomplete,
                         ProviderResultCode: $"REVERSAL_FAILED:{vp}");
                 }
@@ -180,7 +191,10 @@ public sealed partial class GmpTerminalTransport
 
         if (!vr.Ok)
             return new TicketVoidResult(TransportOutcome.Unknown, TicketWasOpen: true,
-                VoidedPaymentCount: sayi, VoidedAmountMinor: tutar, CancelledSaleSessionId: sahibi, CancelledTicketId: iptalEdilenFis,
+                VoidedPaymentCount: 0, VoidedAmountMinor: 0,          // W88: geri alınmadı
+                VoidedAttemptCount: deneme,
+                AttemptedVoidAmountMinor: tutar, AttemptedVoidCount: sayi,
+                CancelledSaleSessionId: sahibi, CancelledTicketId: iptalEdilenFis,
                 ErrorCondition: "InProgress", Reason: RestomenumReasons.VoidIncomplete,
                 ProviderResultCode: $"VOIDALL_FAILED:{vr}");
 
@@ -192,14 +206,21 @@ public sealed partial class GmpTerminalTransport
         {
             // Fiş iptal edildi ama kapatılamadı: durum BELİRSİZ, "olmadı" değil.
             return new TicketVoidResult(TransportOutcome.Unknown, TicketWasOpen: true,
-                VoidedPaymentCount: sayi, VoidedAmountMinor: tutar, CancelledSaleSessionId: sahibi, CancelledTicketId: iptalEdilenFis,
+                VoidedPaymentCount: 0, VoidedAmountMinor: 0,          // W88: geri alınmadı
+                VoidedAttemptCount: deneme,
+                AttemptedVoidAmountMinor: tutar, AttemptedVoidCount: sayi,
+                CancelledSaleSessionId: sahibi, CancelledTicketId: iptalEdilenFis,
                 ErrorCondition: "InProgress", Reason: RestomenumReasons.VoidIncomplete,
                 ProviderResultCode: $"CLOSE_FAILED:{kapat}");
         }
 
-        _log("[gmp] fiş iptal edildi", new { terminalId, odemeSayisi = sayi, tutar, sahibi = sahibi ?? "(bağ yok)" });
+        _log("[gmp] fiş iptal edildi", new
+        {
+            terminalId, odemeSayisi = sayi, denemeSayisi = deneme, tutar,
+            sahibi = sahibi ?? "(bağ yok)",
+        });
         return new TicketVoidResult(TransportOutcome.Approved, TicketWasOpen: true,
-            VoidedPaymentCount: sayi, VoidedAmountMinor: tutar, CancelledSaleSessionId: sahibi,
-            CancelledTicketId: iptalEdilenFis);
+            VoidedPaymentCount: sayi, VoidedAmountMinor: tutar, VoidedAttemptCount: deneme,
+            CancelledSaleSessionId: sahibi, CancelledTicketId: iptalEdilenFis);
     }
 }

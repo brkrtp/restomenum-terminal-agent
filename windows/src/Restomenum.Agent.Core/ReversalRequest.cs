@@ -1,4 +1,4 @@
-namespace Restomenum.Agent.Core;
+﻿namespace Restomenum.Agent.Core;
 
 /// <summary>
 /// Kasadan gelen <b>fiş/ödeme iptali</b> isteği (<c>MessageCategory: "Reversal"</c>).
@@ -67,10 +67,40 @@ public sealed record TicketVoidResult(
     TransportOutcome Outcome,
     /// <summary>Cihazda AÇIK fiş var mıydı? <c>false</c> ise hiçbir şeye dokunulmadı.</summary>
     bool TicketWasOpen,
-    /// <summary>İptal edilen fişteki ödeme adedi (iptalden ÖNCE okundu).</summary>
+    /// <summary>
+    /// <b>GERÇEKTEN geri alınan</b> ödeme adedi — yalnız <c>payAmount &gt; 0</c> olan satırlar
+    /// (W83). Başarısız denemeler buraya SAYILMAZ.
+    ///
+    /// <para><b>Neden daraltıldı (ölçüm 2026-09-09, fiş 88/10):</b> üç başarısız kart denemesi olan
+    /// bir fişin iptalinde gövde <c>voidedPaymentCount 3</c> + <c>voidedAmountMinor 0</c> gönderdi —
+    /// yani "üç ödeme geri alındı, sıfır lira". Kasa "3 ödeme geri alındı" gördü; oysa hiç para
+    /// yoktu. Cihaz ikisini zaten AYRI tutuyor (<c>totalNumberOfPayments 3</c> /
+    /// <c>TotalReceiptPayment 0</c>); biz de öyle tutmalıyız.</para>
+    /// </summary>
     int VoidedPaymentCount = 0,
-    /// <summary>İptal edilen fişte TAHSİL EDİLMİŞ toplam (iptalden ÖNCE okundu).</summary>
+    /// <summary>GERÇEKTEN geri alınan toplam. Başarısızlıkta <b>0</b> (bkz. <see cref="AttemptedVoidAmountMinor"/>).</summary>
     long VoidedAmountMinor = 0,
+
+    /// <summary>
+    /// <b>W83 — fişteki TÜM ödeme denemelerinin adedi</b> (tutarı 0 olanlar dahil). Teşhiste
+    /// gereklidir: "bu fişte üç başarısız kart denemesi vardı" bilgisi <see cref="VoidedPaymentCount"/>
+    /// daraltıldığında kaybolurdu.
+    /// </summary>
+    int VoidedAttemptCount = 0,
+
+    /// <summary>
+    /// <b>W88 — geri almaya ÇALIŞTIĞIMIZ tutar.</b> Ters işlem yarım kaldığında (ör. <c>VoidPayment</c>
+    /// zaman aşımı) <see cref="VoidedAmountMinor"/> <b>0</b> olur — hiçbir şey geri alınmadı — ve
+    /// niyet buraya yazılır.
+    ///
+    /// <para><b>Neden ayrı (ölçüm 2026-09-09 18:11):</b> gövde aynı anda hem <c>Failure /
+    /// VOID_INCOMPLETE</c> hem <c>voidedAmountMinor 941</c> diyordu ve platform <b>400
+    /// <c>invalidResult</c></b> ile reddetti. "Ne kadar geri alındı" ile "ne kadarını geri almaya
+    /// çalıştık" iki AYRI sorudur.</para>
+    /// </summary>
+    long AttemptedVoidAmountMinor = 0,
+    /// <summary>Geri almaya çalıştığımız ödeme adedi (bkz. <see cref="AttemptedVoidAmountMinor"/>).</summary>
+    int AttemptedVoidCount = 0,
     /// <summary>Gerçekten iptal edilen fişin sahibi; bağ yoksa <c>null</c>.</summary>
     string? CancelledSaleSessionId = null,
 

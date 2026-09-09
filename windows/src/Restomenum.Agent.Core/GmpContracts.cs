@@ -76,8 +76,13 @@ public interface ITicketSnapshotStore
     /// 2026-09-07: banka hattı yokken kart bacağı <c>payAmount=0</c> ile fişte duruyor), yani
     /// "cihazın n'inci ödemesi = bizim n'inci denememiz" sessizce kayardı.</para>
     /// </summary>
+    /// <param name="amountMinor">Kasanın İSTEDİĞİ tutar — platformla aynı eksen.</param>
+    /// <param name="collectedMinor">
+    /// <b>W79 —</b> cihazın GERÇEKTEN tahsil ettiği tutar. <c>null</c> = güvenilir okunamadı.
+    /// Değişmez: <c>sum(collected_minor) == closed_tickets.paid_minor</c>.
+    /// </param>
     void RecordTicketPayment(string ticketId, string paymentId, long amountMinor,
-        int methodType, int? bankBkmId, long? now = null);
+        int methodType, int? bankBkmId, long? now = null, long? collectedMinor = null);
 
     /// <summary>Bir fişin kaydedilmiş ödemeleri — kaydedilme sırasına göre.</summary>
     IReadOnlyList<TicketPaymentRow> ReadTicketPayments(string ticketId);
@@ -351,7 +356,16 @@ public readonly record struct GmpPaymentLine(
     /// <c>"(00000000)-DEFAULT"</c> + <c>ErrorMsg "NO RESPONSE"</c> (cevap yok). Yani
     /// <c>"0000"</c> "hata yok" DEĞİL, "kullanılabilir kod yok" demek.</para>
     /// </summary>
-    string? AppErrorCode = null);
+    string? AppErrorCode = null,
+
+    /// <summary>
+    /// Bankanın onay kodu; <b>boş = yetkilendirme OLMADI</b> (W79 §7).
+    /// <para>Kart verisi değildir — yalnız işlem referansı; gövdeye KONMAZ, karar için okunur.</para>
+    /// </summary>
+    string? AuthorizeCode = null,
+
+    /// <summary>Banka referans numarası (RRN); <b>boş = banka ana bilgisayarına ulaşılmadı</b> (W79 §7).</summary>
+    string? Rrn = null);
 
 /// <summary>Ödeme tipleri — <b>DLL seviyesi</b>.</summary>
 public static class GmpPaymentTypes

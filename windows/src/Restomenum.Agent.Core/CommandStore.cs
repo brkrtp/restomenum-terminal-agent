@@ -1,4 +1,4 @@
-using Microsoft.Data.Sqlite;
+﻿using Microsoft.Data.Sqlite;
 
 namespace Restomenum.Agent.Core;
 
@@ -134,6 +134,22 @@ public sealed class CommandStore : ITicketSnapshotStore, IDisposable
                 )
                 """;
             cmd.ExecuteNonQuery();
+
+            // ── W79 GÖÇÜ: tahsil edilen tutar ayrı sütunda ───────────────────────
+            // `amount_minor` kasanın İSTEDİĞİ tutar olarak KALIR (platformla aynı eksen; mutabakat
+            // tek eksende yürüsün). Cihazın gerçekten tahsil ettiği ayrı yazılır — banka indirimi
+            // ikisini ayırdı (ölçüm 2026-09-09: 990 istendi, 941 tahsil edildi).
+            // `NULL` = güvenilir okunamadı; eski satırlar da NULL açılır ve öyle KALIR — geçmişi
+            // uydurulmuş değerle doldurmak, ölçülmemiş bir sayıyı ölçülmüş gibi gösterirdi.
+            cmd.CommandText = "PRAGMA table_info(ticket_payments)";
+            var tpKolon = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            using (var r = cmd.ExecuteReader()) while (r.Read()) tpKolon.Add(r.GetString(1));
+            if (!tpKolon.Contains("collected_minor"))
+            {
+                cmd.CommandText = "ALTER TABLE ticket_payments ADD COLUMN collected_minor INTEGER";
+                cmd.ExecuteNonQuery();
+            }
+
             // KAPANMIŞ ama HENÜZ BİLDİRİLMEMİŞ fişler.
             //
             // Neden ayrı tablo: fiş kapanınca bağ SİLİNMEK ZORUNDA (bırakılırsa aynı oturumun bir
@@ -512,16 +528,18 @@ public sealed class CommandStore : ITicketSnapshotStore, IDisposable
     /// Aynı (fiş, ödeme) ikinci kez yazılmaz.
     /// </summary>
     public void RecordTicketPayment(string ticketId, string paymentId, long amountMinor,
-        int methodType, int? bankBkmId, long? now = null)
+        int methodType, int? bankBkmId, long? now = null, long? collectedMinor = null)
     {
         lock (_gate)
         {
             using var cmd = _conn.CreateCommand();
             cmd.CommandText = """
                 INSERT OR IGNORE INTO ticket_payments
-                    (ticket_id, payment_id, amount_minor, method_type, bank_bkm_id, recorded_at)
-                VALUES ($f, $p, $a, $m, $b, $now)
+                    (ticket_id, payment_id, amount_minor, method_type, bank_bkm_id, recorded_at,
+                     collected_minor)
+                VALUES ($f, $p, $a, $m, $b, $now, $c)
                 """;
+            cmd.Parameters.AddWithValue("$c", (object?)collectedMinor ?? DBNull.Value);
             cmd.Parameters.AddWithValue("$f", ticketId);
             cmd.Parameters.AddWithValue("$p", paymentId);
             cmd.Parameters.AddWithValue("$a", amountMinor);

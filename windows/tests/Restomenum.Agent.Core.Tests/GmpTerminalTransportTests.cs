@@ -285,7 +285,10 @@ public class GmpTerminalTransportTests
             Payments: new[]
             {
                 new GmpPaymentLine(GmpPaymentTypes.Cash, 200),
-                new GmpPaymentLine(GmpPaymentTypes.Card, 0, 46, "AKBANK", "TERMINAL KAPALI ", "2202"),
+                // W79 §7: GERÇEK banka reddinde yetkilendirme DENENMİŞTİR — onay kodu/RRN dolu.
+                // Boş olsalardı bu "banka reddetti" değil "bankaya hiç gidilmedi" olurdu.
+                new GmpPaymentLine(GmpPaymentTypes.Card, 0, 46, "AKBANK", "TERMINAL KAPALI ", "2202",
+                    AuthorizeCode: "123456", Rrn: "600112233445"),
             },
             PaymentsAreComplete: true));
 
@@ -389,8 +392,11 @@ public class GmpTerminalTransportTests
     [Fact]
     public async Task Kapali_fiste_davranis_DEGISMEDI()
     {
-        // Kapanışta toplam AYRI bir `GetTicket`'ten geliyor ve kalan bildirilmiyor (kalan sıfır,
-        // söylenecek bir şey yok). W38 o yolu değiştirmemeli.
+        // W79 §6b: kapanışta kalan artık AÇIKÇA 0 gönderiliyor — eskiden hiç konmuyordu.
+        // Sebep ölçüldü (platform `bodyRead.js:99-106`): iki alan ÇİFT kabul ediliyor, kalan
+        // yoksa TOPLAM da düşüyor; yani gönderdiğimiz 6793/941 platforma HİÇ ulaşmamıştı.
+        // Sıfır burada UYDURULMUŞ değil ÖLÇÜLMÜŞTÜR: yalnız kapanış okuması gerçekten
+        // başarılıysa konur (aşağıdaki ikinci test okuma başarısızken konmadığını çiviliyor).
         var (t, g, _) = Kur();
         g.Ticket = new GmpTicket(990, 990, 1, GmpPaymentTypes.Cash, PaymentsAreComplete: true);
         g.AfterPayment = new GmpTicket(990, 990, 1, GmpPaymentTypes.Cash);
@@ -400,7 +406,153 @@ public class GmpTerminalTransportTests
 
         Assert.Equal("CLOSED", r.TicketState);
         Assert.Equal(990, r.DeviceTicketTotalMinor);     // kapanış okumasından
-        Assert.Null(r.DeviceRemainingMinor);             // ← ÇİVİ: kapalıda kalan YOK
+        Assert.Equal(0, r.DeviceRemainingMinor);         // ← ÇİVİ: kapalıda kalan SIFIR (ölçülmüş)
+    }
+
+    // ── W79: TAHSİL ≠ İSTENEN, İPTAL SAYILARI, BANKAYA GİTMEDİ ──────────────────
+
+    [Fact]
+    public async Task KAYNAKLAR_CELISIRSE_hicbir_tutar_iddia_edilmez()
+    {
+        // ← ÇİVİ (§1): iki kaynak var — bu denemenin ödeme satırı ve fişin tahsil ARTIŞI.
+        // Tutmuyorlarsa yanlış tutar bildirmektense "bilmiyorum" denir. Bu çivi olmasaydı tek
+        // kaynağa güvenip sessizce yanlış bir tahsilat yazabilirdik.
+        var (t, g, _) = Kur();
+        g.Ticket = new GmpTicket(990, 0, 0, GmpPaymentTypes.Card);
+        g.AfterPayment = new GmpTicket(941, 700, 1, GmpPaymentTypes.Card,   // delta 700 ≠ satır 941
+            Payments: new[] { new GmpPaymentLine(GmpPaymentTypes.Card, 941, 62, "GARANTİ BBVA") });
+
+        var r = await t.SaleAsync(Req(amount: 990, paymentType: GmpPaymentTypes.Card,
+            oturum: "oturum-A", satisToplam: 990));
+
+        Assert.Null(r.CollectedAmountMinor);           // ← ÇİVİ
+        Assert.Null(r.MerchantDiscountMinor);          // farkı da iddia etmeyiz
+        Assert.Equal(990, r.ApprovedAmountMinor);      // istenen yine gider
+    }
+
+    [Fact]
+    public async Task TAHSIL_ISTENENE_ESITSE_indirim_alani_KONMAZ()
+    {
+        // Gürültü yok: her satışa "indirim 0" yazmak gerçek indirimi görünmez kılardı.
+        var (t, g, _) = Kur();
+        g.Ticket = new GmpTicket(990, 0, 0, GmpPaymentTypes.Card);
+        g.AfterPayment = new GmpTicket(990, 990, 1, GmpPaymentTypes.Card,
+            Payments: new[] { new GmpPaymentLine(GmpPaymentTypes.Card, 990, 62, "GARANTİ BBVA") },
+            PaymentsAreComplete: true);
+
+        var r = await t.SaleAsync(Req(amount: 990, paymentType: GmpPaymentTypes.Card,
+            oturum: "oturum-A", satisToplam: 990));
+
+        Assert.Equal(990, r.CollectedAmountMinor);
+        Assert.Null(r.MerchantDiscountMinor);          // ← ÇİVİ
+    }
+
+    [Fact]
+    public async Task DEFTERE_TAHSIL_EDILEN_yazilir()
+    {
+        // ← ÇİVİ (§13): değişmez `sum(collected) == paid_minor`. Bugün bu değişmez YOKTU ve dört
+        // kez kırıldı (88/2: 7150↔6793 · 88/4: 990↔941 · FR30: 3380↔2311 · 88/11: 3380↔2331).
+        var (t, g, snap) = Kur();
+        g.Ticket = new GmpTicket(990, 0, 0, GmpPaymentTypes.Card);
+        g.AfterPayment = new GmpTicket(941, 941, 1, GmpPaymentTypes.Card,
+            Payments: new[] { new GmpPaymentLine(GmpPaymentTypes.Card, 941, 62, "GARANTİ BBVA") },
+            TotalDiscountMinor: 49, PaymentsAreComplete: true);
+
+        var r = await t.SaleAsync(Req(amount: 990, paymentType: GmpPaymentTypes.Card,
+            oturum: "oturum-A", satisToplam: 990, odeme: "pay-1"));
+
+        Assert.Equal(941, snap.Tahsil["pay-1"]);       // ← ÇİVİ: deftere TAHSİL edilen gitti
+        Assert.Equal(r.CollectedAmountMinor, snap.Tahsil["pay-1"]);  // ← ÇİVİ: gövde ile defter AYNI
+        Assert.NotEqual(990, snap.Tahsil["pay-1"]);    // ← ÇİVİ: İSTENEN yazılmadı (eski hata)
+    }
+
+    [Fact]
+    public async Task KAPANIS_OKUNAMAZSA_kalan_KONMAZ()
+    {
+        // ← ÇİVİ (§6b): sıfır yalnız ÖLÇÜLMÜŞ sıfırdır. Kapanış okuması başarısızsa toplam da
+        // yoktur; uydurulmuş sıfır göndermek "bilinmiyor"u "sıfır" diye yazdırmak olurdu.
+        var (t, g, _) = Kur();
+        g.Ticket = new GmpTicket(990, 990, 1, GmpPaymentTypes.Cash, PaymentsAreComplete: true);
+        g.AfterPayment = new GmpTicket(990, 990, 1, GmpPaymentTypes.Cash);
+        g.Codes["GetTicket"] = GmpCodes.InvalidHandle;      // kapanış okuması BAŞARISIZ
+
+        var r = await t.SaleAsync(Req(amount: 990, paymentType: GmpPaymentTypes.Cash,
+            oturum: "oturum-A", satisToplam: 990));
+
+        Assert.Null(r.DeviceTicketTotalMinor);
+        Assert.Null(r.DeviceRemainingMinor);               // ← ÇİVİ
+    }
+
+    [Fact]
+    public async Task BANKAYA_GITMEDIYSE_sebep_BANK_DECLINED_DEGIL()
+    {
+        // ← ÇİVİ (§7): `E003` kullanılabilir bir koddur; eski ikili ayrım onu "banka reddetti"
+        // sayıyordu. Ama onay kodu ve RRN BOŞ, tutar 0 — yetkilendirme HİÇ olmamış. "Banka
+        // reddetti" kasiyeri BAŞKA kart denemeye iter; doğrusu aynı kartla tekrar denemektir.
+        // Para güvenliği aynı kalır: yetkilendirme yoksa yetim provizyon da yok.
+        var (t, g, _) = YoklamaKur(new GmpTicket(990, 200, 2, GmpPaymentTypes.Card,
+            Payments: new[]
+            {
+                new GmpPaymentLine(GmpPaymentTypes.Cash, 200),
+                new GmpPaymentLine(GmpPaymentTypes.Card, 0, 62, "GARANTİ BBVA", "KULLANICI VAZGEÇTİ", "E003"),
+            },
+            PaymentsAreComplete: true));
+
+        var y = await t.ProbeAsync(Req(oturum: "oturum-A", satisToplam: 990));
+
+        Assert.Equal("Refusal", y.ErrorCondition);                   // koşul AYNI (tekrar güvenli)
+        Assert.Equal(RestomenumReasons.NotSentToBank, y.Reason);     // ← ÇİVİ: sebep FARKLI
+    }
+
+    [Fact]
+    public async Task IPTALDE_DENEME_ile_GERI_ALINAN_AYRI_sayilir()
+    {
+        // ← ÇİVİ (§10/W83): üç satırın ikisi başarısız (tutar 0). "Geri alınan ödeme" yalnız
+        // parası olandır; "deneme" hepsidir. Tek sayıya indirgenirse kasa "3 ödeme geri alındı,
+        // sıfır lira" gibi kendi içinde çelişkili bir şey görür — sahada tam bu oldu (fiş 88/10).
+        var (t, g, snap) = Kur();
+        g.Codes["Start"] = GmpCodes.AlreadyDone;
+        g.Ticket = new GmpTicket(990, 400, 3, GmpPaymentTypes.Card,
+            Payments: new[]
+            {
+                new GmpPaymentLine(GmpPaymentTypes.Card, 0, 46, "AKBANK", "KULLANICI VAZGECTI", "E003"),
+                new GmpPaymentLine(GmpPaymentTypes.Cash, 400),
+                new GmpPaymentLine(GmpPaymentTypes.Card, 0, 62, "GARANTİ BBVA", "NO RESPONSE", "0000"),
+            },
+            PaymentsAreComplete: true);
+        snap.BindOpenTicket("t1", "oturum-B");
+
+        var r = await t.VoidTicketAsync("t1");
+
+        Assert.Equal(TransportOutcome.Approved, r.Outcome);
+        Assert.Equal(1, r.VoidedPaymentCount);      // ← ÇİVİ: yalnız PARASI olan
+        Assert.Equal(3, r.VoidedAttemptCount);      // ← ÇİVİ: deneme sayısı KAYBOLMADI
+        Assert.Equal(400, r.VoidedAmountMinor);
+    }
+
+    [Fact]
+    public async Task TERS_ISLEM_YARIM_KALIRSA_tutar_NIYET_olarak_gider()
+    {
+        // ← ÇİVİ (§11/W88): 2026-09-09 18:11'de gövde aynı anda "VOID_INCOMPLETE" ve "941 geri
+        // alındı" dedi; platform 400 `invalidResult` ile reddetti. Geri ALINMADI — geri almaya
+        // ÇALIŞILDI. İki ayrı soru, iki ayrı alan.
+        var (t, g, snap) = Kur();
+        g.Codes["Start"] = GmpCodes.AlreadyDone;
+        g.Codes["VoidAll"] = GmpCodes.PaymentFound;          // 2069 → ters işlem gerekiyor
+        g.Codes["VoidPayment"] = GmpCodes.Timeout;           // ve o ters işlem YARIM kaldı
+        g.Ticket = new GmpTicket(2331, 941, 1, GmpPaymentTypes.Card,
+            Payments: new[] { new GmpPaymentLine(GmpPaymentTypes.Card, 941, 62, "GARANTİ BBVA") },
+            PaymentsAreComplete: true);
+        snap.BindOpenTicket("t1", "oturum-B");
+
+        var r = await t.VoidTicketAsync("t1");
+
+        Assert.Equal(TransportOutcome.Unknown, r.Outcome);
+        Assert.Equal(0, r.VoidedAmountMinor);            // ← ÇİVİ: hiçbir şey geri alınmadı
+        Assert.Equal(0, r.VoidedPaymentCount);           // ← ÇİVİ
+        Assert.Equal(941, r.AttemptedVoidAmountMinor);   // ← ÇİVİ: niyet AYRI alanda
+        Assert.Equal(1, r.AttemptedVoidCount);
+        Assert.Equal(RestomenumReasons.VoidIncomplete, r.Reason);
     }
 
     // ── W37: iptal edilen FİŞİN kimliği ─────────────────────────────────────────
@@ -500,19 +652,32 @@ public class GmpTerminalTransportTests
     }
 
     [Fact]
-    public async Task Banka_kimligi_YALNIZ_tutar_tutuyorsa_iddia_edilir()
+    public async Task TUTAR_TUTMASA_DA_banka_YAZILIR()
     {
-        // Cihaz ödeme yankısında SON dolu satırı verir. Tutar bizim istediğimizle tutmuyorsa o
-        // satır BİZİM ödememiz değildir; yanlış banka yazmaktansa boş bırakılır.
+        // ← ÇİVİ (W79 §4): bu testin ESKİ hâli tersini çiviliyordu — "tutar tutmuyorsa banka
+        // yazma". O kural sahada ZARAR VERDİ: banka indirimi tutarı düşürdüğü için (990 istendi,
+        // 941 tahsil) koşul tutmadı ve cihaz `bkm 62`yi AÇIKÇA söylediği hâlde deftere NULL
+        // yazıldı (ölçüm 2026-09-09, fiş 88/2 ve 88/4). Kod tutarsızlığı GÖRÜYORDU ama onu yalnız
+        // "bankayı söyleme" kararında kullandı; tutar uyuşmazlığını kimseye BİLDİRMEDİ.
+        // Doğru ayrım: tutar uyuşmazlığı AYRI alanlarda bildirilir, banka YİNE DE yazılır —
+        // cihaz bankayı tutardan bağımsız söylüyor.
         var (t, g, snap) = Kur();
-        g.Ticket = new GmpTicket(990, 990, 1, GmpPaymentTypes.Card, PaymentsAreComplete: true);
-        g.AfterPayment = new GmpTicket(990, 990, 1, GmpPaymentTypes.Card,
-            Payments: new[] { new GmpPaymentLine(GmpPaymentTypes.Card, 555, 62, "GARANTİ BBVA") });
+        g.Ticket = new GmpTicket(990, 0, 0, GmpPaymentTypes.Card);
+        // Banka indirimi fişin TOPLAMINI da düşürür (sahada ölçüldü: 2380 -> 2331), yani fiş
+        // 941/941 ile TAM ödenmiş sayılır ve kapanır.
+        g.AfterPayment = new GmpTicket(941, 941, 1, GmpPaymentTypes.Card,
+            Payments: new[] { new GmpPaymentLine(GmpPaymentTypes.Card, 941, 62, "GARANTİ BBVA") },
+            TotalDiscountMinor: 49, PaymentsAreComplete: true);
+        g.Ticket = new GmpTicket(990, 0, 0, GmpPaymentTypes.Card);
 
         var r = await t.SaleAsync(Req(amount: 990, paymentType: GmpPaymentTypes.Card,
             oturum: "oturum-A", satisToplam: 990, odeme: "pay-1"));
 
-        Assert.Null(r.ClosedTicketPayments![0].BankBkmId);              // ← ÇİVİ (555 != 990)
+        Assert.Equal(62, r.ClosedTicketPayments![0].BankBkmId);   // ← ÇİVİ: banka DÜŞMEDİ
+        Assert.Equal(990, r.RequestedAmountMinor);
+        Assert.Equal(941, r.CollectedAmountMinor);                // ← ÇİVİ: tahsil edilen ayrı
+        Assert.Equal(49, r.MerchantDiscountMinor);                // ← ÇİVİ: fark bildiriliyor
+        Assert.Equal(990, r.ApprovedAmountMinor);                 // ← ÇİVİ: İSTENEN kalır (platform kuralı)
     }
 
     [Fact]
@@ -913,11 +1078,15 @@ public class GmpTerminalTransportTests
 
         /// <summary>Fiş → ödemeler (bizim paymentId'lerimiz).</summary>
         public Dictionary<string, List<TicketPaymentRow>> Odemeler { get; } = new();
+        /// <summary>W79: kaydedilen TAHSİL tutarları — defter değişmezinin çivisi bunu okur.</summary>
+        public Dictionary<string, long?> Tahsil { get; } = new();
+
         public void RecordTicketPayment(string ticketId, string paymentId, long amountMinor,
-            int methodType, int? bankBkmId, long? now = null)
+            int methodType, int? bankBkmId, long? now = null, long? collectedMinor = null)
         {
             if (!Odemeler.TryGetValue(ticketId, out var l)) Odemeler[ticketId] = l = new();
             if (l.Any(x => x.PaymentId == paymentId)) return;      // (fiş, ödeme) tekil
+            Tahsil[paymentId] = collectedMinor;
             l.Add(new TicketPaymentRow(paymentId, amountMinor, methodType, bankBkmId));
         }
         public IReadOnlyList<TicketPaymentRow> ReadTicketPayments(string ticketId)

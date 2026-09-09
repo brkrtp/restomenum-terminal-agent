@@ -1,4 +1,4 @@
-using System.Globalization;
+﻿using System.Globalization;
 using System.Text.Json.Nodes;
 
 namespace Restomenum.Agent.Core;
@@ -127,6 +127,12 @@ public static class SaleToPoiResponseBuilder
         }
         if (result.DeviceTicketTotalMinor is long dt) ek["deviceTicketTotalMinor"] = dt;
         if (result.DeviceRemainingMinor is long dk) ek["deviceRemainingMinor"] = dk;
+        // ── W79: istenen / tahsil edilen / üye işyeri indirimi ────────────────────
+        // `AuthorizedAmount` İSTENEN kalır (platform eşleştirmesi ona bağlı); tahsil edilen ve
+        // fark AYRI alanlarda gider. Platform bunları okuyana kadar zararsızca düşerler.
+        if (result.RequestedAmountMinor is long ri) ek["requestedAmountMinor"] = ri;
+        if (result.CollectedAmountMinor is long ci) ek["collectedAmountMinor"] = ci;
+        if (result.MerchantDiscountMinor is long mi) ek["merchantDiscountMinor"] = mi;
         govde["Restomenum"] = ek;
         return new JsonObject { ["SaleToPOIResponse"] = govde }.ToJsonString();
     }
@@ -305,6 +311,8 @@ public static class SaleToPoiResponseBuilder
             ["scope"] = "ticket",
             ["voidedPaymentCount"] = sonuc.VoidedPaymentCount,
             ["voidedAmountMinor"] = sonuc.VoidedAmountMinor,
+            // W83: "geri alınan" ile "denenmiş" ayrı sayılar — cihaz da öyle tutuyor.
+            ["voidedAttemptCount"] = sonuc.VoidedAttemptCount,
             // Bağ yoksa AÇIKÇA null: platform "bilinmiyor" ile "yok"u ayırt edebilsin.
             ["cancelledSaleSessionId"] = sonuc.CancelledSaleSessionId is null
                 ? null : JsonValue.Create(sonuc.CancelledSaleSessionId),
@@ -313,6 +321,10 @@ public static class SaleToPoiResponseBuilder
         // W37: HANGİ fişin iptal edildiği. Platform bunu bilmeyince oturum+terminal ile arıyor ve
         // aynı oturumda önce KAPANMIŞ bir fişin tahsilatını da ters kayda alabiliyordu.
         // Fiş yoksa (`TICKET_NOT_OPEN`) alan HİÇ konmaz — "iptal edilen fiş" diye bir şey yok.
+        // W88: yarım kalan iptalde NİYET ayrı alanda — gövde "geri alındı" demez.
+        if (sonuc.AttemptedVoidAmountMinor > 0)
+            ek["attemptedVoidAmountMinor"] = sonuc.AttemptedVoidAmountMinor;
+        if (sonuc.AttemptedVoidCount > 0) ek["attemptedVoidCount"] = sonuc.AttemptedVoidCount;
         if (sonuc.CancelledTicketId is not null) ek["ticketId"] = sonuc.CancelledTicketId;
         // Komut kimliği AYNEN döner — platform açtığı iptali bununla eşleştiriyor; uyuşmazsa
         // 409 `voidNotRequested` üretip alarm veriyor. Üretmiyoruz, yansıtıyoruz.

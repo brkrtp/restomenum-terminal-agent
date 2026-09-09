@@ -1,4 +1,4 @@
-namespace Restomenum.Agent.Core;
+﻿namespace Restomenum.Agent.Core;
 
 /// <summary>Terminale gönderilecek satış isteği.</summary>
 public sealed record SaleRequest(
@@ -192,6 +192,33 @@ public sealed record TransportResult(
 
     /// <summary>Cihazdaki fişin kalanı (toplam − tahsil). Bkz. <see cref="DeviceTicketTotalMinor"/>.</summary>
     long? DeviceRemainingMinor = null,
+
+    /// <summary>
+    /// <b>W79 — kasanın İSTEDİĞİ tutar.</b> <see cref="ApprovedAmountMinor"/> ile aynı değerdir;
+    /// ayrı alan olarak yazılır ki okuyanın hangi sayının ne olduğunu TAHMİN etmesi gerekmesin.
+    /// </summary>
+    long? RequestedAmountMinor = null,
+
+    /// <summary>
+    /// <b>W79 — cihazın GERÇEKTEN tahsil ettiği tutar.</b> Ölçüm 2026-09-09: banka uygulaması fişe
+    /// "İŞYERİ İND." basıp toplamı ~%5 düşürdü (7150→6793, 990→941, 1390→1321); dördünde de kasa
+    /// istenen tutarı doğru sandı ve <b>defter şişik kaldı</b>.
+    ///
+    /// <para>⚠️ <see cref="ApprovedAmountMinor"/> İSTENEN olarak KALIR — platform onaylı sonuçta
+    /// bildirilen tutar denemenin tutarına eşit değilse sonucu HİÇ kaydetmiyor (ölçüldü:
+    /// <c>statusSink.js:236-240</c>). Tahsil edileni oraya yazmak ıraksamayı düzeltmez, sonucu
+    /// tamamen kaybettirirdi.</para>
+    ///
+    /// <para><c>null</c> = güvenilir biçimde okunamadı (iki kaynak çelişti) — o hâlde hiçbir tutar
+    /// İDDİA EDİLMEZ.</para>
+    /// </summary>
+    long? CollectedAmountMinor = null,
+
+    /// <summary>
+    /// <b>W79 — üye işyeri (banka) indirimi</b> = istenen − tahsil, YALNIZ pozitifse konur.
+    /// Negatif fark (tahsil > istenen) ayrı ve daha ciddi bir olaydır: alan konmaz, uyarı yazılır.
+    /// </summary>
+    long? MerchantDiscountMinor = null,
 
     /// <summary>
     /// Ödemeden SONRA fişin durumu: <c>"OPEN"</c> (kısmi — fiş açık kaldı) ya da <c>"CLOSED"</c>

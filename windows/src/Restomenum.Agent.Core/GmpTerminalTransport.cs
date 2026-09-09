@@ -242,11 +242,57 @@ public sealed partial class GmpTerminalTransport : ITerminalTransport
         // Kullanılan bankayı cihaz söyler: ödeme yankısında SON dolu satır bu ödemedir. Tutar
         // tutmuyorsa banka İDDİA EDİLMEZ — yanlış banka bildirmektense "bilmiyorum" demek.
         var sonSatir = tk.Payments is { Count: > 0 } satirlar ? satirlar[^1] : (GmpPaymentLine?)null;
-        var banka = sonSatir is { } sat && sat.AmountMinor == request.AmountMinor
-            ? sat.BankBkmId : null;
+        // ── W79: BANKA ATFI TUTARDAN AYRILDI ─────────────────────────────────────
+        // Eskiden banka yalnız `sat.AmountMinor == request.AmountMinor` ise yazılıyordu. Banka
+        // indirimi tutarı düşürdüğü için (990 istendi, 941 tahsil) koşul tutmuyordu ve `bkm 62`
+        // cihazdan AÇIKÇA geldiği hâlde deftere NULL yazıldı. Kod tutarsızlığı GÖRÜYORDU ama onu
+        // yalnız "bankayı söyleme" kararında kullandı; oysa tutar uyuşmazlığı BİLDİRİLMELİ,
+        // banka YİNE DE yazılmalı. Satırın bu denemeye ait olduğunun ölçütü artık tek: cihazın
+        // ödeme satırı sayısı bu denemede arttıysa son satır bizimkidir.
+        // Bu dala YALNIZ `pr.Ok` ile gelinir: ödeme işlendi, yani son dolu satır BU denemenindir.
+        // Başarısızlık dalı da (yukarıda) aynı kuralı kullanıyor ve sahada doğru çalışıyor.
+        var banka = sonSatir?.BankBkmId;
+
+        // ── W79: TAHSİL EDİLEN TUTAR — İKİ KAYNAK, ÇELİŞİRSE İDDİA YOK ───────────
+        // Birincil kaynak bu denemenin satırı; çapraz doğrulama fişin tahsil toplamındaki artış.
+        // İkisi tutmuyorsa hiçbir tutar iddia edilmez: yanlış tutar bildirmektense "bilmiyorum".
+        // Tutar için ÖLÇÜT DAHA SIKI: satırın bu denemeye ait olduğunu ödeme sayacının ARTMASIYLA
+        // doğrularız, sonra tutarı fişin tahsil artışıyla ÇAPRAZ kontrol ederiz. İkisi tutmuyorsa
+        // hiçbir tutar iddia edilmez — yanlış tutar bildirmektense "bilmiyorum".
+        long? tahsil = null;
+        if (sonSatir is { } tahsilSatiri && tahsilSatiri.AmountMinor > 0)
+        {
+            if (anlik is not GmpTicket oncekiFis)
+                tahsil = tahsilSatiri.AmountMinor;      // karşılaştıracak görüntü yok
+            else if (tk.PaymentCount > oncekiFis.PaymentCount)
+            {
+                var delta = tk.PaidAmountMinor - oncekiFis.PaidAmountMinor;
+                if (delta == tahsilSatiri.AmountMinor) tahsil = tahsilSatiri.AmountMinor;
+                else
+                    _log("[gmp] TAHSİL TUTARI ÇELİŞKİLİ — hiçbir tutar iddia edilmiyor", new
+                    {
+                        request.CommandId, satir = tahsilSatiri.AmountMinor, delta,
+                        istenen = request.AmountMinor,
+                    });
+            }
+            // Sayaç artmadıysa son satır ESKİ bir ödeme olabilir → iddia YOK (sessiz, alarm değil).
+        }
+        // Fark yalnız POZİTİFSE indirimdir. Negatif fark (tahsil > istenen) ayrı ve daha ciddi bir
+        // olaydır — alan konmaz, uyarı yazılır.
+        long? isyeriIndirimi = null;
+        if (tahsil is long t2 && t2 != request.AmountMinor)
+        {
+            var fark = request.AmountMinor - t2;
+            if (fark > 0) isyeriIndirimi = fark;
+            _log(fark > 0
+                    ? "[gmp] TAHSİL ≠ İSTENEN — üye işyeri indirimi"
+                    : "[gmp] TAHSİL İSTENENDEN FAZLA — beklenmeyen durum",
+                new { request.CommandId, istenen = request.AmountMinor, tahsil = t2, fark,
+                      banka = sonSatir?.BankName ?? "(yok)", bkm = banka });
+        }
         if (fisId is not null)
             _snapshots?.RecordTicketPayment(fisId, request.PaymentId, request.AmountMinor,
-                request.PaymentType, banka);
+                request.PaymentType, banka, collectedMinor: tahsil);
 
         if (tk.IsFullyPaid)
         {
@@ -333,9 +379,20 @@ public sealed partial class GmpTerminalTransport : ITerminalTransport
             cihazKalan = tk.TotalAmountMinor - tk.PaidAmountMinor;
         }
 
+        // ── W79 §6b: KAPANMIŞ FİŞTE KALAN = 0, AMA YALNIZ ÖLÇÜLMÜŞSE ────────────
+        // Platform iki alanı ÇİFT kabul ediyor (`bodyRead.js:99-106`): `deviceRemainingMinor`
+        // yoksa `deviceTicketTotalMinor` de düşüyor. Kapanmış fişin kalanı GERÇEKTEN sıfırdır —
+        // belirsizlik değil. Ama kapanış okuması başarısızsa toplam da yoktur; o hâlde ÜÇÜ DE
+        // konmaz. Uydurulmuş bir sıfır hiçbir zaman gitmez.
+        if (fisDurumu == "CLOSED" && cihazToplam is not null && cihazTahsil is not null)
+            cihazKalan = 0;
+
         return new TransportResult(
             TransportOutcome.Approved,
             ApprovedAmountMinor: request.AmountMinor,
+            RequestedAmountMinor: request.AmountMinor,
+            CollectedAmountMinor: tahsil,
+            MerchantDiscountMinor: isyeriIndirimi,
             Rrn: tk.Rrn,
             CardLast4: tk.CardLast4,
             ProviderResultCode: pr.ToString(),

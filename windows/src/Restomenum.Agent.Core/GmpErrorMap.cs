@@ -1,4 +1,4 @@
-namespace Restomenum.Agent.Core;
+﻿namespace Restomenum.Agent.Core;
 
 /// <summary>
 /// Terminal çağrısının hangi <b>adımda</b> olduğunu söyler. Eşleme buna bakar çünkü
@@ -248,6 +248,24 @@ public static class RestomenumReasons
     /// Para hiç hareket etmedi; nexo koşulu <c>Refusal</c>, tekrar güvenli.
     /// </summary>
     public const string BankDeclined = "BANK_DECLINED";
+
+    /// <summary>
+    /// <b>W79 §7 — banka HİÇ SORULMADI.</b> Kullanılabilir bir uygulama kodu var ama yetkilendirme
+    /// hiç olmamış: <c>authorizeCode</c> ve <c>rrn</c> BOŞ, <c>payAmount</c> 0.
+    ///
+    /// <para><b>Neden ayrı (ölçüm 2026-09-09, FR02 ve FR30):</b> <c>AppErrorCode "E003"</c>
+    /// ("KULLANICI VAZGEÇTİ") kullanılabilir bir koddur, dolayısıyla eski ikili ayrım onu
+    /// <c>BANK_DECLINED</c> sayıyordu ve kasiyer "banka reddetti" görüyordu — oysa kart hiç
+    /// okutulmamıştı (<c>inputType 0</c>, <c>pan ""</c>) ve bankaya hiçbir şey gitmemişti.
+    /// "Banka reddetti" kasiyeri BAŞKA kart denemeye iter; doğrusu "aynı kartla tekrar dene".</para>
+    ///
+    /// <para>⚠️ <c>stan</c> ÖLÇÜT DEĞİLDİR — aynı olayda 0 ve 722 geldi; deneme başına yerel
+    /// veriliyor. ⚠️ Hata METNİ de ölçüt değildir — aynı olay AKBANK'ta "KULLANICI VAZGECTI",
+    /// GARANTİ'de "KULLANICI VAZGEÇTİ" yazdı.</para>
+    ///
+    /// <para>Para güvenliği aynı: yetkilendirme olmadığı için yetim provizyon yok, tekrar güvenli.</para>
+    /// </summary>
+    public const string NotSentToBank = "NOT_SENT_TO_BANK";
 
     /// <summary>
     /// İptal YARIM KALDI: ödeme geri alınamadı ya da fiş kapanamadı. Kasiyere söylenmesi gereken
