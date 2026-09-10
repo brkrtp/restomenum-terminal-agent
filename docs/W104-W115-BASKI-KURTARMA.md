@@ -624,3 +624,43 @@ Aynı turda ölçülen tam iz (`tkt_d2d6126492c44b9fb1869b784d6776ce`):
   `PrintBeforeMF` yine de 100 saniyede zaman aşımına düştü. `OUT_OF_PAPER` dalı
   KOŞMADI ve `paperWarning` açılmadı — **doğrusu da bu**: cihaz kâğıtsız olduğunu
   söylemedi.
+
+---
+
+## W130 — iki ayrıştırıcı aynı şeye farklı davranıyordu
+
+Panel ajanı sordu: "`ticketCancelId` de 66 karakter ve çalışıyordu — tutarsızlık
+var, kontrol et." Haklıydı.
+
+**Ölçüm:**
+
+| anahtar | sınır | 66 karakterlik gerçek anahtar |
+|---|---|---|
+| `ServiceID` | >10 ret | — |
+| `SaleID` | >32 ret | — |
+| `ticketFinishId` | **>64 ret** | **REDDEDİLDİ** |
+| `ticketCancelId` | **sınır YOK** | geçti |
+
+Aynı kasadan gelen, aynı şekilde üretilmiş iki anahtardan biri reddedildi öteki
+geçti. **Kimse bunu tasarlamamıştı** — iki ayrı yerde, iki ayrı gün yazılmıştı.
+
+Peer'in ikinci ihtimali (**iptaller sessizce reddediliyor olabilir**) ölçümle
+**çürüdü**: iptal yolunda hiç sınır yoktu, dolayısıyla sessiz red de yoktu.
+`VOID_INCOMPLETE` yanıtları gerçekten cihazdan geliyordu.
+
+### Düzeltme
+
+Tek politika: `TekrarAnahtari.EnCok = 128`, `Dogrula()` her iki ayrıştırıcıda.
+Sebep ayrışıyor ve **gelen uzunluk yazılıyor**.
+
+> ⚠️ Bu, iptal yoluna **YENİ bir red ekliyor** — orada eskiden hiç sınır yoktu.
+> Bilinçli: sınır ölçülenin (66) iki katı, ve red artık sebebiyle görünür.
+> Bu anahtarlar depoda birincil anahtar oluyor (`event_id`); sınırsız dış girdiyi
+> anahtar yapmak, boyutu karşı tarafın insafına bırakmaktır. Ama para yolunda
+> sessiz bir red bırakmaktansa **görünür ve cömert** bir sınır seçildi.
+
+Anahtarı OLMAYAN istekler etkilenmez (fiş kapsamında `ticketCancelId` isteğe
+bağlı) — bu ayrıca çivilendi, çünkü doğrulamayı ona da uygulamak bugüne kadar
+çalışan istekleri sessizce reddetmek olurdu.
+
+Mutasyon: 5 mutasyon, hepsi kırmızı (biri 22 testi düşürdü).

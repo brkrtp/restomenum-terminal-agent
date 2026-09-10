@@ -1,4 +1,4 @@
-using System.Globalization;
+﻿using System.Globalization;
 using System.Text.Json;
 using System.Text.RegularExpressions;
 
@@ -132,6 +132,14 @@ public static partial class ReversalRequestParser
                 saleSessionId = Str(ek, "saleSessionId");
                 ticketCancelId = Str(ek, "ticketCancelId");
             }
+
+            // W130: iptal anahtarı da SINIRLANIR. Eskiden hiç sınır yoktu; aynı kasadan gelen
+            // 66 karakterlik iki anahtardan `ticketFinishId` reddedilirken `ticketCancelId`
+            // geçiyordu. Tutarsızlık tasarlanmamıştı — iki ayrı yerde iki ayrı gün yazılmıştı.
+            // ⚠️ Bu YENİ bir red: sınır ölçülenin (66) iki katı ve sebebiyle görünür.
+            if (!string.IsNullOrWhiteSpace(ticketCancelId)
+                && TekrarAnahtari.Dogrula(ticketCancelId, "ticketCancelId") is { } redNedeni)
+                return Red(SaleToPoiRejectReason.Malformed, redNedeni);
 
             return new ReversalParseResult.Ok(new ReversalRequest(
                 ServiceId: serviceId, SaleId: saleId, PoiId: poiId, PaymentId: paymentId,

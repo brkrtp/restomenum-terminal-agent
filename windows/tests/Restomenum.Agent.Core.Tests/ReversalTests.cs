@@ -454,6 +454,87 @@ public class ReversalTests : IDisposable
         Assert.IsType<ReversalParseResult.Invalid>(ReversalRequestParser.Parse(odeme));
     }
 
+    [Theory]
+    [InlineData(66, true)]    // SAHADA ölçülen gerçek şekil: <uuid>-<terminalId>-ticketcancel
+    [InlineData(128, true)]   // tam sınır
+    [InlineData(129, false)]  // sınırın bir üstü
+    public void TEKRAR_ANAHTARI_SINIRI_iki_ayristiricida_AYNI(int uzunluk, bool kabul)
+    {
+        // ← ÇİVİ: İKİ AYRIŞTIRICI AYNI ŞEYE FARKLI DAVRANIYORDU ve bunu kimse tasarlamamıştı.
+        // 2026-09-10'da ölçüldü: aynı kasadan gelen, aynı şekilde üretilmiş, aynı 66 karakterlik
+        // iki anahtardan `ticketFinishId` REDDEDİLDİ (sınır 64), `ticketCancelId` GEÇTİ
+        // (sınır YOK). İkisi iki ayrı gün, iki ayrı yerde yazılmıştı.
+        //
+        // ⚠️ Bu çivi iptal yoluna EKLENEN yeni bir reddi koruyor. Sınır ölçülenin (66) iki
+        // katı ve reddin sebebi görünür — para yolunda sessiz bir red bırakmaktansa cömert
+        // ve görünür bir sınır tercih edildi.
+        var anahtar = new string('k', uzunluk);
+        var zarf = $$"""
+        {
+          "SaleToPOIRequest": {
+            "MessageHeader": {
+              "MessageClass": "Service", "MessageCategory": "Reversal", "MessageType": "Request",
+              "ServiceID": "void12345", "SaleID": "kasa-1", "POIID": "term-01"
+            },
+            "ReversalRequest": { "ReversalReason": "MerchantCancel" },
+            "Restomenum": { "v": 1, "scope": "ticket", "ticketCancelId": "{{anahtar}}" }
+          }
+        }
+        """;
+
+        var iptal = ReversalRequestParser.Parse(zarf);
+        var bitir = TicketFinishParser.Parse(TicketFinishZarf(anahtar), out var bitirNeden);
+
+        if (kabul)
+        {
+            Assert.IsType<ReversalParseResult.Ok>(iptal);
+            Assert.NotNull(bitir);              // İKİSİ DE kabul
+        }
+        else
+        {
+            var red = Assert.IsType<ReversalParseResult.Invalid>(iptal);
+            Assert.Contains("ÇOK UZUN", red.Detail);
+            Assert.Contains(uzunluk.ToString(), red.Detail);   // gelen uzunluk ÖLÇÜLEBİLİR
+            Assert.Null(bitir);                 // İKİSİ DE ret
+            Assert.Contains("ÇOK UZUN", bitirNeden);
+        }
+    }
+
+    [Fact]
+    public void TICKET_CANCEL_ID_YOKSA_istek_yine_gecerli()
+    {
+        // ← ÇİVİ: yeni sınır, anahtarı OLMAYAN istekleri bozmamalı. `ticketCancelId` fiş
+        // kapsamında isteğe bağlı; doğrulamayı ona da uygulamak, bugüne kadar çalışan
+        // istekleri sessizce reddetmek olurdu.
+        var zarf = """
+        {
+          "SaleToPOIRequest": {
+            "MessageHeader": {
+              "MessageClass": "Service", "MessageCategory": "Reversal", "MessageType": "Request",
+              "ServiceID": "void12345", "SaleID": "kasa-1", "POIID": "term-01"
+            },
+            "ReversalRequest": { "ReversalReason": "MerchantCancel" },
+            "Restomenum": { "v": 1, "scope": "ticket" }
+          }
+        }
+        """;
+
+        var r = Assert.IsType<ReversalParseResult.Ok>(ReversalRequestParser.Parse(zarf));
+        Assert.Null(r.Request.TicketCancelId);
+    }
+
+    private static string TicketFinishZarf(string anahtar) => $$"""
+    {
+      "SaleToPOIRequest": {
+        "MessageHeader": {
+          "ProtocolVersion": "3.0", "MessageClass": "Service", "MessageCategory": "TicketFinish",
+          "MessageType": "Request", "ServiceID": "fin12345", "SaleID": "kasa-1", "POIID": "term-01"
+        },
+        "Restomenum": { "ticketFinishId": "{{anahtar}}" }
+      }
+    }
+    """;
+
     [Fact]
     public async Task PaymentIdsiz_fis_iptali_ucdan_uca_calisir()
     {

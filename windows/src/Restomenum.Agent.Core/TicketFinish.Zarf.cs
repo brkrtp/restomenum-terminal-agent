@@ -28,15 +28,17 @@ public sealed record TicketFinishRequest(
 /// <summary><c>MessageCategory: "TicketFinish"</c> zarfının ayrıştırılması.</summary>
 public static class TicketFinishParser
 {
+    /// <inheritdoc cref="TekrarAnahtari.EnCok"/>
+    public const int AnahtarEnCok = TekrarAnahtari.EnCok;
+
     /// <summary>
-    /// <b>W129 — tekrar anahtarının en fazla uzunluğu.</b> 64'tü ve <b>gerçek bir anahtarı
+    /// <b>W129 (tarihçe) — tekrar anahtarının en fazla uzunluğu.</b> 64'tü ve <b>gerçek bir anahtarı
     /// kesiyordu</b>: kasanın deterministik şekli <c>&lt;uuid&gt;-&lt;terminalId&gt;-ticketfinish</c>
     /// = 36+1+16+13 = <b>66</b> karakter (2026-09-10 18:32'de ölçüldü, istek reddedildi).
     ///
     /// <para>64 benim keyfi seçimimdi; anahtarın kendisi iyi tasarlanmıştı. Sınır, saldırıyı
     /// değil taşmayı engellemek için var — 128 aynı işi görüyor ve makul anahtarları kesmiyor.</para>
     /// </summary>
-    public const int AnahtarEnCok = 128;
 
     public const string Category = "TicketFinish";
 
@@ -78,15 +80,10 @@ public static class TicketFinishParser
             //
             // Aynı sınıf hata W128'de de vardı (iptalin cihaz kodu hiç loglanmıyordu).
             // Teşhis edilemeyen bir red, karşı tarafı kör arama yaptırır.
-            if (finishId is null) { neden = "ticketFinishId YOK (SaleToPOIRequest.Restomenum içinde bekleniyor)"; return null; }
-            if (string.IsNullOrWhiteSpace(finishId)) { neden = "ticketFinishId BOŞ"; return null; }
-            if (finishId.Length > AnahtarEnCok)
-            {
-                neden = $"ticketFinishId ÇOK UZUN ({finishId.Length} > {AnahtarEnCok})";
-                return null;
-            }
+            if (TekrarAnahtari.Dogrula(finishId, "ticketFinishId") is { } red) { neden = red; return null; }
+            // Doğrulama geçtiyse anahtar dolu — derleyiciye söylemek gerekiyor.
 
-            return new TicketFinishRequest(serviceId!, Str(hdr, "SaleID") ?? "", poiId!, finishId,
+            return new TicketFinishRequest(serviceId!, Str(hdr, "SaleID") ?? "", poiId!, finishId!,
                 DateTimeOffset.UtcNow);
         }
     }
