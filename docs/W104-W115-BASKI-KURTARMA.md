@@ -976,3 +976,38 @@ durum bayatlayınca tam 21 saniyeye çıktı.
 Tahmin tuttu: bağlantı hiç kurulamadığı için keepalive yine devreye girmedi ve
 kod `0xF000` (PORT_NOT_OPEN) geldi, `0xF003` değil. D2 (bağlantı kuruluyken
 kopma) hâlâ keepalive'ın asıl sınavı.
+
+---
+
+## W138 — SAHİPLİK KAPISI: başkasının fişini mali olarak kesinleştirme
+
+Panel/kasa ajanı `TicketFinish` zarfına `saleSessionId` ekledi ve bende
+değişiklik ZORUNLU olmadığını söyledi. Yine de ekledim — çünkü **cihaza dokunan
+taraf benim.**
+
+### Zarar
+
+Tamamlama, cihazdaki **açık fişi** tamamlar; hangi fiş olduğuna bakmaz. Kasanın
+tetiği kendi `open` kaydı ve o kayıt bayatlayabiliyor (karşı taraf E44'te
+belgeledi). S1 kapatılırken cihazda S2'nin fişi açıksa, kapı olmadan **S2'nin
+fişi mali olarak kesinleşir** ve S2'nin kasiyeri sebebini hiç öğrenmez.
+**Mali kesinleşme geri alınamaz.**
+
+### Üç durum, ikisi geçer
+
+| durum | karar | gerekçe |
+|---|---|---|
+| kanıt YOK | **GEÇ** | "alan gelmedi" ≠ "başkasının"; yokluğu suçlama saymak eski kasa sürümünde yarım mali belgeyi yarım bırakırdı |
+| defterde bağ YOK | **GEÇ** | karşılaştıracak şey yok; uydurma kesinlik satmayız — zaten bu zarfın varlık sebebi o durum |
+| ikisi VAR ve FARKLI | **DUR** | cihaza hiç gidilmez, `reason: SESSION_MISMATCH` |
+
+Bu, `paymentInvoked` üç durumluluğuyla ve `PendingFinishAttempts` yokluğuyla
+aynı ilke: **ölçülemeyeni suçlama, ama ölçüleni de yok sayma.**
+
+### İki taraflı savunma
+
+Kasa da kendi tarafında engelliyor. Aynı kuralın iki bağımsız yerde durması
+bilinçli: bu gece tek noktaya bağlı üç savunmanın da (E61 alan yolu, kâğıt
+uyarısı, `finishTicket` testsizliği) sessizce öldüğünü gördük.
+
+Mutasyon: 5 mutasyon, hepsi kırmızı. 646/646 yeşil.

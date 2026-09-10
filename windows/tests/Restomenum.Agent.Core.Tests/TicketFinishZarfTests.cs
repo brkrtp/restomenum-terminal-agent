@@ -65,12 +65,19 @@ public class TicketFinishZarfTests : IDisposable
         return (h, tasima);
     }
 
-    private static TicketFinishRequest Istek(string fid = "fin-1") =>
-        new("svc12345", "kasa-1", "t1", fid, DateTimeOffset.UtcNow);
+    private static TicketFinishRequest Istek(string fid = "fin-1", string? oturum = null) =>
+        new("svc12345", "kasa-1", "t1", fid, DateTimeOffset.UtcNow, oturum);
 
     private static string Zarf(string? fid) =>
         """{"SaleToPOIRequest":{"MessageHeader":{"ProtocolVersion":"3.0","MessageClass":"Service","MessageCategory":"TicketFinish","MessageType":"Request","ServiceID":"svc12345","SaleID":"kasa-1","POIID":"t1"}"""
         + (fid is null ? "}}" : ",\"Restomenum\":{\"ticketFinishId\":\"" + fid + "\"}}}");
+
+    private static string ZarfOturumlu(string fid, string? oturum) =>
+        "{\"SaleToPOIRequest\":{\"MessageHeader\":{\"ProtocolVersion\":\"3.0\",\"MessageClass\":\"Service\","
+        + "\"MessageCategory\":\"TicketFinish\",\"MessageType\":\"Request\",\"ServiceID\":\"svc12345\","
+        + "\"SaleID\":\"kasa-1\",\"POIID\":\"t1\"},\"Restomenum\":{\"ticketFinishId\":\"" + fid + "\""
+        + (oturum is null ? "" : ",\"saleSessionId\":\"" + oturum + "\"")
+        + "}}}";
 
     private static JsonElement Oku(string govde) =>
         JsonDocument.Parse(govde).RootElement.GetProperty("SaleToPOIResponse");
@@ -140,7 +147,75 @@ public class TicketFinishZarfTests : IDisposable
         Assert.Equal(SaleToPoiRejectReason.UnsupportedCategory, red.Reason);
     }
 
+    [Fact]
+    public void SALE_SESSION_ID_zarftan_okunur_ve_YOKLUGU_gecerlidir()
+    {
+        // Alan İSTEĞE BAĞLI: eski kasa sürümü göndermez. Yokluğu isteği geçersiz kılmaz.
+        var oturumlu = TicketFinishParser.Parse(ZarfOturumlu("fin-1", "otr-A"), out _);
+        Assert.Equal("otr-A", oturumlu!.SaleSessionId);
+
+        var oturumsuz = TicketFinishParser.Parse(ZarfOturumlu("fin-1", null), out var neden);
+        Assert.NotNull(oturumsuz);
+        Assert.Null(oturumsuz!.SaleSessionId);
+        Assert.Null(neden);
+    }
+
     // ── DAVRANIŞ ────────────────────────────────────────────────────────────────
+
+    [Fact]
+    public async Task BASKA_HESABIN_fisi_MALI_OLARAK_KESINLESTIRILMEZ()
+    {
+        // ← ÇİVİ: tamamlama, cihazdaki AÇIK FİŞİ tamamlar — hangi fiş olduğuna BAKMADAN.
+        // Kasanın tetiği kendi `open` kaydı ve o kayıt bayatlayabiliyor. S1 kapatılırken
+        // cihazda S2'nin fişi açıksa, kapı olmadan S2'nin fişi MALİ OLARAK KESİNLEŞİR ve
+        // S2'nin kasiyeri sebebini hiç öğrenmez. Mali kesinleşme GERİ ALINAMAZ.
+        var (h, tasima) = Kur();
+        _store.BindOpenTicket("t1", "oturum-S2");      // cihazda S2'nin fişi açık
+
+        var ek = Oku(await h.HandleTicketFinishAsync(Istek(oturum: "oturum-S1")))
+            .GetProperty("Restomenum");
+
+        Assert.Equal(0, tasima.Cagri);                 // ⚠️ CİHAZA HİÇ GİDİLMEDİ
+        Assert.Equal("SESSION_MISMATCH", ek.GetProperty("reason").GetString());
+    }
+
+    [Fact]
+    public async Task KANIT_YOKSA_ENGELLENMEZ_eski_kasa_surumu_calismaya_devam_eder()
+    {
+        // ← ÇİVİ: "alan gelmedi" ile "başkasının" AYRI şeyler. Yokluğu suçlama saymak, eski
+        // kasa sürümünde yarım kalmış mali belgeyi yarım bırakırdı — düzeltmeye çalıştığımız
+        // zararın ta kendisi. `paymentInvoked` üç durumluluğuyla aynı ilke.
+        var (h, tasima) = Kur();
+        _store.BindOpenTicket("t1", "oturum-S2");
+
+        await h.HandleTicketFinishAsync(Istek(oturum: null));
+
+        Assert.Equal(1, tasima.Cagri);                 // GEÇTİ
+    }
+
+    [Fact]
+    public async Task DEFTERDE_BAG_YOKSA_ENGELLENMEZ()
+    {
+        // ← ÇİVİ: karşılaştıracak bir şey yokken reddetmek, uydurma bir kesinlik satmak olurdu.
+        // Cihazda fiş var ama bizim defterimizde bağ yoksa (ör. ajan yeniden başlamış),
+        // tamamlama HÂLÂ yapılabilmeli — zaten bu zarfın varlık sebebi o durum.
+        var (h, tasima) = Kur();
+
+        await h.HandleTicketFinishAsync(Istek(oturum: "oturum-S1"));
+
+        Assert.Equal(1, tasima.Cagri);
+    }
+
+    [Fact]
+    public async Task ESLESEN_oturum_GECER()
+    {
+        var (h, tasima) = Kur();
+        _store.BindOpenTicket("t1", "oturum-S1");
+
+        await h.HandleTicketFinishAsync(Istek(oturum: "oturum-S1"));
+
+        Assert.Equal(1, tasima.Cagri);
+    }
 
     [Fact]
     public async Task Kapatinca_HAM_bayraklari_ve_uretici_adimini_bildirir()

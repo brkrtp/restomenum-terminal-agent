@@ -1029,6 +1029,36 @@ public sealed class LocalSaleHandler : IDeviceIdleGate
                 not: "CAPABILITY_NOT_SUPPORTED");
         }
 
+        // ══ W138 — SAHİPLİK KAPISI: BAŞKASININ FİŞİNİ MALİ OLARAK KESİNLEŞTİRME ═══
+        //
+        // Tamamlama, cihazdaki AÇIK FİŞİ tamamlar — hangi fiş olduğuna bakmadan. Kasanın
+        // tetiği kendi `open` kaydı ve o kayıt BAYATLAYABİLİYOR (karşı taraf E44'te belgeledi).
+        // S1 kapatılırken cihazda S2'nin fişi açıksa, kapı olmadan S2'nin fişi mali olarak
+        // kesinleşir ve S2'nin kasiyeri sebebini hiç öğrenmez. Mali kesinleşme GERİ ALINAMAZ.
+        //
+        // Kasa da kendi tarafında engelliyor; bu İKİNCİ savunma. Tek noktaya bağlı kalmamak
+        // için: cihaza dokunan taraf benim, kanıtı burada da sınamalıyım.
+        //
+        // ⚠️ ÜÇ DURUM, ikisi geçer:
+        //   · kanıt YOK           → GEÇ. "Alan gelmedi" ile "başkasının" ayrı şeyler; yokluğu
+        //                           suçlama saymak eski kasa sürümünde yarım mali belgeyi
+        //                           yarım bırakırdı.
+        //   · defterde BAĞ YOK    → GEÇ. Karşılaştıracak bir şey yok; uydurma kesinlik satmayız.
+        //   · İKİSİ VAR ve FARKLI → DUR. Cihaza HİÇ gidilmez.
+        if (req.SaleSessionId is { } istekOturum
+            && _store.ReadOpenTicketBinding(req.PoiId) is { } bagliOturum
+            && !string.Equals(istekOturum, bagliOturum, StringComparison.Ordinal))
+        {
+            _log("[bitir] BAŞKA HESABIN fişi — cihaza gidilmedi", new
+            {
+                req.TicketFinishId, req.PoiId, istenen = istekOturum, cihazdaki = bagliOturum,
+            });
+            return TicketFinishParser.Govde(req,
+                new StuckTicketResult(false, false, false,
+                    new FisBitirmePlani(FisBitirmeAdimi.Dokunma, "SESSION_MISMATCH", 0), 0),
+                not: "SESSION_MISMATCH");
+        }
+
         // ② KİLİT — satışla AYNI kilit ve AYNI tavan. Satış her zaman öncelikli.
         if (!await _islemKilidi.WaitAsync(_satisKilitTavani, ct))
         {

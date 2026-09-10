@@ -23,7 +23,24 @@ namespace Restomenum.Agent.Core;
 /// yoklama fişi açtırırdı (<c>FP3_Start</c> mali numara tüketir).</para>
 /// </param>
 public sealed record TicketFinishRequest(
-    string ServiceId, string SaleId, string PoiId, string TicketFinishId, DateTimeOffset TimeStamp);
+    string ServiceId, string SaleId, string PoiId, string TicketFinishId, DateTimeOffset TimeStamp,
+
+    /// <param name="SaleSessionId">
+    /// <b>W138 — SAHİPLİK KANITI.</b> İsteğin ait olduğu satış oturumu. <c>null</c> = kasa
+    /// göndermedi (eski sürüm ya da hesap kimliği yok).
+    ///
+    /// <para><b>Neden gerekli:</b> tamamlama, cihazdaki AÇIK FİŞİ tamamlar — hangi fiş olduğuna
+    /// bakmadan. Kasanın tetiği kendi <c>open</c> kaydı ve o kayıt bayatlayabiliyor. S1
+    /// kapatılırken cihazda S2'nin fişi açıksa, eski davranış <b>S2'nin fişini mali olarak
+    /// kesinleştirir</b> ve S2'nin kasiyeri sebebini hiç öğrenmez. Mali kesinleşme geri
+    /// alınamaz.</para>
+    ///
+    /// <para>⚠️ <b>YOKLUĞU SUÇLAMA DEĞİLDİR.</b> Alan gelmediğinde engellemeyiz: "alan gelmedi"
+    /// ile "başka hesabın" ayrı şeylerdir ve yokluğu suçlama saymak, eski kasa sürümünde yarım
+    /// mali belgeyi yarım bırakırdı. <see cref="TicketQueryResult.PendingFinishAttempts"/>
+    /// yokluğuyla ve <c>paymentInvoked</c> üç durumluluğuyla aynı ilke.</para>
+    /// </param>
+    string? SaleSessionId = null);
 
 /// <summary><c>MessageCategory: "TicketFinish"</c> zarfının ayrıştırılması.</summary>
 public static class TicketFinishParser
@@ -83,8 +100,13 @@ public static class TicketFinishParser
             if (TekrarAnahtari.Dogrula(finishId, "ticketFinishId") is { } red) { neden = red; return null; }
             // Doğrulama geçtiyse anahtar dolu — derleyiciye söylemek gerekiyor.
 
+            // W138: sahiplik kanıtı — İSTEĞE BAĞLI. Boş/beyaz ise YOK sayılır.
+            var oturum = env.TryGetProperty("Restomenum", out var ek2) && ek2.ValueKind == JsonValueKind.Object
+                ? Str(ek2, "saleSessionId") : null;
+            if (string.IsNullOrWhiteSpace(oturum)) oturum = null;
+
             return new TicketFinishRequest(serviceId!, Str(hdr, "SaleID") ?? "", poiId!, finishId!,
-                DateTimeOffset.UtcNow);
+                DateTimeOffset.UtcNow, oturum);
         }
     }
 
