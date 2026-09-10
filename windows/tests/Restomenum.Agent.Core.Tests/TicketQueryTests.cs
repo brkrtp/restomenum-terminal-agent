@@ -194,6 +194,65 @@ public class TicketQueryTests : IDisposable
         JsonDocument.Parse(TicketQueryHandler.Govde(Istek(), s, DateTimeOffset.UtcNow))
             .RootElement.GetProperty("SaleToPOIResponse").GetProperty("Restomenum");
 
+    [Fact]
+    public void KAGIT_UYARISI_govdede_HER_ZAMAN_bulunur()
+    {
+        // ← ÇİVİ: `paperWarning` alanı "ölçülmeyen alan konmaz" kuralına GİRMEZ — kâğıt ya
+        // uyarıda ya değil, ikisi de ÖLÇÜLEN olgu. Alanı yalnız uyarı varken koysaydık kasa
+        // "temizlendi"yi hiç göremez ve rozeti sonsuza kadar açık bırakırdı.
+        var yok = new TicketQueryResult("NO_OPEN_TICKET", null, null, null, null, null, null, null, null);
+        Assert.False(Ek(yok).GetProperty("paperWarning").GetBoolean());
+        Assert.False(Ek(yok).TryGetProperty("paperWarningAt", out _));
+
+        var var_ = new TicketQueryResult("OPEN", "tkt_1", null, null, null, null, null, null, null,
+            DeviceBusy: false, PaperWarningAt: 1_700_000_000_000, PaperWarningStep: "PrintBeforeMF");
+        var ek = Ek(var_);
+        Assert.True(ek.GetProperty("paperWarning").GetBoolean());
+        Assert.Equal(1_700_000_000_000, ek.GetProperty("paperWarningAt").GetInt64());
+        Assert.Equal("PrintBeforeMF", ek.GetProperty("paperWarningStep").GetString());
+    }
+
+    [Fact]
+    public void KAGIT_UYARISI_fis_durumundan_BAGIMSIZ_tasinir()
+    {
+        // ← ÇİVİ: uyarı fişe DEĞİL cihaza ait. Fiş kapalıyken de, hiç fiş yokken de görünmeli —
+        // yoksa 6 saniyede kapanan bir fişle birlikte uyarı da kaybolur (03:23'te tam bu oldu).
+        _store.SetPaperWarning("t1", true, "PrintBeforeMF", now: 1_700_000_000_000);
+        _store.MarkTicketClosed("tkt_1", "t1", "oturum-A", 990, 990);
+        _store.ConfirmTicketClosed("tkt_1");
+
+        var kapali = TicketQueryHandler.Cevapla(_store, Istek("tkt_1"));
+        Assert.Equal("CLOSED", kapali.Durum);
+        Assert.Equal(1_700_000_000_000, kapali.PaperWarningAt);
+
+        var fisYok = TicketQueryHandler.Cevapla(_store, Istek());
+        Assert.Equal("NO_OPEN_TICKET", fisYok.Durum);
+        Assert.Equal(1_700_000_000_000, fisYok.PaperWarningAt);
+    }
+
+    [Fact]
+    public void KAGIT_UYARISI_ILK_gorulme_saatini_korur()
+    {
+        // ← ÇİVİ: "ne zamandır kâğıtsız" sorusunun cevabı, "en son ne zaman patladı"dan daha
+        // değerli. Her patlamada saati tazelemek, uyarı ne kadar süredir açık bilgisini siler.
+        _store.SetPaperWarning("t1", true, "PrintBeforeMF", now: 1_700_000_000_000);
+        _store.SetPaperWarning("t1", true, "Start", now: 1_700_000_999_000);
+
+        var u = _store.ReadPaperWarning("t1");
+        Assert.Equal(1_700_000_000_000, u!.Value.GorulmeMs);   // İLK saat korundu
+        Assert.Equal("Start", u.Value.Adim);                   // adım tazelendi
+    }
+
+    [Fact]
+    public void KAGIT_UYARISI_kapatilinca_duser()
+    {
+        _store.SetPaperWarning("t1", true, "PrintBeforeMF", now: 1_700_000_000_000);
+        Assert.NotNull(_store.ReadPaperWarning("t1"));
+
+        _store.SetPaperWarning("t1", false);
+        Assert.Null(_store.ReadPaperWarning("t1"));
+    }
+
     // ── GÖVDE ───────────────────────────────────────────────────────────────────
 
     [Fact]

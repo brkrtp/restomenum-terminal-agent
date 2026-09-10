@@ -82,7 +82,28 @@ public sealed record TicketQueryResult(
     string Durum, string? TicketId, string? SaleSessionId,
     long? TotalMinor, long? PaidMinor, bool? LedgerWritten,
     int? PendingFinishAttempts, string? PendingFinishStep, string? PendingFinishCode,
-    bool DeviceBusy = false);
+    bool DeviceBusy = false,
+
+    /// <param name="PaperWarningAt">
+    /// <b>W120 — KÂĞIT UYARISI, fişten BAĞIMSIZ.</b> Cihazın <c>0x0020</c> dediği ANIN damgası
+    /// (unix ms). <c>null</c> = uyarı YOK.
+    ///
+    /// <para><b>Neden ayrı ve kalıcı:</b> kâğıt durumu bir DENEMENİN özelliği değil, CİHAZIN
+    /// durumudur. 2026-09-10 03:23'te ölçüldü: baskı <c>0x0020</c> ile patladı, kasaya
+    /// <c>OUT_OF_PAPER</c> GİTTİ (kasa gövdeyi gösterdi) — ama süpürme fişi <b>6,1 saniyede</b>
+    /// kapattı ve uyarı ekrandan silindi. Kullanıcı kâğıdın bittiğini HİÇ görmedi ve ruloyu
+    /// ancak elle müdahale ederken fark etti.</para>
+    ///
+    /// <para><b>İLK görülme saatidir, sonuncu değil</b> — "ne zamandır kâğıtsız" sorusu, "en son
+    /// ne zaman patladı"dan daha değerli.</para>
+    ///
+    /// <para><b>Yalnız BAŞARILI bir baskı düşürür.</b> Fişin kapanması, denemenin çözülmesi ya da
+    /// zamanın geçmesi düşürmez — düşürselerdi uyarı yine kaybolurdu.</para>
+    /// </param>
+    long? PaperWarningAt = null,
+
+    /// <param name="PaperWarningStep">Uyarının doğduğu çağrı adı (<c>"Start"</c>, <c>"PrintBeforeMF"</c>…).</param>
+    string? PaperWarningStep = null);
 
 /// <summary><c>MessageCategory: "TicketQuery"</c> zarfının ayrıştırılması.</summary>
 public static class TicketQueryParser
@@ -136,6 +157,8 @@ public static class TicketQueryHandler
     public static TicketQueryResult Cevapla(CommandStore defter, TicketQueryRequest istek,
         bool cihazMesgul = false)
     {
+        // W120: kâğıt uyarısı fişten BAĞIMSIZ — hangi dala düşersek düşelim taşınır.
+        var kagit = defter.ReadPaperWarning(istek.PoiId);
         // ── 1. BU TERMİNALDE AÇIK BAĞ VAR MI ──────────────────────────────────────
         var acikFis = defter.ReadOpenTicketId(istek.PoiId);
         var acikOturum = defter.ReadOpenTicketBinding(istek.PoiId);
@@ -146,7 +169,7 @@ public static class TicketQueryHandler
             // Kimliksiz soru + defterde bağ yok = "bağlı açık fiş YOK". Bunu `UNKNOWN` ile aynı
             // kelimeye koymak, kasanın iki ayrı olguyu ayırt edememesi demekti.
             return new TicketQueryResult(AcikFisYok, null, null, null, null, null, null, null, null,
-                cihazMesgul);
+                cihazMesgul, kagit?.GorulmeMs, kagit?.Adim);
 
         var bekleyen = defter.PendingFinishes(long.MaxValue).FirstOrDefault(x => x.TicketId == hedef);
         int? denemeler = bekleyen.TicketId == hedef ? bekleyen.Attempts : null;
@@ -154,21 +177,24 @@ public static class TicketQueryHandler
         // ── 2. AÇIK MI ────────────────────────────────────────────────────────────
         if (hedef == acikFis)
             return new TicketQueryResult("OPEN", hedef, acikOturum, null, null, null,
-                denemeler, bekleyen.LastStep, bekleyen.LastCode, cihazMesgul);
+                denemeler, bekleyen.LastStep, bekleyen.LastCode, cihazMesgul,
+                kagit?.GorulmeMs, kagit?.Adim);
 
         // ── 3. KAPANDI MI ─────────────────────────────────────────────────────────
         var kapanis = defter.ReadClosedTicket(hedef);
         if (kapanis is { } k)
             return new TicketQueryResult("CLOSED", hedef, k.Row.SaleSessionId,
                 k.Row.TotalMinor, k.Row.PaidMinor, k.Notified,
-                denemeler, bekleyen.LastStep, bekleyen.LastCode, cihazMesgul);
+                denemeler, bekleyen.LastStep, bekleyen.LastCode, cihazMesgul,
+                kagit?.GorulmeMs, kagit?.Adim);
 
         // ── 4. DEFTERDE İZ YOK ────────────────────────────────────────────────────
         // ⚠️ Bu "AÇIK" DEĞİLDİR. Kapanmış ve saklama süresi (7 gün) dolmuş olabilir, ya da bu
         // ajanın hiç görmediği bir fiş olabilir. "Bilmiyorum" demek, yanlış bir kesinlik
         // yaymaktan iyidir — kasanın yanlış uyarısı tam olarak öyle bir kesinlikten doğdu.
         return new TicketQueryResult("UNKNOWN", hedef, null, null, null, null,
-            denemeler, bekleyen.LastStep, bekleyen.LastCode, cihazMesgul);
+            denemeler, bekleyen.LastStep, bekleyen.LastCode, cihazMesgul,
+            kagit?.GorulmeMs, kagit?.Adim);
     }
 
     /// <summary>Yanıt gövdesi — <c>SaleToPOIResponse</c> zarfı, veriler <c>Restomenum</c> altında.</summary>
@@ -180,7 +206,12 @@ public static class TicketQueryHandler
             // W115: HER ZAMAN konur (ölçülmeyen değil, ölçülen bir olgu — kilit ya tutuluyordur
             // ya tutulmuyordur). Yeniden başlatmadan ÖNCE buna bakılmalı.
             ["deviceBusy"] = sonuc.DeviceBusy,
+            // W120: HER ZAMAN konur — `false` "kâğıt var" demek ve bu da bir beyandır.
+            // Alanı yalnız uyarı varken koymak, kasanın "temizlendi"yi görmesini engellerdi.
+            ["paperWarning"] = sonuc.PaperWarningAt is not null,
         };
+        if (sonuc.PaperWarningAt is long pw) ek["paperWarningAt"] = pw;
+        if (sonuc.PaperWarningStep is string pws) ek["paperWarningStep"] = pws;
         // Ölçülmeyen alan KONMAZ. Alanın yokluğu "bilinmiyor" demektir; 0 ya da false koymak
         // kasaya olmayan bir kesinlik satmak olurdu.
         if (sonuc.TicketId is not null) ek["ticketId"] = sonuc.TicketId;

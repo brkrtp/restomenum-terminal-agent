@@ -75,9 +75,18 @@ public class GmpTerminalTransportTests
         public GmpResult PrintBeforeMF(ulong h, int? t = null)
         { Sureler.Add(("PrintBeforeMF", t)); return Kod("PrintBeforeMF"); }
         public GmpResult PrintUserMessage(ulong h) => Kod("PrintUserMessage");
+        /// <summary>
+        /// ⚠️ `Codes["PrintMF"]` ÖNCE bakılır, sonra <see cref="PrintMfFailures"/>. Eskiden yalnız
+        /// sayaç okunuyordu ve `Codes` SESSİZCE yok sayılıyordu — bir testi kurarken belirli bir
+        /// kodu (0x0020) verdim, sahte onu yuttu ve test yanlış sebeple kırmızıya döndü.
+        /// Sahtenin sessizce yok saydığı ayar, yanlış teşhis üretir.
+        /// </summary>
         public GmpResult PrintMF(ulong h, int? t = null)
-        { Sureler.Add(("PrintMF", t)); Calls.Add("PrintMF");
-          return new GmpResult(PrintMfFailures-- > 0 ? 1u : GmpCodes.Ok); }
+        {
+            Sureler.Add(("PrintMF", t)); Calls.Add("PrintMF");
+            if (Codes.TryGetValue("PrintMF", out var c)) return new GmpResult(c);
+            return new GmpResult(PrintMfFailures-- > 0 ? 1u : GmpCodes.Ok);
+        }
         /// <summary>W60 yoklamasinin denedigi indirim cagrilari — istekler SIRAYLA kaydedilir.</summary>
         public List<(long Amount, string Text, int Index)> MinusCalls { get; } = new();
         public List<(int Rate, string Text, int Index)> DecCalls { get; } = new();
@@ -1126,6 +1135,19 @@ public class GmpTerminalTransportTests
             return v.Deneme + 1;
         }
 
+        /// <summary>W120: kâğıt uyarısı — `null` = uyarı yok.</summary>
+        public (long GorulmeMs, string? Adim)? KagitUyarisi;
+        public List<string> KagitSirasi { get; } = new();
+        public void SetPaperWarning(string terminalId, bool var, string? step = null, long? now = null)
+        {
+            KagitSirasi.Add(var ? "ac:" + step : "kapat");
+            // Gerçek depo gibi: İLK görülme saati korunur, yalnız adım tazelenir.
+            KagitUyarisi = var
+                ? (KagitUyarisi?.GorulmeMs ?? (now ?? 1_700_000_000_000), step)
+                : null;
+        }
+        public (long GorulmeMs, string? Adim)? ReadPaperWarning(string terminalId) => KagitUyarisi;
+
         public void ClearPendingFinish(string ticketId)
         {
             BekleyenSirasi.Add("clearPending:" + ticketId);
@@ -2060,6 +2082,124 @@ public class GmpTerminalTransportTests
         Assert.Equal(RestomenumReasons.OutOfPaper, r.Reason);
         Assert.Equal("PrintBeforeMF", r.PrintFailedStep);
         Assert.Equal("0x0020", r.PrintFailedCode);            // HAM kod da gidiyor
+    }
+
+    [Fact]
+    public async Task KAGIT_UYARISI_fis_KAPANSA_BILE_DURUR()
+    {
+        // ← ÇİVİ: BU GECENİN EN İNCE HATASI. Baskı 0x0020 ile patladı, kasaya `OUT_OF_PAPER`
+        // GİTTİ (kasa gövdeyi gösterdi) — ama süpürme fişi 6,1 SANİYEDE kapattı ve uyarı
+        // ekrandan silindi. Kullanıcı kâğıdın bittiğini HİÇ görmedi; rulonun bittiğini ancak
+        // elle müdahale ederken fark etti.
+        //
+        // Kurtarmayı 83 dakikadan 6 saniyeye indirirken uyarıyı da onunla birlikte silmişiz.
+        // Kâğıt durumu bir DENEMENİN özelliği değil, CİHAZIN durumudur.
+        var (t, g) = TamOdemeKur();
+        var snap = (FakeSnapshots)null!;
+        // TamOdemeKur kendi deposunu kuruyor; burada kendi kurulumumuzu yapıyoruz.
+        g = new FakeGmp();
+        snap = new FakeSnapshots();
+        g.Ticket = new GmpTicket(990, 0, 0, 0);
+        g.AfterPayment = new GmpTicket(990, 990, 1, GmpPaymentTypes.Cash);
+        g.Codes["PrintBeforeMF"] = GmpCodes.NoPaper;
+        t = new GmpTerminalTransport(g, snap);
+
+        await t.SaleAsync(Req(amount: 990, paymentType: GmpPaymentTypes.Cash,
+            oturum: "oturum-A", satisToplam: 990));
+
+        // Uyarı AÇIK ve hangi adımda doğduğu yazılı.
+        Assert.NotNull(snap.KagitUyarisi);
+        Assert.Equal("PrintBeforeMF", snap.KagitUyarisi!.Value.Adim);
+
+        // ← ÇİVİ: kurtarma fişi kapatınca uyarı DÜŞMEZ... ama BAŞARILI baskı düşürür.
+        // İkisi ayrı: fişin kapanması kâğıdın geldiğini KANITLAMAZ, baskı kanıtlar.
+        g.Codes.Remove("PrintBeforeMF");
+        g.Codes["Start"] = GmpCodes.AlreadyDone;
+        g.Ticket = new GmpTicket(990, 990, 1, GmpPaymentTypes.Cash,
+            TransactionFlags: TicketFlags.TotalsAndPaymentsPrinted);
+        ((IStuckTicketFinisher)t).FinishStuckTicket(uygula: true);
+
+        Assert.Null(snap.KagitUyarisi);                       // başarılı baskı düşürdü
+        Assert.Equal(new[] { "ac:PrintBeforeMF", "kapat" }, snap.KagitSirasi);
+    }
+
+    [Fact]
+    public void Kurtarma_BASARISIZSA_kagit_uyarisi_DURUR()
+    {
+        // ← ÇİVİ: uyarıyı düşüren şey "kurtarma çalıştı" DEĞİL, "baskı BAŞARDI" olmalı.
+        // Kâğıt hâlâ yokken kurtarma denemesi de patlar; orada uyarıyı düşürmek, kâğıdın
+        // geldiğini cihaz söylemeden İDDİA ETMEK olurdu — ve rozet sönerdi.
+        var g = new FakeGmp();
+        var snap = new FakeSnapshots();
+        snap.BindOpenTicket("t1", "oturum-A");              // bağ: terminal kimliği buradan okunur
+        snap.SetPaperWarning("t1", true, "PrintBeforeMF");
+        g.Codes["Start"] = GmpCodes.AlreadyDone;
+        g.Codes["PrintMF"] = GmpCodes.NoPaper;              // kâğıt hâlâ yok
+        g.Ticket = new GmpTicket(990, 990, 1, GmpPaymentTypes.Cash,
+            TransactionFlags: TicketFlags.TotalsAndPaymentsPrinted);
+        var t = new GmpTerminalTransport(g, snap);
+
+        var s = ((IStuckTicketFinisher)t).FinishStuckTicket(uygula: true);
+
+        Assert.False(s.Kapandi);
+        Assert.NotNull(snap.KagitUyarisi);                  // ← uyarı DURUYOR
+        Assert.Equal("PrintMF", snap.KagitUyarisi!.Value.Adim);   // ve adım TAZELENDİ
+    }
+
+    [Fact]
+    public void BIRDEN_COK_bag_varsa_kagit_uyarisina_DOKUNULMAZ()
+    {
+        // ← ÇİVİ: hangi terminalin kâğıdı bittiği BELİRSİZ. Rastgele birine yazmak, başka bir
+        // kasanın cihazına ait sağlık bilgisini bu cihaza atfetmek olurdu. `TekBag`'daki
+        // ilkenin aynısı: belirsizlikte iddia edilmez.
+        var g = new FakeGmp();
+        var snap = new FakeSnapshots();
+        snap.BindOpenTicket("t1", "oturum-A");
+        snap.BindOpenTicket("t2", "oturum-B");
+        g.Codes["Start"] = GmpCodes.AlreadyDone;
+        g.Ticket = new GmpTicket(990, 990, 1, GmpPaymentTypes.Cash,
+            TransactionFlags: TicketFlags.MfPrinted);
+        var t = new GmpTerminalTransport(g, snap);
+
+        ((IStuckTicketFinisher)t).FinishStuckTicket(uygula: true);
+
+        Assert.Empty(snap.KagitSirasi);   // ne açıldı ne kapatıldı
+    }
+
+    [Fact]
+    public void KURU_PROVA_kagit_uyarisini_DUSURMEZ()
+    {
+        // ← ÇİVİ: kuru prova hiçbir şey BASMAZ, dolayısıyla kâğıdın geldiğini KANITLAMAZ.
+        // Düşürseydi, cihaza hiç dokunmadan "kâğıt geldi" iddia etmiş olurduk.
+        var g = new FakeGmp();
+        var snap = new FakeSnapshots();
+        snap.SetPaperWarning("t1", true, "PrintBeforeMF");
+        g.Codes["Start"] = GmpCodes.AlreadyDone;
+        g.Ticket = new GmpTicket(990, 990, 1, GmpPaymentTypes.Cash,
+            TransactionFlags: TicketFlags.TotalsAndPaymentsPrinted);
+        var t = new GmpTerminalTransport(g, snap);
+
+        ((IStuckTicketFinisher)t).FinishStuckTicket(uygula: false);
+
+        Assert.NotNull(snap.KagitUyarisi);
+    }
+
+    [Fact]
+    public async Task Start_KAGIT_BITTI_derse_uyari_ORADA_dogar()
+    {
+        // Sahada ölçüldü (03:02:57): rulo tamamen çıkıkken cihaz fişi AÇMAYI reddediyor.
+        // Baskıya hiç gelinmiyor — uyarı orada doğmazsa hiç doğmaz.
+        var g = new FakeGmp();
+        var snap = new FakeSnapshots();
+        g.Codes["Start"] = GmpCodes.NoPaper;
+        var t = new GmpTerminalTransport(g, snap);
+
+        var r = await t.SaleAsync(Req(amount: 990, paymentType: GmpPaymentTypes.Cash, satisToplam: 990));
+
+        Assert.Equal(TransportOutcome.Declined, r.Outcome);
+        Assert.Equal(RestomenumReasons.OutOfPaper, r.Reason);
+        Assert.NotNull(snap.KagitUyarisi);
+        Assert.Equal("Start", snap.KagitUyarisi!.Value.Adim);
     }
 
     [Fact]

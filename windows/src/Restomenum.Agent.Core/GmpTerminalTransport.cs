@@ -103,6 +103,11 @@ public sealed partial class GmpTerminalTransport : ITerminalTransport
         GmpTicket? devamFisi = null;                  // W41: `DevamDogrula`'nin OKUDUGU fis
         var r = _gmp.Start(out var handle);
 
+        // W120: cihaz daha fişi AÇARKEN "kâğıt bitti" diyorsa uyarı ORADA doğar — baskıya hiç
+        // gelinmiyor, dolayısıyla aşağıdaki dal çalışmıyor (sahada ölçüldü, 03:02:57).
+        if (r.Code == GmpCodes.NoPaper)
+            _snapshots?.SetPaperWarning(request.TerminalId, true, "Start");
+
         if (r.Code == GmpCodes.AlreadyDone)
         {
             // Cihazda acik fis var. TEK soru: bu fis BU satisa mi ait?
@@ -394,6 +399,13 @@ public sealed partial class GmpTerminalTransport : ITerminalTransport
             if (baskiAdim is not null && baskiKod is { } bk)
                 // ⚠️ Zaman aşımı ile RET ayrı sebeplerdir: "cevap gelmedi" ile "cevap geldi ve
                 // hayır dedi" farklı olgular. `Close` ayrı: orada kâğıt/yazıcı sorusu yoktur.
+                // ── W119: KASAYA NE GÖNDERDİĞİMİZİ GÜNLÜĞE YAZ ──────────────────
+                // Kör noktaydı: `[gmp] baskı adımı başarısız` yalnız ADIMI ve KODU yazıyordu,
+                // o koddan TÜRETTİĞİMİZ sebebi değil. Kullanıcı "kâğıt bittiği hâlde UI'a
+                // gitmedi" dediğinde ajan tarafından DOĞRULAYAMADIM — gövde de loglanmıyor
+                // (bilerek: kart/kişisel veri taşıyabilir). Sebep serbest metin değil, kapalı
+                // bir sözlükten geliyor; onu yazmak gizlilik riski taşımaz ve "gönderdik mi"
+                // sorusunu ölçülebilir yapar.
                 baskiSebebi = bk.Code switch
                 {
                     // Cihaz KÂĞIT BİTTİ dedi — çıkarım değil, beyan (ölçüm 2026-09-10 02:21).
@@ -406,6 +418,20 @@ public sealed partial class GmpTerminalTransport : ITerminalTransport
                         : GmpCodes.IsTimeout(bk.Code) ? RestomenumReasons.PrintTimeout
                                                       : RestomenumReasons.PrintFailed,
                 };
+            if (baskiSebebi is not null)
+                _log("[gmp] kasaya bildirilen baskı sebebi", new
+                {
+                    request.CommandId, reason = baskiSebebi,
+                    printFailedStep = baskiAdimi, printFailedCode = baskiKodu,
+                });
+
+            // ── W120: KÂĞIT UYARISI FİŞTEN BAĞIMSIZ YAŞAR ────────────────────────
+            // Bu satış çözülse, fiş kapansa, kasa kaydı tazelense bile uyarı DURUR.
+            // Yalnız BAŞARILI bir baskı düşürür — kâğıdın geldiğinin kanıtı odur.
+            if (baskiSebebi == RestomenumReasons.OutOfPaper)
+                _snapshots?.SetPaperWarning(request.TerminalId, true, baskiAdimi);
+            else if (kapandi && baskiAdimi is null)
+                _snapshots?.SetPaperWarning(request.TerminalId, false);
             if (kapandi)
             {
                 fisDurumu = "CLOSED";

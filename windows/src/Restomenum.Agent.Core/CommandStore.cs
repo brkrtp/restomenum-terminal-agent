@@ -170,6 +170,24 @@ public sealed class CommandStore : ITicketSnapshotStore, IDisposable
                 """;
             cmd.ExecuteNonQuery();
 
+            // ── W120: CİHAZ SAĞLIK DURUMU (kâğıt) ─────────────────────────────────────
+            // Kâğıt durumu bir DENEMENİN özelliği DEĞİL, CİHAZIN durumudur. Bugüne kadar yalnız
+            // o denemenin `reason` alanında taşınıyordu ve deneme çözülünce bilgi de kayboluyordu.
+            //
+            // SAHADA ÖLÇÜLDÜ (2026-09-10 03:23): baskı 0x0020 ile patladı, kasaya `OUT_OF_PAPER`
+            // GİTTİ (kasa gövdeyi gösterdi, uçtan uca testle de kanıtlı) — ama süpürme fişi
+            // **6,1 saniyede** kapattı ve uyarı ekrandan silindi. Kullanıcı kâğıdın bittiğini
+            // HİÇ görmedi. Kurtarmayı 83 dakikadan 6 saniyeye indirirken uyarıyı da silmişiz.
+            //
+            // Bu kayıt uyarıyı fişten BAĞIMSIZ kılar: yalnız BAŞARILI bir baskı düşürür.
+            cmd.CommandText = @"
+                CREATE TABLE IF NOT EXISTS device_health (
+                    terminal_id       TEXT PRIMARY KEY,
+                    paper_warning_at  INTEGER,
+                    paper_seen_step   TEXT
+                )";
+            cmd.ExecuteNonQuery();
+
             // ── W105: TAMAMLANMAYI BEKLEYEN FİŞ ───────────────────────────────────────
             // Baskı zinciri yarıda kalınca fiş ÜZERİNDE PARAYLA açık kalır ve bugün onu kimse
             // tekrar denemez: ajan çalışmaya devam eder, kasa masayı kapatamaz, arıza insan
@@ -662,6 +680,55 @@ public sealed class CommandStore : ITicketSnapshotStore, IDisposable
             cmd.Parameters.AddWithValue("$sonra",
                 (now ?? DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()) + (long)sure.TotalMilliseconds);
             cmd.ExecuteNonQuery();
+        }
+    }
+
+    /// <summary>
+    /// <b>W120</b> — kâğıt uyarısını AÇAR ya da KAPATIR.
+    ///
+    /// <para><b>Açan:</b> cihazın <c>0x0020</c> beyanı. <b>Kapatan:</b> YALNIZ başarılı bir baskı —
+    /// yani kâğıdın gerçekten geldiğinin KANITI. Fişin kapanması, denemenin çözülmesi ya da
+    /// zamanın geçmesi uyarıyı DÜŞÜRMEZ; düşürselerdi uyarı yine kaybolurdu.</para>
+    /// </summary>
+    public void SetPaperWarning(string terminalId, bool var, string? step = null, long? now = null)
+    {
+        lock (_gate)
+        {
+            using var cmd = _conn.CreateCommand();
+            if (var)
+            {
+                // İlk görülme saati KORUNUR (çakışmada yalnız adım tazelenir): "ne zamandır
+                // kâğıtsız" sorusunun cevabı, en son ne zaman patladığından daha değerli.
+                cmd.CommandText = @"
+                    INSERT INTO device_health (terminal_id, paper_warning_at, paper_seen_step)
+                    VALUES ($t, $now, $adim)
+                    ON CONFLICT(terminal_id) DO UPDATE SET paper_seen_step = $adim";
+                cmd.Parameters.AddWithValue("$now", now ?? DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+                cmd.Parameters.AddWithValue("$adim", (object?)step ?? DBNull.Value);
+            }
+            else
+            {
+                cmd.CommandText = @"
+                    UPDATE device_health SET paper_warning_at = NULL, paper_seen_step = NULL
+                    WHERE terminal_id = $t";
+            }
+            cmd.Parameters.AddWithValue("$t", terminalId);
+            cmd.ExecuteNonQuery();
+        }
+    }
+
+    /// <summary>Kâğıt uyarısı açık mı? <c>null</c> = uyarı YOK.</summary>
+    public (long GorulmeMs, string? Adim)? ReadPaperWarning(string terminalId)
+    {
+        lock (_gate)
+        {
+            using var cmd = _conn.CreateCommand();
+            cmd.CommandText =
+                "SELECT paper_warning_at, paper_seen_step FROM device_health WHERE terminal_id = $t";
+            cmd.Parameters.AddWithValue("$t", terminalId);
+            using var r = cmd.ExecuteReader();
+            if (!r.Read() || r.IsDBNull(0)) return null;
+            return (r.GetInt64(0), r.IsDBNull(1) ? null : r.GetString(1));
         }
     }
 

@@ -152,6 +152,16 @@ public interface ITicketSnapshotStore
     void ClearPendingFinish(string ticketId);
 
     /// <summary>
+    /// <b>W120</b> — kâğıt uyarısı. Açan: cihazın <c>0x0020</c> beyanı. Kapatan: YALNIZ başarılı
+    /// bir baskı. Fişin kapanması uyarıyı DÜŞÜRMEZ — düşürseydi uyarı yine kaybolurdu
+    /// (ölçüldü: kurtarma 6,1 sn'de kapattı, kullanıcı kâğıdın bittiğini hiç görmedi).
+    /// </summary>
+    void SetPaperWarning(string terminalId, bool var, string? step = null, long? now = null);
+
+    /// <summary>Kâğıt uyarısı açık mı? <c>null</c> = uyarı YOK.</summary>
+    (long GorulmeMs, string? Adim)? ReadPaperWarning(string terminalId);
+
+    /// <summary>
     /// <b>W108</b> — otomatik denemeleri insan ölçeğine erteler. <b>Vazgeçme DEĞİL, silme DEĞİL:</b>
     /// fişte para var; yalnız cihazı süresiz meşgul etmeyi bırakırız.
     /// </summary>

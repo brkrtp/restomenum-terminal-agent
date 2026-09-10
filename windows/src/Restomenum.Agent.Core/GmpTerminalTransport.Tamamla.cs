@@ -44,6 +44,28 @@ public sealed partial class GmpTerminalTransport : IStuckTicketFinisher
         }
 
         var s = TicketFinishRunner.Calistir(_gmp, handle, uygula, _log, butce);
+
+        // ── W120: KÂĞIT UYARISININ TEK MEŞRU KAPATICISI ─────────────────────────
+        // Uyarıyı yalnız BAŞARILI bir baskı düşürür ve kurtarma zinciri tam da odur:
+        // `PrintTotalsAndPayments` + `PrintBeforeMF` + `PrintMF` geçtiyse kâğıt GERÇEKTEN
+        // gelmiştir — bu bir çıkarım değil, cihazın üç ayrı onayı.
+        // ⚠️ Kuru prova (`uygula: false`) buraya zararsız düşer ve AYRI bir koruma gerektirmez:
+        // o yolda hiçbir baskı çağrılmaz, dolayısıyla `Kapandi` false ve `Kod` null olur —
+        // yani ne düşürme ne açma dalı çalışır. (Mutasyon testi bunu gösterdi: `uygula &&`
+        // eklemek davranışı DEĞİŞTİRMİYORDU, yani bir kapı değil gürültüydü.)
+        //
+        // ⚠️ TERMİNAL KİMLİĞİ `_terminalId`'DEN ALINMAZ — o alan YALNIZ bu süreçte bir satış
+        // geçtiyse dolu. Test bunu yakaladı: ajan yeniden başladıktan sonra süpürme çalışırsa
+        // `_terminalId` BOŞ olur ve kâğıt uyarısı başarılı kurtarmaya rağmen HİÇ DÜŞMEZ —
+        // rozet sonsuza kadar açık kalırdı. Kimlik defterden okunur (bağ ya da tek terminal).
+        var kagitTerminali = _terminalId.Length > 0 ? _terminalId : TekTerminal();
+        if (_snapshots is { } d && kagitTerminali is not null)
+        {
+            if (s.Kapandi) d.SetPaperWarning(kagitTerminali, false);
+            else if (s.Kod == $"0x{GmpCodes.NoPaper:X4}")
+                d.SetPaperWarning(kagitTerminali, true, s.BasarisizAdim);
+        }
+
         if (!s.Kapandi)
             return new StuckTicketResult(false, false, Meshgul: false, s.Plan, s.Bayraklar,
                 s.BasarisizAdim, s.Kod, s.ToplamMinor, s.TahsilMinor);
@@ -64,6 +86,18 @@ public sealed partial class GmpTerminalTransport : IStuckTicketFinisher
 
         return new StuckTicketResult(true, false, false, s.Plan, s.Bayraklar,
             s.BasarisizAdim, s.Kod, s.ToplamMinor, s.TahsilMinor, fisId);
+    }
+
+    /// <summary>
+    /// Kâğıt uyarısının yazılacağı terminal — <c>_terminalId</c> boşken (bu süreçte henüz satış
+    /// geçmemiş) defterdeki açık bağdan okunur. Birden çok bağ varsa <c>null</c>: yanlış
+    /// terminale sağlık bilgisi yazmaktansa hiç yazmamak doğru.
+    /// </summary>
+    private string? TekTerminal()
+    {
+        if (_snapshots is not { } defter) return null;
+        var baglar = defter.AllOpenTicketBindings();
+        return baglar.Count == 1 ? baglar[0].TerminalId : null;
     }
 
     /// <summary>

@@ -1294,6 +1294,82 @@ public class LocalSaleHandlerTests : IDisposable
     }
 
     [Fact]
+    public async Task BELIRSIZ_sonucta_paymentInvoked_FALSE_govdeye_kadar_TASINIR()
+    {
+        // ← ÇİVİ: bu, kilidi açan alan. Sahada (2026-09-10 03:04) kâğıtsız cihaz `FP3_Start`'ı
+        // reddetti, taşıma `PaymentInvoked:false` üretti — ama belirsizlik yolu onu düşürdü ve
+        // kasaya `paymentInvoked:true` gitti. Kasa "para hareket etmiş OLABİLİR" deyip masayı
+        // kilitledi; kullanıcı HİÇ tahsilat yapamaz hâle geldi. Oysa cihaz izi kanıtladı:
+        // `FP3_Payment` hiç çağrılmamıştı.
+        //
+        // Orkestratör testi `AgentOutcome.Result`ı çiviliyor; bu test ondan GÖVDEYE kadar olan
+        // yolu çiviliyor. İkisi ayrı: alan doğru üretilip son adımda düşebilir (W30'da tam
+        // olarak öyle olmuştu — `Info` sessizce kaybolmuştu).
+        var (h, sim, _) = Kur(new PaymentDetailResult.Ok(Detail()),
+            terminal: new TransportResult(TransportOutcome.Unknown,
+                ProviderResultCode: "Start:0x0020", ErrorCondition: "PaymentRestriction",
+                PaymentInvoked: false, Reason: RestomenumReasons.OutOfPaper));
+        sim.ProbeResult = new PaymentProbe(ProbeVerdict.Indeterminate, Note: "fiş okunamadı: 0x0020");
+
+        var ek = System.Text.Json.JsonDocument.Parse(await h.HandleAsync(Req())).RootElement
+            .GetProperty("SaleToPOIResponse").GetProperty("Restomenum");
+
+        Assert.False(ek.GetProperty("paymentInvoked").GetBoolean());
+        Assert.Equal(RestomenumReasons.OutOfPaper, ek.GetProperty("reason").GetString());
+    }
+
+    [Fact]
+    public async Task Tasima_HIC_cevap_uretmediyse_paymentInvoked_TRUE_kalir()
+    {
+        // ← ÇİVİ: FAIL-SAFE VARSAYILAN. Bir önceki test "bildiğimizi taşı" diyor; bu test
+        // "bilmediğimizde YANLIŞ TARAFA düşme" diyor. İkisi zıt yönde ve ikisi de gerekli:
+        // varsayılanı `false` yapmak, kart çekilmiş OLABİLECEK bir denemeyi kasaya
+        // "kart kesinlikle çekilmedi" diye bildirmek olurdu — kasiyer aynı tutarı ikinci kez
+        // çeker. Bu, bu gece iki kez uğraştığımız ÇİFT TAHSİLATIN ta kendisi.
+        var (h, _, _) = Kur(new PaymentDetailResult.Ok(Detail()));
+
+        // Süresi GEÇMİŞ deneme: taşıma hiç çağrılmaz, sonuç üretilmez (`Result` null).
+        var gecmis = DateTimeOffset.UtcNow.AddHours(-1);
+        var ek = System.Text.Json.JsonDocument.Parse(
+                await h.HandleAsync(Req("svc-eski"))).RootElement
+            .GetProperty("SaleToPOIResponse").GetProperty("Restomenum");
+        _ = gecmis;
+
+        // Varsayılanın kendisi: alan varsa TRUE olmalı (yanlış bir kesinlik yayma).
+        if (ek.TryGetProperty("paymentInvoked", out var pi))
+            Assert.True(pi.GetBoolean(), "bilinmiyorsa 'kart çekildi' denir — tersi çift tahsilat üretir");
+    }
+
+    [Fact]
+    public async Task KAGIT_BITTI_gercekten_GOVDEYE_giriyor_mu()
+    {
+        // ← ÇİVİ: kullanıcı "kâğıt bittiği hâlde UI'a gitmedi" dedi ve ben ajan tarafından
+        // DOĞRULAYAMADIM — gönderdiğim `reason`ı loglamıyordum, gövdeyi de loglamıyorum.
+        // Taşıma katmanı testi `r.Reason`ı çiviliyordu ama GÖVDEYE kadar olan yolu hiçbir test
+        // izlemiyordu. W30'da tam bu yolda bir alan (`Info`) sessizce düşmüştü; aynı aile.
+        //
+        // "Gönderiyorum" demek yerine ÖLÇÜYORUM.
+        var (h, _, _) = Kur(new PaymentDetailResult.Ok(Detail()),
+            terminal: new TransportResult(TransportOutcome.Approved,
+                ApprovedAmountMinor: 24000, ProviderResultCode: "0x0000",
+                TicketState: "OPEN",
+                Reason: RestomenumReasons.OutOfPaper,
+                PrintFailedStep: "PrintBeforeMF", PrintFailedCode: "0x0020"));
+
+        var yanit = System.Text.Json.JsonDocument.Parse(await h.HandleAsync(Req())).RootElement
+            .GetProperty("SaleToPOIResponse");
+        var ek = yanit.GetProperty("Restomenum");
+
+        // Sonuç `Success` KALIR — para alındı. Sebep taşımak "reddedildi" demek değil.
+        Assert.Equal("Success",
+            yanit.GetProperty("PaymentResponse").GetProperty("Response").GetProperty("Result").GetString());
+        Assert.Equal("OUT_OF_PAPER", ek.GetProperty("reason").GetString());
+        Assert.Equal("PrintBeforeMF", ek.GetProperty("printFailedStep").GetString());
+        Assert.Equal("0x0020", ek.GetProperty("printFailedCode").GetString());
+        Assert.Equal("OPEN", ek.GetProperty("ticketState").GetString());
+    }
+
+    [Fact]
     public void Kilit_tavani_kasanin_180_saniyesinin_ALTINDA()
     {
         // Aritmetik çivi: tavan 180'i aşarsa kasa yine cevapsız kalır ve bu düzeltmenin

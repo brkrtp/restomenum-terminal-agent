@@ -1,4 +1,4 @@
-namespace Restomenum.Agent.Core;
+﻿namespace Restomenum.Agent.Core;
 
 /// <summary>Orkestratörün dış dünyaya verdiği karar.</summary>
 public enum AgentDecision
@@ -206,7 +206,19 @@ public sealed class AgentOrchestrator
             }
             catch (Exception e)
             {
+                // ── W118: TAŞIMANIN KESİN CEVABI BELİRSİZLİKTE KAYBOLMAZ ────────────
+                // Sahada ısırdı (2026-09-10 03:04): kâğıtsız cihaz `FP3_Start`'ı `0x0020` ile
+                // reddetti; taşıma bunu DOĞRU okuyup `PaymentInvoked: false` üretti (ödeme
+                // adımına HİÇ gelinmedi). Ama bu dal `Result: null` geçtiği için aşağıda
+                // `o.Result?.PaymentInvoked ?? true` devreye girdi ve kasaya
+                // **`paymentInvoked: true`** gitti. Kasa "para hareket etmiş OLABİLİR" deyip
+                // masayı kilitledi — oysa cihaz izinde `FP3_Payment` HİÇ ÇAĞRILMAMIŞTI.
+                //
+                // `?? true` fail-safe varsayılanı DOĞRU ve kalıyor: bilmiyorsak "çağrıldı" deriz.
+                // Kusur varsayılanda değil, BİLDİĞİMİZİ taşımamaktaydı — sistem "bilmiyorum"
+                // derken aslında biliyordu.
                 return new AgentOutcome(AgentDecision.Unresolved, cmd.State,
+                    Result: ilk,
                     Note: $"{note}; terminale ulaşılamadı: {e.Message}");
             }
         }
@@ -214,7 +226,9 @@ public sealed class AgentOrchestrator
         if (sonuc is null)
         {
             // Sorgu bütçesi tükendi. **Tahmin edilmez** — insana gider.
+            // W118: ama taşımanın BİLDİĞİ (ödeme çağrıldı mı) korunur; bkz. yukarıdaki not.
             return new AgentOutcome(AgentDecision.Unresolved, cmd.State,
+                Result: ilk,
                 Note: $"{note}; {politika.MaxAttempts} denemede terminal cevap vermedi ({sonHata})");
         }
 
@@ -268,7 +282,9 @@ public sealed class AgentOrchestrator
                     : $"{note}; ödeme terminalde işlenmemiş (çıkarım, kanıt yok)");
         }
 
+        // W118: taşımanın kesin cevabı korunur (bkz. yukarıdaki not).
         return new AgentOutcome(AgentDecision.Unresolved, cmd.State,
+            Result: ilk,
             Note: $"{note}; akıbet belirlenemedi ({sonuc.Note})");
     }
 

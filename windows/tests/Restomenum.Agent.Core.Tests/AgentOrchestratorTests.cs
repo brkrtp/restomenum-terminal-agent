@@ -334,4 +334,51 @@ public class AgentOrchestratorTests : IDisposable
     // çivili: `Busy_ParaHareketEtmisOlabilir_TerminaleSorulur` ve
     // `Timeout_KismiOdeme_CiftTahsilatUretmez`. Kasanın 180 sn'lik kapısı o vakaların YENİ bir
     // tetikleyicisi; kuralı değiştirmiyor, dolayısıyla ayrı bir çivi eklemiyorum.
+    // ── W118: TAŞIMANIN KESİN CEVABI BELİRSİZLİKTE KAYBOLMAZ ────────────────────
+
+    [Fact]
+    public async Task Belirsizlikte_tasimanin_paymentInvoked_FALSE_cevabi_KORUNUR()
+    {
+        // SAHADA ISIRDI (2026-09-10 03:04): kâğıtsız cihaz `FP3_Start`'ı 0x0020 ile reddetti.
+        // Taşıma bunu DOĞRU okuyup `PaymentInvoked: false` üretti — ödeme adımına HİÇ gelinmedi
+        // (cihaz izi kanıtladı: `FP3_Payment` hiç çağrılmadı). Ama belirsizlik dalı `Result: null`
+        // geçtiği için `?? true` devreye girdi ve kasaya `paymentInvoked: true` gitti.
+        // Kasa "para hareket etmiş OLABİLİR" deyip masayı kilitledi ve kullanıcı hiç tahsilat
+        // yapamaz hâle geldi. Sistem "bilmiyorum" derken aslında BİLİYORDU.
+        var sim = new SimulatorTransport();
+        // Taşıma kesin konuşuyor: ödeme çağrılmadı.
+        sim.Expect(new TransportResult(TransportOutcome.Unknown,
+            ProviderResultCode: "Start:0x0020", ErrorCondition: "PaymentRestriction",
+            PaymentInvoked: false, Reason: RestomenumReasons.OutOfPaper));
+        // Yoklama da karar veremiyor → `Unresolved`. (Sahada: `fiş okunamadı: 0x0020`.)
+        sim.ProbeResult = new PaymentProbe(ProbeVerdict.Indeterminate, Note: "fiş okunamadı: 0x0020");
+
+        var orch = Orch(sim);
+        var sonuc = await orch.HandleAsync(Req(), DateTimeOffset.UtcNow.AddHours(1).ToUnixTimeMilliseconds());
+
+        Assert.Equal(AgentDecision.Unresolved, sonuc.Decision);
+        // ← ÇİVİ: `?? true` fail-safe varsayılanı DOĞRU ve duruyor — ama BİLDİĞİMİZİ ezmemeli.
+        Assert.NotNull(sonuc.Result);
+        Assert.False(sonuc.Result!.PaymentInvoked);
+        Assert.Equal(RestomenumReasons.OutOfPaper, sonuc.Result.Reason);
+    }
+
+    [Fact]
+    public async Task Yoklama_HIC_cevap_veremezse_de_tasimanin_cevabi_KORUNUR()
+    {
+        // ← ÇİVİ: belirsizliğin İKİ ayrı çıkışı var — "yoklama karar veremedi" ve "yoklama hiç
+        // cevap vermedi (bütçe tükendi)". İkisi ayrı `return` ve ikisi de `Result`ı taşımalı.
+        // Yalnız birini düzeltmek, aynı hatanın diğer kapıdan girmesi demekti.
+        var sim = new SimulatorTransport().WithBusyReads(99);   // yoklama hep meşgul → bütçe tükenir
+        sim.Expect(new TransportResult(TransportOutcome.Unknown,
+            ProviderResultCode: "Start:0x0020", ErrorCondition: "PaymentRestriction",
+            PaymentInvoked: false, Reason: RestomenumReasons.OutOfPaper));
+
+        var orch = Orch(sim);
+        var sonuc = await orch.HandleAsync(Req(), DateTimeOffset.UtcNow.AddHours(1).ToUnixTimeMilliseconds());
+
+        Assert.Equal(AgentDecision.Unresolved, sonuc.Decision);
+        Assert.NotNull(sonuc.Result);
+        Assert.False(sonuc.Result!.PaymentInvoked);
+    }
 }
