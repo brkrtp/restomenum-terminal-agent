@@ -1011,3 +1011,52 @@ bilinçli: bu gece tek noktaya bağlı üç savunmanın da (E61 alan yolu, kâğ
 uyarısı, `finishTicket` testsizliği) sessizce öldüğünü gördük.
 
 Mutasyon: 5 mutasyon, hepsi kırmızı. 646/646 yeşil.
+
+---
+
+## W139 — HER GMP ÇAĞRISI KENDİ SOKETİNİ AÇIP KAPATIYOR
+
+Kablo testlerinin izini okurken çıktı; keepalive tartışmasının tamamını
+açıklıyor.
+
+Başarılı bir satışın DLL izi:
+
+```
+FP3_Start         Socket Opened … Socket Closed
+FP3_TicketHeader  Socket Opened … Socket Closed
+FP3_OptionFlags   Socket Opened … Socket Closed
+FP3_ItemSale      Socket Opened … Socket Closed
+FP3_Payment       Socket Opened … Socket Closed
+```
+
+**Ajan ile cihaz arasında sürekli bir bağlantı YOK.** Her komut için yeni bir
+TCP oturumu kuruluyor, komut biter bitmez kapanıyor.
+
+### Keepalive neden hiçbir turda devreye girmedi
+
+Keepalive **kurulu** bir bağlantıyı yoklar. Burada bağlantı yalnız tek bir
+çağrının süresi boyunca var. Kısa çağrılarda (ölçülen: `FP3_Payment` nakit
+akışında **0,44 sn**, `FP3_ItemSale` 0,47 sn) yoklanacak pencere pratikte yok.
+
+⇒ Keepalive ancak **tek bir çağrı uzun sürerse** anlamlı. Öyle tek bir çağrı
+var: `FP3_Payment (TO : 90000)` — ve yalnız **kart** ödemesinde uzun sürüyor,
+çünkü cihaz "kartı okutun" ekranında insanı bekliyor ve soket açık kalıyor.
+
+> Nakit akışında kopma penceresini elle yakalamak **imkânsız**: `FP3_Payment`
+> 0,44 saniye sürüyor. Bu, üç D2 denemesinin neden hep `FP3_Start`ın
+> connect'inde yakalanıp `0xF000` ürettiğini de açıklıyor.
+
+### Sınanacak tahmin (kart turu)
+
+| | beklenen |
+|---|---|
+| `paymentInvoked` | **true** (ilk kez) |
+| kod | **0xF003 TIMEOUT** — `0xF000` DEĞİL, çünkü soket KURULUYKEN koparılacak |
+| süre | 90 sn'lik `TO` dolmadan dönmeli; ne kadar kısaldığı asıl ölçüm |
+
+### Yan sonuç: bağlantı maliyeti
+
+Her çağrı bir TCP el sıkışması demek. Cihaz erişilebilirken bu milisaniyeler
+(ölçülen soket açılış→kapanış: 0,35–1,6 sn arası, komuta göre). Ama cihaz
+ERİŞİLEMEZKEN her çağrı kendi 3 × 21 saniyesini ödüyor — kurtarma zincirinin
+neden bu kadar uzun sürebildiğinin bir parçası da bu.
