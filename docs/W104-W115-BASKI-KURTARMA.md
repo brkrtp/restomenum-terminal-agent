@@ -943,3 +943,36 @@ W134'teki "bedavaya kazanç" önerisi **geri çekildi**.
 ⚠️ Ve `FP3_Payment` 00:54:57.993'te çağrıldı, 00:54:58.439'da OK döndü — yani
 `paymentInvoked: true` doğru. Kasa tarafının bu bayrağa dayanarak "para
 çekilmedi" dememesi, ölçümle desteklendi.
+
+---
+
+## W137 — 21 saniye SABİT DEĞİL: ilk deneme ısınmış ağda kısalıyor
+
+W134/W135'te "3 × 21 sn = 66 sn taban" demiştim. D1'in 2. turu bunu düzeltti.
+
+```
+1. deneme  01:00:45.243 → 01:00:53.297 =  8,05 sn   ← KISA
+2. deneme  01:00:54.311 → 01:01:15.334 = 21,02 sn
+3. deneme  01:01:16.347 → 01:01:37.369 = 21,02 sn
+           01:01:38.378  FP3_Start → 0xF000 PORT_NOT_OPEN
+           cihaz bacağı toplam 53,14 sn
+```
+
+Karşılaştırma: kablonun uzun süredir çekik olduğu ilk ölçümde üç denemenin
+**üçü de** 21,03/21,04 sn sürmüş ve toplam 66,13 sn olmuştu.
+
+Aradaki fark, panelin bildirdiği 68/73 sn ile 56 sn arasındaki farkı da
+açıklıyor — gürültü değil, **ilk denemenin süresi.**
+
+**Neden:** bu turdan hemen önce (00:54–00:55) kablo takılıydı ve bağlantı
+gerçekten kurulmuştu. İşletim sisteminin ağ komşuluk durumu "ısınmış" olduğu
+için ilk `connect()` tam zaman aşımını beklemeden düştü. Sonraki denemeler o
+durum bayatlayınca tam 21 saniyeye çıktı.
+
+> **Düzeltme:** 21 saniye bir ÜST sınır, sabit değil. Ölçülen aralık şu an
+> 8,05 – 21,04 sn. Dolayısıyla "66 saniye taban" ifadesi de yanlış; toplam,
+> kablonun ne kadar süredir çekik olduğuna göre **53–66 sn** arasında değişiyor.
+
+Tahmin tuttu: bağlantı hiç kurulamadığı için keepalive yine devreye girmedi ve
+kod `0xF000` (PORT_NOT_OPEN) geldi, `0xF003` değil. D2 (bağlantı kuruluyken
+kopma) hâlâ keepalive'ın asıl sınavı.
