@@ -311,3 +311,57 @@ UCUZ (sınırsız): cihazın kesin cevabı, `0x0020` dahil.
   (E44), ama çok kasalı kurulumda diğer istasyonlar öğrenmez.
 - `FP3_GetCurrentFiscalCounters` **ölçülmedi** (cihaza gidiyor mu bilinmiyor).
 - Fiziksel kâğıtta toplam bloğunun bir kez mi iki kez mi basıldığı — kullanıcıda.
+
+---
+
+## W124 — Kâğıt uyarısı temizlendikten sonra bir daha hiç açılmıyordu
+
+**Belirti (kullanıcı, üç tur):** "Kağıt bitti bilgisini UI frontendde göremiyorum."
+
+**Yanlış aradığım yerler:** olayın kasaya gidip gitmediği, `reason` eşlemesi,
+süpürmenin uyarıyı düşürüp düşürmediği. Hepsi doğruydu.
+
+**İmza (ölçüm 2026-09-10 04:31):**
+
+```
+KAGIT UYARISI : YOK | adim: PrintBeforeMF
+```
+
+Adım dolu, saat boş. İkisi bir arada olamaz — `SetPaperWarning(true)` çağrıldı,
+adımı yazdı, saati yazmadı.
+
+**Kök sebep:** `device_health` satırı bir kez oluştuktan sonra
+
+```sql
+ON CONFLICT(terminal_id) DO UPDATE SET paper_seen_step = $adim
+```
+
+yalnız adımı tazeliyor, `paper_warning_at`'ı NULL bırakıyordu. `paperWarning`
+alanı `PaperWarningAt is not null` ile hesaplandığından uyarı **ilk temizlikten
+sonra bir daha hiç açılmadı**. "İlk görülme saatini koru" niyetiyle yazılmıştı;
+uyarı **kapalıyken** açılmasını da engellediği fark edilmemişti.
+
+**Düzeltme:** `paper_warning_at = COALESCE(device_health.paper_warning_at, $now)`
+— doluysa dokunma (ilk görülme korunur), NULL ise şimdiyi yaz (uyarı açılır).
+
+**Testler bunu neden kaçırdı:** sahte depo doğru davranıyordu (`?? now`); yani
+**sahte, gerçeği yansıtmıyordu**. Yeşil 618 test, gerçek SQL'deki kusurun
+üstünü örtüyordu. Yeni çivi `KAGIT_UYARISI_TEMIZLENDIKTEN_SONRA_TEKRAR_ACILABILIR`
+**gerçek `CommandStore`'a** karşı koşuyor. Mutasyon: eski SQL → KIRMIZI,
+`$now` (son görülme) → KIRMIZI.
+
+> **Kural:** sahtenin gerçekten davranışça ayrıldığı her nokta, yeşil bir testin
+> altında saklanan bir kusurdur. Kalıcılık davranışı gerçek depoya karşı çivilenir.
+
+### Yan ölçüm — kâğıt bilgisinin ömrü 3 ms
+
+```
+04:29:36.779  { PrintBeforeMF, code = 0x0020 }   ← kâğıt bitti, TEK sefer
+04:29:36.782  { reason = OUT_OF_PAPER }          ← 3 ms sonra kasaya
+04:29:46 →    35 deneme, hepsi 0xF01C DEVICE_BUSY
+```
+
+Cihaz kâğıtsızlığı **bir kez** bildirir. Sonrasında kendi penceresi açık olduğu
+için her komuta yalnız "meşgulüm" der — yani kâğıt durumu **sorulabilir bir şey
+değil, yakalanması gereken bir an**. Kaçırılırsa geri getirilemez; bu yüzden
+kalıcılık kusuru doğrudan görünmezliğe dönüşüyordu.
