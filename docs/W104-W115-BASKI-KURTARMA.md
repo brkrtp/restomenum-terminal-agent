@@ -731,3 +731,58 @@ başlatıldıktan sonra aynı istek 300 bayt oldu (fark tam 17 = 66−49) ve **g
 > yapılmıyor olabilir. Sahte depo gerçeği yansıtmıyordu (W124); mutasyon betiği
 > dosyayı geri koyarken zaman damgasını kaybedip bayat derleme ölçüyordu; şimdi
 > de yeni kod eski süreçte ölçüldü. **Kod değişti ≠ çalışan kod değişti.**
+
+---
+
+## W133 — `IsTcpKeepAlive` AÇILDI (yapılandırma değişikliği, kod değil)
+
+**Tarih:** 2026-09-11 00:11 · **Dosya:** `publish/host-windows/GMP.XML`
+**Yedek:** `GMP.XML.keepalive-oncesi-<damga>` (aynı klasörde)
+
+```
+<IsTcpKeepAlive>FALSE</IsTcpKeepAlive>   →   TRUE      (tek satır, bayt düzeyinde)
+```
+
+### Belge ne diyor (`GMP3 OPTIMIZASYONU_TR`, s.2)
+
+> Değer TRUE olarak ayarlandığında, cihaz ile yazılım arasındaki bağlantı periyodik
+> olarak (**AckTimeOut süresi baz alınarak**) kontrol edilir. Bağlantının kopması
+> durumunda, çalışmakta olan GMP fonksiyonunun **tanımlı timeout süresi beklenmeden**
+> `DLL_RETCODE_TIMEOUT` (0xF003) hatası döndürülür.
+
+⚠️ **Dil farkı kayda geçsin:** bu paragrafta "tavsiye ederiz" **geçmiyor** — tarif
+ediyor. Aynı belgede `LogThreadOpen` için *"önemle tavsiye ederiz"*, Ethernet için
+*"önerilmektedir"*, hafifletilmiş sorgular için *"rica ederiz"* yazıyor. Yani
+`IsTcpKeepAlive` bir optimizasyon belgesinde faydası anlatılarak yer alıyor;
+fiilen öneri, ama açık bir tavsiye fiili yok.
+
+### Şartlar sağlanıyor (ölçüldü)
+
+| şart | değer |
+|---|---|
+| Ethernet bağlantısı | `IsTcpConnection TRUE`, 192.168.1.189:7500 |
+| DLL ≥ 16v25 | **16.38.0.0** |
+| `AckTimeOut` | 3000 ms |
+| `CommTimeOut` | 90000 ms |
+
+### Beklenen davranış değişikliği
+
+Kopma artık `CommTimeOut`'u (90 sn) beklemeden bildirilmeli. Bugün ölçtüğümüz
+`0xF003`'ler ~100 saniyeydi ve bu `CommTimeOut`'a çok yakındı — kablo testlerinde
+(D1–D3) bu sürenin **saniyeler mertebesine** inmesi bekleniyor. **Ölçülmedi;**
+kablo turunda doğrulanacak.
+
+### Yeniden başlatma ölçümleri (00:11)
+
+```
+00:11:26  status=0x0000001D sağlıklı
+00:11:33  EŞLEŞME BAŞARILI — INGENICO/IDE281 seri=2B25035325
+00:11:45  departman tablosu bildirildi (12)
+```
+
+**Bonus:** kâğıt uyarısı yeniden başlatmayı ATLATTI — `paperWarning True`,
+damga 23:47:29 değişmedi. Uyarı bellekte değil defterde yaşıyor; ilk kez
+doğrulandı.
+
+⚠️ **Kod yayımlanmadı.** Çalışan ikili hâlâ 2026-09-10 16:51 derlemesi.
+W129/W130 (anahtar sınırı 128 + ayrışan red sebebi) commit'li ama SAHADA DEĞİL.
