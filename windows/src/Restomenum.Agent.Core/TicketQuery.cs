@@ -1,4 +1,4 @@
-using System.Text.Json;
+﻿using System.Text.Json;
 using System.Text.Json.Nodes;
 
 namespace Restomenum.Agent.Core;
@@ -82,6 +82,20 @@ public sealed record TicketQueryResult(
     string Durum, string? TicketId, string? SaleSessionId,
     long? TotalMinor, long? PaidMinor, bool? LedgerWritten,
     int? PendingFinishAttempts, string? PendingFinishStep, string? PendingFinishCode,
+
+    /// <param name="DeviceBusy">
+    /// ⚠️ <b>ADI YANILTICI — bu CİHAZIN durumu DEĞİL, AJANIN durumu.</b> Kaynağı
+    /// <c>_islemKilidi.CurrentCount == 0</c>: ajanın kendi süreç-içi semaforu. Satış, bakım
+    /// turu ve süpürme aynı kilidi alır.
+    ///
+    /// <para><b>Ölçüldü (2026-09-10 04:45):</b> süpürme <c>0xF01C RECV_BUSY</c> ile dönerken —
+    /// yani CİHAZ komut kabul etmezken — bu alan <c>false</c> okundu. Çelişki değil: süpürme
+    /// kilidi denemenin 5,5 saniyesinde tutar, aradaki ~10 saniyede bırakır (görev oranı ~%35).
+    /// Sorgu boşluğa denk gelirse <c>false</c> görür.</para>
+    ///
+    /// <para><b>Sonuç:</b> <c>false</c>, "cihaz kullanılabilir" DEMEK DEĞİLDİR. Cihazın gerçek
+    /// durumunu <see cref="PaperWarningAt"/> ve <see cref="PendingFinishCode"/> taşır.</para>
+    /// </param>
     bool DeviceBusy = false,
 
     /// <param name="PaperWarningAt">
@@ -252,6 +266,9 @@ public static class TicketQueryHandler
         {
             ek["pendingFinish"] = true;
             ek["pendingFinishAttempts"] = n;
+            // W122: sinyal SAYIYA DEĞİL, ANLAMA bağlansın — panel eşiği kendi bilmek zorunda
+            // kalmasın. Eşik burada değişirse panel kendiliğinden doğru kalır.
+            ek["finishStalled"] = n >= LocalSaleHandler.TamamlamaOtomatikSiniri;
             if (sonuc.PendingFinishStep is not null) ek["pendingFinishStep"] = sonuc.PendingFinishStep;
             if (sonuc.PendingFinishCode is not null) ek["pendingFinishCode"] = sonuc.PendingFinishCode;
         }

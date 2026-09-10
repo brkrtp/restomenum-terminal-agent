@@ -249,6 +249,45 @@ public class TicketSweepTests : IDisposable
     }
 
     [Fact]
+    public async Task SINIRSIZ_DENEME_SESSIZ_DONGU_OLMAMALI()
+    {
+        // ← ÇİVİ: "8'de dur" ile "sonsuza kadar dene" arasındaki seçim, asıl kusuru gizliyordu.
+        // İKİSİ DE SESSİZDİ. Eski hâl durup susuyordu; W121 sonrası durmuyor ama yine susuyordu.
+        //
+        // Sahada ölçüldü (2026-09-10 04:29→04:54): kâğıt bitti, süpürme 89 denemedir aynı yerde
+        // (`Start`/`0xF01C`), üzerinde 990 kuruş olan fiş 25 dakikadır kapanamıyor ve NE KASA
+        // NE PANEL bunu biliyor. Panel kasiyere hâlâ "rulo takın, fiş kendiliğinden kapanacak"
+        // diyor — 89 denemelik bir durumda bu YANLIŞ UMUT.
+        //
+        // Doğru davranış: denemeye DEVAM ET (fişte para var, vazgeçmek yok) ama GÖRÜNÜR ol.
+        var (h, tasima) = Kur();
+        tasima.Sonuc = new StuckTicketResult(false, false, false,
+            new FisBitirmePlani(FisBitirmeAdimi.MfVeKapat, TicketFinish.Tamamlanabilir, 5),
+            0, "PrintBeforeMF", "0x0020");
+        _store.MarkTicketNeedsFinish("tkt_1", "t1", "oturum-A", null, null, 0, _saatMs);
+
+        // Yedi deneme: HENÜZ bağırma. Erken alarm, alarmı değersizleştirir.
+        for (var i = 0; i < 7; i++) { await h.DrainOutboxAsync(); _saatMs += 10 * 60_000; }
+        Assert.False(LogVar("KURTARILAMIYOR"), "sekizden önce alarm vermemeliydi");
+
+        // Sekizinci: SES ÇIKAR.
+        await h.DrainOutboxAsync(); _saatMs += 10 * 60_000;
+        Assert.True(LogVar("KURTARILAMIYOR"), "sekizinci denemede sesini çıkarmalıydı");
+
+        // Ama denemeyi BIRAKMAZ — üzerinde para olan fiş unutulmaz.
+        Assert.False(LogVar("otomatik denemeler DURDURULDU"));
+        Assert.Single(_store.PendingFinishes(_saatMs));
+
+        // Ve HER TURDA bağırmaz: 9→25 arasında yalnız 10 ve 20'de. Sürekli WARN, gürültüdür.
+        for (var i = 0; i < 17; i++) { await h.DrainOutboxAsync(); _saatMs += 10 * 60_000; }
+        var kez = _loglar.Count(l => l.Mesaj.Contains("KURTARILAMIYOR"));
+        Assert.Equal(3, kez);   // 8, 10, 20
+
+        // Süpürme gerçekten denemeye devam etmiş olmalı (sesin bedeli durmak DEĞİL).
+        Assert.True(tasima.Cagrilar.Count >= 25, $"deneme {tasima.Cagrilar.Count}, durmamalıydı");
+    }
+
+    [Fact]
     public async Task UCUZ_basarisizlikta_aralik_SABIT_10_sn_buyumez()
     {
         // ← ÇİVİ: üstel geri çekilmenin varlık sebebi PAHALI denemeyi seyreltmek. `0x0020`

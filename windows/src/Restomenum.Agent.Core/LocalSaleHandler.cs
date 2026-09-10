@@ -101,7 +101,7 @@ public sealed class LocalSaleHandler : IDeviceIdleGate
     /// otomatik yol susar. Elle tamamlama her an çalışır; <c>TicketQuery</c> durumu göstermeye
     /// devam eder. <b>Vazgeçme yok:</b> fişte gerçek para var.</para>
     /// </summary>
-    private const int TamamlamaOtomatikSiniri = 8;
+    internal const int TamamlamaOtomatikSiniri = 8;
 
     /// <summary>
     /// <b>W114 — hangi başarısızlıklar OTOMATİK SINIRA TABİ.</b>
@@ -1201,6 +1201,31 @@ public sealed class LocalSaleHandler : IDeviceIdleGate
                     });
                 continue;
             }
+            // ══ W122 — SINIRSIZ DENEME, SESSİZ DÖNGÜ DEĞİL ═══════════════════════════
+            //
+            // Ölçüm (2026-09-10 04:29→04:52): kâğıt bitti, süpürme **83 denemedir** aynı yerde
+            // (`Start`/`0xF01C`) ve üzerinde **990 kuruş** olan fiş 23 dakikadır kapanamıyor.
+            // W121 sayesinde artık 8'de durmuyor — bu DOĞRU — ama hâlâ kimseye bir şey
+            // söylemiyordu. Eski hâl 8'de durup susuyordu; yenisi durmuyor ama yine susuyordu.
+            // İkisi de aynı kör noktayı paylaşıyor: **kurtarılamayan bir fiş görünmez.**
+            //
+            // Kasiyere dokunan sonucu var: panel bugün "KÂĞIT BİTTİ — rulo takın; fiş
+            // kendiliğinden kapanacak" diyor. 83 denemelik bir durumda o cümle YANLIŞ UMUT.
+            // Panel üçüncü dalı (`yöneticiye bildirin`) ancak bu sinyalle açabilir.
+            //
+            // Eşik YENİ BİR SAYI DEĞİL: pahalı denemelerin otomatik penceresini kapatan aynı
+            // sekiz. Tek sayı, iki sonuç — pahalıysa DURUR, ucuzsa DEVAM EDER ama GÖRÜNÜR olur.
+            //
+            // Her turda bağırmaz: eşiği geçerken bir kez, sonra her 10 denemede bir. Sürekli
+            // WARN, gürültüyle aynı kapıya çıkar ve okunmaz hâle gelirdi.
+            if (deneme == TamamlamaOtomatikSiniri || (deneme > TamamlamaOtomatikSiniri && deneme % 10 == 0))
+                _log("[uyarı] yarım fiş KURTARILAMIYOR — otomatik denemeler SÜRÜYOR ama ilerleme YOK. " +
+                    "Üzerinde PARA VAR; kâğıt/yazıcı durumunu kontrol edin", new
+                    {
+                        f.TicketId, deneme, adim = s.BasarisizAdim, kod = s.Kod,
+                        takiliDk = (int)(simdi - f.MarkedAt) / 60000,
+                    });
+
             var veri = new
             {
                 f.TicketId, deneme, adim = s.BasarisizAdim, kod = s.Kod,

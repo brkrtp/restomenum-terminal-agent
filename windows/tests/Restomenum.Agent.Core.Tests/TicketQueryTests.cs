@@ -296,6 +296,42 @@ public class TicketQueryTests : IDisposable
         Assert.False(ek.TryGetProperty("devicePaidMinor", out _));
     }
 
+    [Theory]
+    [InlineData(1, false)]
+    [InlineData(7, false)]   // eşiğin bir altı — panel hâlâ "rulo takın" diyebilir
+    [InlineData(8, true)]    // eşik — panel üçüncü dala geçmeli
+    [InlineData(94, true)]   // sahada ölçülen (2026-09-10 04:55)
+    public void FINISH_STALLED_govdede_ESIGE_gore_tasinir(int deneme, bool beklenen)
+    {
+        // ← ÇİVİ: MUTASYON BUNU ÖLÜ SAVUNMA OLARAK YAKALADI. Alan gövdeye yazılıyordu ama hiçbir
+        // test okumuyordu; `= false` sabitlensin, 619 test yeşil kalıyordu. Panel ajanı tam bu
+        // alana bakıp kasiyere gösterdiği cümleyi seçecek — okunmayan bir alan, sözleşme değildir.
+        //
+        // Neden önemli: eşiğin ALTINDA panel "rulo takın, fiş kendiliğinden kapanacak" der.
+        // ÜSTÜNDE bu cümle YANLIŞ UMUTTUR (sahada 94 denemedir kapanmıyor) ve panel
+        // "yöneticiye bildirin" demek zorundadır. Sınırı gövde taşır, panel değil.
+        var s = new TicketQueryResult("OPEN", "tkt_1", "oturum-A", null, null, null,
+            deneme, "Start", "0xF01C");
+
+        var ek = JsonDocument.Parse(TicketQueryHandler.Govde(Istek(), s, DateTimeOffset.UtcNow))
+            .RootElement.GetProperty("SaleToPOIResponse").GetProperty("Restomenum");
+
+        Assert.Equal(beklenen, ek.GetProperty("finishStalled").GetBoolean());
+    }
+
+    [Fact]
+    public void FINISH_STALLED_bekleyen_kayit_YOKKEN_hic_yazilmaz()
+    {
+        // Alanın YOKLUĞU "bilinmiyor/geçersiz" demektir — bekleyen kayıt yokken `false` yazmak,
+        // panele "kurtarma denendi ve takılmadı" gibi olmayan bir kesinlik satardı.
+        var s = new TicketQueryResult("CLOSED", "tkt_1", "oturum-A", null, null, true, null, null, null);
+
+        var ek = JsonDocument.Parse(TicketQueryHandler.Govde(Istek(), s, DateTimeOffset.UtcNow))
+            .RootElement.GetProperty("SaleToPOIResponse").GetProperty("Restomenum");
+
+        Assert.False(ek.TryGetProperty("finishStalled", out _));
+    }
+
     [Fact]
     public void Govde_sorgu_basarili_sayilir_fis_durumu_ne_olursa_olsun()
     {
