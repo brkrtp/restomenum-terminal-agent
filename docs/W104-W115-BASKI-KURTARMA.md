@@ -894,3 +894,52 @@ kez düzeltme *hiç* uygulanmadığı hâlde uygulanmış görünüyordu. Panel 
 "açılış izinden doğrula" uyarısı olmasa "yaptım" diye rapor edilecekti.
 **Yapılandırma değişikliği, çalışan sistemde doğrulanana kadar yapılmamış
 sayılır.**
+
+---
+
+## W136 — 3 × 21 SANİYE ÖLÜ ZAMAN DEĞİL, **KURTARMA PENCERESİ**. Önerim yanlıştı.
+
+W134'te "66 saniyenin 44'ü boşa gidiyor, `IpRetryCount` 3→1 yapılsın" dedim.
+W135'te DLL'in bunu kabul etmediğini ölçtüm. **İyi ki etmemiş.**
+
+### Ölçüm (D1, 1. tur — kablo yarıda geri takıldı)
+
+```
+00:54:17.565  Socket Opened                        ← 1. deneme
+00:54:38.599  WSA Connect 10060                    ← 21,03 sn, BAŞARISIZ
+00:54:39.607  Socket Opened                        ← 2. deneme
+00:54:55.109  Socket Closed  (hata YOK)            ← BAĞLANDI, 15,5 sn içinde
+00:54:55.110  FP3_Start → TRAN_RESULT_OK
+00:54:55.111  FP3_TicketHeader → OK
+00:54:56.707  FP3_OptionFlags  → OK
+00:54:57.103  FP3_ItemSale     → OK
+00:54:57.993  FP3_Payment      → OK      ← PARA GERÇEKTEN ALINDI
+              … fiş kapandı, 990/990, mali fiş kesildi
+```
+
+Kullanıcı kabloyu ~00:54:55'te geri taktı. **İkinci deneme onu yakaladı** —
+kendi 21 saniyelik penceresinin 15,5. saniyesinde, 5,5 saniye payla.
+
+### Önerim uygulansaydı ne olurdu
+
+`IpRetryCount = 1` ile **tek** deneme olurdu: 00:54:17 → 00:54:38'de başarısız.
+Kablo 16,5 saniye SONRA geri geldi. Ödeme reddedilirdi ve 9,90 TL tahsil
+edilemezdi.
+
+> **"Boşa giden 44 saniye" diye adlandırdığım şey, kablonun geri takılması için
+> tanınan süreymiş.** Ölçümü doğru yapmıştım (3 × 21 sn), ANLAMINI yanlış
+> okudum: bir maliyet sandım, oysa bir kurtarma penceresiymiş.
+
+Bu, aynı sayıya bakıp iki farklı sonuca varmanın örneği. Farkı yaratan şey ek
+bir ölçüm değil, **senaryonun değişmesiydi** (kablo geri takılınca ne oluyor).
+Kablo çekik KALIRSA 44 saniye gerçekten boşa gidiyor; geri TAKILIRSA parayı
+kurtarıyor. İkisi aynı ayarla yönetiliyor ve ikinci hâl daha değerli.
+
+### Sonuç
+
+`IpRetryCount` 3'te KALMALI. DLL'in değeri reddetmesi kusur değil, koruma.
+W134'teki "bedavaya kazanç" önerisi **geri çekildi**.
+
+⚠️ Ve `FP3_Payment` 00:54:57.993'te çağrıldı, 00:54:58.439'da OK döndü — yani
+`paymentInvoked: true` doğru. Kasa tarafının bu bayrağa dayanarak "para
+çekilmedi" dememesi, ölçümle desteklendi.
