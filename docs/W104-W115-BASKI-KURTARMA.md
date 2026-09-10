@@ -786,3 +786,66 @@ doğrulandı.
 
 ⚠️ **Kod yayımlanmadı.** Çalışan ikili hâlâ 2026-09-10 16:51 derlemesi.
 W129/W130 (anahtar sınırı 128 + ayrışan red sebebi) commit'li ama SAHADA DEĞİL.
+
+---
+
+## W134 — keepalive AÇILDI ama bu senaryoda DEVREYE GİRMEDİ (ölçüldü)
+
+Kablo çekikken ödeme (D1), aynı senaryo iki ayarla:
+
+| | `cihazMs` | `toplamMs` |
+|---|---|---|
+| `IsTcpKeepAlive FALSE` | 66 163 | 68 112 |
+| `IsTcpKeepAlive TRUE` | **66 160** | 73 196 |
+
+**Cihaz bacağı 3 milisaniye farkla aynı.** Toplamdaki ~5 saniye tamamen bizim
+bulut bacağımızdan (`tutarMs` 790→5926, `oturumMs` 373→5483) — cihazdan değil.
+Yani "biraz uzadı" yorumu yanlış olurdu; cihaz tarafında hiçbir şey değişmedi.
+
+### 66 saniyenin tamamı (GMPDLL izi)
+
+```
+00:15:53.034  Socket Opened
+00:16:14.073  WSA Connect. WSAGetLastError = 10060      ← 21,04 sn
+00:16:15.088  Socket Opened
+00:16:36.113  WSA Connect. WSAGetLastError = 10060      ← 21,03 sn
+00:16:37.115  Socket Opened
+00:16:58.156  WSA Connect. WSAGetLastError = 10060      ← 21,04 sn
+00:16:59.162  Connection Error
+              FP3_Start → 0x0000F000 DLL_RETCODE_PORT_NOT_OPEN
+```
+
+`66,13 sn = 3 × 21 sn + ~1 sn aralar`. KAPALI koşu birebir aynı desende
+(23:52:19.487 → 23:53:25.634 = 66,15 sn).
+
+### Süreyi belirleyen şey GMP.xml DEĞİL
+
+- `AckTimeOut` (3000) × `IpRetryCount` (3) döngüsü **çalışmadı**: 3 deneme oldu
+  (`IpRetryCount`) ama her denemenin süresini `AckTimeOut` belirlemedi.
+- `CommTimeOut`'a (90 000) **dayanılmadı**.
+- Süreyi belirleyen: **işletim sisteminin TCP connect zaman aşımı**
+  (`WSAETIMEDOUT`, hata 10060) — Windows'ta ~21 sn. GMP.xml'deki hiçbir ayar
+  bunu etkilemiyor.
+- Dönen kod `0xF003 TIMEOUT` değil, **`0xF000 PORT_NOT_OPEN`**.
+
+### Keepalive neden girmedi — kesin sebep
+
+Keepalive **KURULU** bir bağlantıyı yoklar. Burada soket hiç bağlanamadı; hata
+`connect()` aşamasında. Ortada canlı tutulacak bağlantı YOK. DLL izinde
+keepalive'a dair tek satır bile geçmiyor.
+
+> **Belge yanlış değil**, senaryo farklıydı: belge "ödeme işlemi başlatıldıktan
+> SONRA yaşanabilecek bir kesinti" diyor. Bizimki baştan kopuk bir hedefe
+> bağlanma denemesiydi.
+
+### D2 için düşülen tahmin (sınanacak)
+
+Bağlantı KURULUYKEN kopacağı için keepalive devreye girmeli ve **`0xF003`**
+dönmeli. Bakılacak şey süreden önce **KOD**: `0xF003` → keepalive çalıştı;
+`0xF000` → yine bağlanamama yoluna düşüldü.
+
+### Bedavaya kazanç (ölçüldü, uygulanmadı)
+
+Bu senaryoda 66 saniyenin **44'ü boşa**: ölü adrese üç kez bağlanmayı denemek
+hiçbir şey kazandırmıyor. `IpRetryCount` 3 → 1 bu senaryoyu **~21 saniyeye**
+indirir; cihaz varken davranış değişmez (ilk denemede bağlanır).
