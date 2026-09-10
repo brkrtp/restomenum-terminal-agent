@@ -1114,15 +1114,20 @@ public class GmpTerminalTransportTests
             var deneme = Bekleyen.TryGetValue(ticketId, out var v) ? v.Deneme : 0;
             Bekleyen[ticketId] = (step, code, deneme);
             _bekleyenTerminal[ticketId] = (terminalId, saleSessionId);
+            // Gerçek depo `marked_at`'ı çakışmada TAZELEMEZ — sahte de tazelemeyecek.
+            if (!_bekleyenIsaret.ContainsKey(ticketId))
+                _bekleyenIsaret[ticketId] = now ?? 0;
         }
 
         private readonly Dictionary<string, (string Terminal, string? Oturum)> _bekleyenTerminal = new();
+        private readonly Dictionary<string, long> _bekleyenIsaret = new();
 
         public IReadOnlyList<PendingFinishRow> PendingFinishes(long? now = null)
             => Bekleyen.Select(x => new PendingFinishRow(x.Key,
                 _bekleyenTerminal.TryGetValue(x.Key, out var t) ? t.Terminal : "t1",
                 _bekleyenTerminal.TryGetValue(x.Key, out var o) ? o.Oturum : null,
-                x.Value.Deneme, x.Value.Adim, x.Value.Kod)).ToList();
+                x.Value.Deneme, x.Value.Adim, x.Value.Kod,
+                _bekleyenIsaret.TryGetValue(x.Key, out var i) ? i : 0)).ToList();
 
         /// <summary>Son denemede geçirilen aralık — ucuz/pahalı ayrımının çivisi bunu okur.</summary>
         public TimeSpan? SonAralik;
@@ -1152,6 +1157,7 @@ public class GmpTerminalTransportTests
         {
             BekleyenSirasi.Add("clearPending:" + ticketId);
             Bekleyen.Remove(ticketId);
+            _bekleyenIsaret.Remove(ticketId);
         }
 
         /// <summary>Ertelenen fişler — sahtede zaman yürümediği için yalnız KAYDEDİLİR.</summary>

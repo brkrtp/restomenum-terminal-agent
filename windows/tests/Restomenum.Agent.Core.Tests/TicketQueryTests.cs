@@ -244,6 +244,32 @@ public class TicketQueryTests : IDisposable
     }
 
     [Fact]
+    public void KAGIT_UYARISI_TEMIZLENDIKTEN_SONRA_TEKRAR_ACILABILIR()
+    {
+        // ← ÇİVİ: SAHADA ÜÇ TUR BOYUNCA ISIRDI. Kullanıcı defalarca "UI'da göremiyorum" dedi;
+        // sebebi buydu ve ben başka yerlerde arıyordum.
+        //
+        // `ON CONFLICT ... DO UPDATE SET paper_seen_step = $adim` satır bir kez oluştuktan
+        // sonra yeni uyarının ADIMINI yazıyor ama SAATİNİ yazmıyordu — yani ilk temizlikten
+        // sonra uyarı bir daha HİÇ AÇILMIYORDU. İmzası: `paper_warning_at` NULL iken
+        // `paper_seen_step` dolu (ölçüm 2026-09-10 04:31).
+        //
+        // ⚠️ Eski testler bunu KAÇIRDI çünkü sahte depo doğru davranıyordu; yani sahte,
+        // gerçeği yansıtmıyordu. Bu test GERÇEK depoya karşı koşuyor.
+        _store.SetPaperWarning("t1", true, "PrintBeforeMF", now: 1_700_000_000_000);
+        _store.SetPaperWarning("t1", false);
+        Assert.Null(_store.ReadPaperWarning("t1"));
+
+        // İKİNCİ KEZ AÇ — asıl çivi burası.
+        _store.SetPaperWarning("t1", true, "Start", now: 1_700_000_500_000);
+
+        var u = _store.ReadPaperWarning("t1");
+        Assert.NotNull(u);
+        Assert.Equal(1_700_000_500_000, u!.Value.GorulmeMs);   // yeni olayın saati
+        Assert.Equal("Start", u.Value.Adim);
+    }
+
+    [Fact]
     public void KAGIT_UYARISI_kapatilinca_duser()
     {
         _store.SetPaperWarning("t1", true, "PrintBeforeMF", now: 1_700_000_000_000);

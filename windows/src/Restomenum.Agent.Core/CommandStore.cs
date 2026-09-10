@@ -608,7 +608,7 @@ public sealed class CommandStore : ITicketSnapshotStore, IDisposable
         {
             using var cmd = _conn.CreateCommand();
             cmd.CommandText = """
-                SELECT ticket_id, terminal_id, sale_session_id, attempts, last_step, last_code
+                SELECT ticket_id, terminal_id, sale_session_id, attempts, last_step, last_code, marked_at
                 FROM pending_finish WHERE next_attempt_at <= $now ORDER BY marked_at
                 """;
             cmd.Parameters.AddWithValue("$now", now ?? DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
@@ -617,7 +617,8 @@ public sealed class CommandStore : ITicketSnapshotStore, IDisposable
             while (r.Read())
                 liste.Add(new PendingFinishRow(r.GetString(0), r.GetString(1),
                     r.IsDBNull(2) ? null : r.GetString(2), r.GetInt32(3),
-                    r.IsDBNull(4) ? null : r.GetString(4), r.IsDBNull(5) ? null : r.GetString(5)));
+                    r.IsDBNull(4) ? null : r.GetString(4), r.IsDBNull(5) ? null : r.GetString(5),
+                    r.GetInt64(6)));
             return liste;
         }
     }
@@ -697,12 +698,25 @@ public sealed class CommandStore : ITicketSnapshotStore, IDisposable
             using var cmd = _conn.CreateCommand();
             if (var)
             {
-                // İlk görülme saati KORUNUR (çakışmada yalnız adım tazelenir): "ne zamandır
-                // kâğıtsız" sorusunun cevabı, en son ne zaman patladığından daha değerli.
+                // İlk görülme saati KORUNUR ama YALNIZ uyarı ZATEN AÇIKKEN — `COALESCE` tam
+                // bunu yapar: dolu ise dokunma, NULL ise şimdiyi yaz.
+                //
+                // ⚠️ BU SATIR BİR KUSURU DÜZELTİYOR ve kusur sahada üç tur boyunca kullanıcının
+                // "UI'da göremiyorum" demesine yol açtı. Eskiden `DO UPDATE SET paper_seen_step`
+                // idi: satır bir kez oluştuktan sonra (ve temizlendikten sonra) yeni bir uyarı
+                // ADIMI yazıyor ama SAATİ yazmıyordu — yani uyarı bir daha HİÇ AÇILMIYORDU.
+                // Ölçüm (2026-09-10 04:31): `paper_warning_at` NULL iken `paper_seen_step`
+                // "PrintBeforeMF" — ikisi bir arada olamaz, imza buydu.
+                //
+                // ⚠️ TESTLER BUNU KAÇIRDI çünkü sahte depo doğru davranıyordu (`?? now`) —
+                // yani SAHTE, GERÇEĞİ YANSITMIYORDU. Sahtenin gerçekten ayrıldığı her yer,
+                // yeşil bir testin altında saklanan bir kusurdur.
                 cmd.CommandText = @"
                     INSERT INTO device_health (terminal_id, paper_warning_at, paper_seen_step)
                     VALUES ($t, $now, $adim)
-                    ON CONFLICT(terminal_id) DO UPDATE SET paper_seen_step = $adim";
+                    ON CONFLICT(terminal_id) DO UPDATE SET
+                        paper_warning_at = COALESCE(device_health.paper_warning_at, $now),
+                        paper_seen_step  = $adim";
                 cmd.Parameters.AddWithValue("$now", now ?? DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
                 cmd.Parameters.AddWithValue("$adim", (object?)step ?? DBNull.Value);
             }

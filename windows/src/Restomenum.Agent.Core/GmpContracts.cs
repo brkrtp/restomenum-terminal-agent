@@ -40,9 +40,14 @@ public readonly record struct ClosedTicketRow(
 /// bekleyen fiş. <c>Attempts</c> geri çekilmeyi ve alarm eşiğini sürer; <c>LastStep</c>/<c>LastCode</c>
 /// son denemenin NEREDE ve HANGİ kodla kaldığını taşır — ölçülmediyse <c>null</c>, uydurulmaz.
 /// </summary>
+/// <param name="MarkedAt">
+/// <b>W123</b> — işaretin İLK yazıldığı an (Unix ms). Yeniden işaretleme bunu TAZELEMEZ
+/// (gerçek deponun <c>ON CONFLICT</c>'i <c>marked_at</c>'a dokunmaz), çünkü sorulan soru
+/// "en son ne zaman denendi" değil, <b>"ne kadardır bu fiş kapanamıyor"</b>.
+/// </param>
 public readonly record struct PendingFinishRow(
     string TicketId, string TerminalId, string? SaleSessionId, int Attempts,
-    string? LastStep, string? LastCode);
+    string? LastStep, string? LastCode, long MarkedAt);
 
 public interface ITicketSnapshotStore
 {

@@ -103,7 +103,26 @@ public sealed record TicketQueryResult(
     long? PaperWarningAt = null,
 
     /// <param name="PaperWarningStep">Uyarının doğduğu çağrı adı (<c>"Start"</c>, <c>"PrintBeforeMF"</c>…).</param>
-    string? PaperWarningStep = null);
+    string? PaperWarningStep = null,
+
+    /// <param name="PrintingForMs">
+    /// <b>W123 — baskı KAÇ MİLİSANİYEDİR sürüyor?</b> <c>null</c> = baskı sürmüyor.
+    ///
+    /// <para><b>Neden gerekli (kullanıcı 2026-09-10 04:28'de gördü):</b> kâğıt bittiğinde cihaz
+    /// hemen cevap VERMİYOR — baskı adımında bloke kalıyor ve kodu ancak ~1 dakika sonra
+    /// döndürüyor (ölçüm: satış 04:19:00, kod 04:20:03). O bir dakika boyunca ekranda hiçbir şey
+    /// yoktu ve haklı olarak "UI'da göremiyorum" dendi. Ajanın da söyleyecek bir şeyi yoktu:
+    /// cihaz konuşmamıştı.</para>
+    ///
+    /// <para><b>Ama söyleyebileceği bir şey VARDI:</b> açık fiş var, para alınmış ve baskı
+    /// N saniyedir sürüyor. Bu ÖLÇÜLEN bir olgu, çıkarım değil — normal satışta baskı bir
+    /// saniyeden kısa. Kaynağı W111'in baskıdan ÖNCE yazdığı işaretin damgası.</para>
+    ///
+    /// <para>⚠️ Bu alan <b>"kâğıt bitti" DEMEZ</b> — sebebi bilmiyoruz (kâğıt, kapak, mekanik,
+    /// hat). Kasiyere söylenecek dürüst cümle "yazıcı fişi basamıyor, kontrol edin"dir;
+    /// "kâğıt bitti" ancak <see cref="PaperWarningAt"/> doluyken söylenebilir.</para>
+    /// </param>
+    long? PrintingForMs = null);
 
 /// <summary><c>MessageCategory: "TicketQuery"</c> zarfının ayrıştırılması.</summary>
 public static class TicketQueryParser
@@ -155,7 +174,7 @@ public static class TicketQueryHandler
     public const string AcikFisYok = "NO_OPEN_TICKET";
 
     public static TicketQueryResult Cevapla(CommandStore defter, TicketQueryRequest istek,
-        bool cihazMesgul = false)
+        bool cihazMesgul = false, long? simdiMs = null)
     {
         // W120: kâğıt uyarısı fişten BAĞIMSIZ — hangi dala düşersek düşelim taşınır.
         var kagit = defter.ReadPaperWarning(istek.PoiId);
@@ -176,9 +195,17 @@ public static class TicketQueryHandler
 
         // ── 2. AÇIK MI ────────────────────────────────────────────────────────────
         if (hedef == acikFis)
+        {
+            // W123: işaret VAR ama henüz hiç deneme yapılmamışsa (`Attempts == 0`) baskı hâlâ
+            // sürüyor demektir — işaret baskıdan ÖNCE yazılıyor (W111) ve zincir bitince
+            // düşüyor. Damgası bize "ne kadardır basmaya çalışıyoruz"u verir.
+            long? basiyor = bekleyen.TicketId == hedef && bekleyen.Attempts == 0
+                ? Math.Max(0, (simdiMs ?? DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()) - bekleyen.MarkedAt)
+                : null;
             return new TicketQueryResult("OPEN", hedef, acikOturum, null, null, null,
                 denemeler, bekleyen.LastStep, bekleyen.LastCode, cihazMesgul,
-                kagit?.GorulmeMs, kagit?.Adim);
+                kagit?.GorulmeMs, kagit?.Adim, basiyor);
+        }
 
         // ── 3. KAPANDI MI ─────────────────────────────────────────────────────────
         var kapanis = defter.ReadClosedTicket(hedef);
@@ -210,6 +237,8 @@ public static class TicketQueryHandler
             // Alanı yalnız uyarı varken koymak, kasanın "temizlendi"yi görmesini engellerdi.
             ["paperWarning"] = sonuc.PaperWarningAt is not null,
         };
+        // W123: baskı sürüyorsa ne kadardır sürdüğü. ⚠️ "kâğıt bitti" DEMEZ — sebebi bilmiyoruz.
+        if (sonuc.PrintingForMs is long pf) ek["printingForMs"] = pf;
         if (sonuc.PaperWarningAt is long pw) ek["paperWarningAt"] = pw;
         if (sonuc.PaperWarningStep is string pws) ek["paperWarningStep"] = pws;
         // Ölçülmeyen alan KONMAZ. Alanın yokluğu "bilinmiyor" demektir; 0 ya da false koymak
