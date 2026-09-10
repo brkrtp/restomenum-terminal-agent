@@ -109,6 +109,26 @@ public static class GmpErrorMap
             GmpCodes.AlreadyDone => new(TransportOutcome.Declined, "PaymentRestriction",
                 MoneyRisk.No, RestomenumReasons.TicketAlreadyOpen),
 
+            // ── W117: KÂĞIT BİTTİ — cihaz FİŞİ AÇMAYI BİLE REDDEDİYOR ────────────────
+            // SAHADA ÖLÇÜLDÜ (2026-09-10 03:02:57, rulo fiziksel olarak çıkarılmış):
+            //     FP3_Start → 32 (0x00000020) TRAN_RESULT_NO_PAPER "Kağıt Bitti"   [0,5 sn]
+            // Yani kâğıtsız cihaz yalnız BASKIYI değil, işlemin TAMAMINI reddediyor.
+            //
+            // Eşleme yokken bu kod "kapsanmayan" dala düşüyordu (= belirsiz) ve sonuç şuydu:
+            // ajan `Start`'ı 108 saniye boyunca tekrar tekrar denedi (her biri 0,5 sn'de aynı
+            // cevabı aldı), sonra kasaya `UNKNOWN` döndü. Kasa da belirsiz denemeyi uzlaştırma
+            // turuna soktu — ki dün gece 19,80'lik ÇİFT TAHSİLAT tam olarak o yoldan çıktı.
+            //
+            // Doğru cevap ANINDA ve KESİN, tıpkı `AlreadyDone` gibi: `FP3_Start` reddedildiyse
+            // `FP3_Payment` HİÇ çağrılmadı, yani para hareket EDEMEZ. Kesinlik burada hak
+            // edilmiştir ve kasiyere söylenecek cümle nettir: "kâğıt bitti, rulo takın".
+            //
+            // ⚠️ Bu eşleme YALNIZ ödeme ÖNCESİ adım için. `FP3_Payment` 0x0020 dönerse yukarıdaki
+            // `step == Payment` dalı geçerlidir ve orada kesin-ret ÜRETİLMEZ — o hâlde paranın
+            // hareket edip etmediğini bilemeyiz.
+            GmpCodes.NoPaper => new(TransportOutcome.Declined, "PaymentRestriction",
+                MoneyRisk.No, RestomenumReasons.OutOfPaper),
+
             GmpCodes.RecvBusy => new(TransportOutcome.Busy, "Busy", MoneyRisk.Unknown),
 
             // Belge: "getting this error does not mean that function call was not successful."

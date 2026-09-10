@@ -1,4 +1,4 @@
-using System.Text.Json;
+﻿using System.Text.Json;
 using Restomenum.Agent.Core;
 using Xunit;
 
@@ -329,4 +329,36 @@ public class GmpErrorMapTests
 
     private static JsonElement Ek(string govde) =>
         JsonDocument.Parse(govde).RootElement.GetProperty("SaleToPOIResponse").GetProperty("Restomenum");
+    // ── W117: KÂĞIT BİTTİ, ÖDEME ÖNCESİ ─────────────────────────────────────────
+
+    [Fact]
+    public void Kagit_bittiginde_odeme_ONCESI_KESIN_RET()
+    {
+        // SAHADA ÖLÇÜLDÜ (2026-09-10 03:02:57, rulo fiziksel olarak çıkarılmış):
+        //     FP3_Start → 32 (0x00000020) TRAN_RESULT_NO_PAPER "Kağıt Bitti"  [0,5 sn]
+        // Kâğıtsız cihaz yalnız BASKIYI değil, işlemin TAMAMINI reddediyor.
+        var e = GmpErrorMap.Map(GmpCodes.NoPaper, GmpStep.BeforePayment);
+
+        // ← ÇİVİ: eşleme YOKKEN bu kod "kapsanmayan" dala (belirsiz) düşüyordu ve ajan
+        // `Start`'ı 108 SANİYE boyunca tekrar denedi, sonra kasaya UNKNOWN döndü. Kasa da
+        // belirsiz denemeyi uzlaştırma turuna soktu — dün gece 19,80'lik ÇİFT TAHSİLAT
+        // tam olarak o yoldan çıkmıştı.
+        Assert.Equal(TransportOutcome.Declined, e.Outcome);
+        Assert.Equal("PaymentRestriction", e.ErrorCondition);
+        Assert.Equal(RestomenumReasons.OutOfPaper, e.Reason);
+        // ← ÇİVİ: kesinlik HAK EDİLMİŞ — `FP3_Start` reddedildiyse `FP3_Payment` hiç çağrılmadı.
+        Assert.Equal(GmpErrorMap.MoneyRisk.No, e.Money);
+    }
+
+    [Fact]
+    public void Kagit_bittiginde_ODEME_ADIMINDA_kesin_ret_URETILMEZ()
+    {
+        // ← ÇİVİ: aynı kod, farklı adım, ZIT cevap. `FP3_Payment` 0x0020 dönerse paranın
+        // hareket edip etmediğini BİLEMEYİZ — belge hiçbir kod için "cihazda ödeme oluşmadı"
+        // demiyor. Kesin ret demek, alınmış olabilecek bir parayı yok saymaktır.
+        var e = GmpErrorMap.Map(GmpCodes.NoPaper, GmpStep.Payment);
+
+        Assert.Equal(TransportOutcome.Unknown, e.Outcome);
+        Assert.NotEqual(GmpErrorMap.MoneyRisk.No, e.Money);
+    }
 }
