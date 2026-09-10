@@ -42,16 +42,39 @@ public sealed partial class GmpTerminalTransport
         long iptalTutar = 0;
         int iptalSayi = 0;
         var fisSahibi = _snapshots?.ReadOpenTicketBinding(_terminalId);
-        if (_gmp.OptionFlags(h, GmpEchoFlags.Reload).Ok && _gmp.GetTicket(h, out var oncesi).Ok)
+        if (!_gmp.OptionFlags(h, GmpEchoFlags.Reload).Ok || !_gmp.GetTicket(h, out var oncesi).Ok)
         {
-            iptalTutar = oncesi.PaidAmountMinor;
-            iptalSayi = oncesi.PaymentCount;
-            _log("[gmp] iptal öncesi fiş", new
+            // ══ W127 — OKUNAMADI, "BOŞ" DEĞİLDİR: OKUYAMIYORSAK İPTAL ETMEYİZ ═══════
+            //
+            // Eskiden bu okuma BAŞARISIZ olsa da akış devam ediyordu ve `iptalTutar`/`iptalSayi`
+            // sıfır KALIYORDU. Sonuç: `VoidAll` başarılı olsaydı fiş iptal edilir ve kasaya
+            // <b>"iptal edildi, 0 kuruş"</b> dönerdi. Yani parayı geri alır, geri aldığımızın
+            // TEK KAYDINI da yok ederdik — iptalden sonra fiş yok, sorulacak yer kalmaz.
+            //
+            // Sahada 2026-09-10 16:30'da bu yola girildi: kâğıt bitikken kasadan iptal denendi,
+            // okuma patladı (log'da `[gmp] iptal öncesi fiş` satırı YOK) ve akış `VoidAll`a
+            // devam etti. Para hareket etmedi çünkü `VoidAll` DA patladı — yani bizi kurtaran
+            // şey tasarım değil, cihazın aynı anda tıkalı olmasıydı.
+            //
+            // ⚠️ Fişte 990 kuruş VARDI. "Ölçemedim" ile "sıfır" arasındaki farkı silen her yol
+            // er ya da geç parayı sessizce kaybettirir.
+            _log("[gmp] iptal ÖNCESİ fiş OKUNAMADI — iptal edilmedi (fişe dokunulmadı)", new
             {
-                toplam = oncesi.TotalAmountMinor, tahsil = oncesi.PaidAmountMinor,
-                odemeSayisi = oncesi.PaymentCount, bankaBacagi = oncesi.HasBankLeg,
+                terminal = _terminalId.Length > 0 ? _terminalId : "(bilinmiyor)",
             });
+            return new TransportResult(TransportOutcome.Unknown,
+                ProviderResultCode: "VOID_READ_FAILED", ErrorCondition: "InProgress",
+                Reason: RestomenumReasons.VoidIncomplete, PaymentInvoked: false,
+                CancelledSaleSessionId: fisSahibi);
         }
+
+        iptalTutar = oncesi.PaidAmountMinor;
+        iptalSayi = oncesi.PaymentCount;
+        _log("[gmp] iptal öncesi fiş", new
+        {
+            toplam = oncesi.TotalAmountMinor, tahsil = oncesi.PaidAmountMinor,
+            odemeSayisi = oncesi.PaymentCount, bankaBacagi = oncesi.HasBankLeg,
+        });
 
         var r = _gmp.VoidAll(h, out _);
         if (r.Ok)
@@ -107,7 +130,9 @@ public sealed partial class GmpTerminalTransport
         _snapshots?.ClearOpenTicketBinding(_terminalId);
         return new TransportResult(TransportOutcome.Approved,
             ApprovedAmountMinor: iptalTutar > 0 ? iptalTutar : null,
-            Rrn: tk.Rrn, Info: RestomenumReasons.TicketCancelled);
+            Rrn: tk.Rrn, Info: RestomenumReasons.TicketCancelled,
+            VoidedPaymentCount: iptalSayi, VoidedAmountMinor: iptalTutar,
+            CancelledSaleSessionId: fisSahibi);
     }
 
     /// <summary>

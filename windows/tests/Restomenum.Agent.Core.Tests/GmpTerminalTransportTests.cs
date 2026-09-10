@@ -1557,6 +1557,57 @@ public class GmpTerminalTransportTests
     }
 
     [Fact]
+    public async Task FIS_OKUNAMAZSA_IPTAL_EDILMEZ_VoidAll_CAGRILMAZ()
+    {
+        // ← ÇİVİ: BU SAHADA AZ KALSIN PARAYI SESSİZCE KAYBETTİRİYORDU.
+        //
+        // Eskiden iptal öncesi okuma BAŞARISIZ olsa da akış devam ediyor, `iptalTutar`/
+        // `iptalSayi` SIFIR kalıyor ve `VoidAll` yine de çağrılıyordu. Başarılı olsaydı:
+        // 990 kuruşluk fiş iptal edilir, kasaya "iptal edildi, 0 kuruş" dönerdi — parayı geri
+        // alır, geri aldığımızın TEK KAYDINI da yok ederdik (iptalden sonra fiş yok).
+        //
+        // Ölçüm (2026-09-10 16:30): kâğıt bitikken kasadan iptal denendi, okuma patladı
+        // (log'da `[gmp] iptal öncesi fiş` satırı YOK) ve akış `VoidAll`a devam etti. Para
+        // hareket etmedi çünkü `VoidAll` DA patladı — bizi kurtaran tasarım değil, cihazın
+        // aynı anda tıkalı olmasıydı. Tasarıma güvenilmeliydi.
+        // Kısmi ödeme: fiş AÇIK kalır, yani ortada gerçekten iptal edilecek bir şey var.
+        var (t, g, _) = Kur();
+        g.AfterPayment = new GmpTicket(3000, 990, 1, GmpPaymentTypes.Cash);
+        await t.SaleAsync(Req(amount: 990, paymentType: GmpPaymentTypes.Cash, satisToplam: 3000));
+        g.Calls.Clear();
+        g.Codes["GetTicket"] = GmpCodes.RecvBusy;     // cihaz okumayı reddediyor
+
+        var r = await t.VoidAsync();
+
+        // ⚠️ FİŞE HİÇ DOKUNULMADI.
+        Assert.DoesNotContain("VoidAll", g.Calls);
+        Assert.Equal(TransportOutcome.Unknown, r.Outcome);
+        Assert.Equal("VOID_READ_FAILED", r.ProviderResultCode);
+        // "Olmadı" demek de yanlış olurdu: kasa bunu belirsizlik olarak görmeli.
+        Assert.Equal("InProgress", r.ErrorCondition);
+        Assert.False(r.PaymentInvoked);
+    }
+
+    [Fact]
+    public async Task OKUNABILEN_fis_iptalinde_TUTAR_ve_SAYI_dogru_bildirilir()
+    {
+        // ← ÇİVİ: kuralın diğer yarısı. Okuma BAŞARILIYSA iptal olağan işler ve kasaya giden
+        // sayılar GERÇEK olur — "0 kuruş iptal edildi" diye bir cevap bir daha çıkmamalı.
+        var (t, g, _) = Kur();
+        g.AfterPayment = new GmpTicket(3000, 990, 1, GmpPaymentTypes.Cash);
+        await t.SaleAsync(Req(amount: 990, paymentType: GmpPaymentTypes.Cash, satisToplam: 3000));
+        g.Calls.Clear();
+        g.Ticket = new GmpTicket(3000, 990, 1, GmpPaymentTypes.Cash);
+
+        var r = await t.VoidAsync();
+
+        Assert.Contains("VoidAll", g.Calls);
+        Assert.Equal(TransportOutcome.Approved, r.Outcome);
+        Assert.Equal(990, r.VoidedAmountMinor);
+        Assert.Equal(1, r.VoidedPaymentCount);
+    }
+
+    [Fact]
     public async Task VoidPayment_basarisizsa_REVERSAL_FAILED_ve_TEKRAR_YOK()
     {
         var (t, g, _) = Kur();

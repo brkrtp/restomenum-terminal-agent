@@ -453,3 +453,54 @@ Bekleyen kayıt yoksa **üçü de hiç yazılmaz**; park bitmişse süre yazılm
 geçmiş bir tarihi "bekleme süresi" diye sunmak olurdu.
 
 Mutasyon: 7 mutasyon, hepsi kırmızı.
+
+---
+
+## W127 — "okunamadı" ile "sıfır" aynı kutuya konmuştu: iptal yolunda PARA RİSKİ
+
+**Kullanıcı:** "Fiş iptal de çalışmıyor."
+
+**Ölçüm (2026-09-10 16:30, canlı):**
+
+```
+16:30:02.574  Reversal isteği
+16:30:03.320  fiş sonucu { outcome = Unknown, acikFisVarMiydi = True,
+                           odemeSayisi = 0, tutar = 0 }
+16:30:22.451  bildirim { state = FAILED }
+```
+
+`[gmp] iptal öncesi fiş` satırı log'da **YOK** → iptal öncesi okuma patlamış.
+
+### İptalin çalışmama sebebi ayrı bir kusur DEĞİL
+
+Aynı tıkanıklık: kâğıt bitik, cihaz komut kabul etmiyor, `VoidAll` reddedildi.
+Para hareket etmedi.
+
+### Ama ölçerken çıkan asıl kusur
+
+```csharp
+if (_gmp.OptionFlags(...).Ok && _gmp.GetTicket(h, out var oncesi).Ok)
+{
+    iptalTutar = oncesi.PaidAmountMinor;   // yalnız OKUNABİLDİYSE
+    iptalSayi  = oncesi.PaymentCount;
+}
+var r = _gmp.VoidAll(h, out _);            // ⚠️ OKUNAMASA DA DEVAM
+```
+
+Okuma patlarsa `iptalTutar`/`iptalSayi` **sıfır kalıyor ve akış devam ediyordu**.
+`VoidAll` başarılı olsaydı: 990 kuruşluk fiş iptal edilir, kasaya **"iptal edildi,
+0 kuruş"** dönerdi — parayı geri alır, geri aldığımızın **tek kaydını** da yok
+ederdik. İptalden sonra fiş yok; sorulacak yer kalmaz.
+
+> **Bizi kurtaran şey tasarım değildi, cihazın aynı anda tıkalı olmasıydı.**
+
+### Düzeltme
+
+Okuma başarısızsa **`VoidAll` hiç çağrılmaz**: `Unknown` + `VOID_READ_FAILED` +
+`InProgress`. "Olmadı" demek de yanlış olurdu — kasa bunu belirsizlik olarak
+görmeli. Fişe dokunulmaz, kayıt durur, insan karar verir.
+
+Ayrıca banka yolundaki `Approved` dalı tutar/sayı/oturumu bildirmiyordu (raporlama
+deliği) — eklendi.
+
+Mutasyon: 4 mutasyon, hepsi kırmızı.
