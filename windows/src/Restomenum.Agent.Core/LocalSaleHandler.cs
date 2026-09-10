@@ -119,30 +119,37 @@ public sealed class LocalSaleHandler : IDeviceIdleGate
     /// <para>Kural: <b>bedeli olan denemeler sınırlanır, bedeli olmayanlar sınırlanmaz.</b>
     /// Zaman aşımı ve bütçe bitişi PAHALI; cihazın kesin cevabı (kâğıt yok gibi) UCUZ.</para>
     /// </summary>
-    private static bool PahaliBasarisizlik(string? kod) => !UcuzBasarisizlik(kod);
-
     /// <summary>
-    /// <b>Cihazın HIZLI ve KESİN cevabı mı?</b> — yani denemek bedava mı?
+    /// <b>W121 — bir deneme PAHALI mı? Ölçütü KOD değil, ÖLÇÜLEN SÜRE.</b>
     ///
-    /// <para><b>⚠️ BU BİR BEYAZ LİSTE ve öyle olmak ZORUNDA (W116 düzeltmesi).</b> İlk yazımda
-    /// tersini yapmıştım: <i>pahalıların</i> listesini tutuyordum ve listede olmayan her şey
-    /// sessizce "ucuz" sayılıyordu. Yorumu "bilinmeyeni ucuz saymak sınırı sessizce kaldırmak
-    /// olurdu" diyordu ama <b>kod tam olarak onu yapıyordu</b>: istisna yolundan gelen
-    /// <c>"TimeoutException"</c> gibi bir tip adı ya da eşlenmemiş herhangi bir cihaz kodu
-    /// (2069, 2085, <c>0xF01C</c>…) listede olmadığı için ucuz sayılıyor ve <b>sınırsız</b>
-    /// deneniyordu — üstelik o denemelerin her biri cihazı dakikalarca kilitleyebilir.</para>
+    /// <para><b>Neden değişti (sahada ölçüldü, 2026-09-10 03:32–03:57):</b> kâğıt bitti ama cihaz
+    /// bunu <c>0x0020</c> ile DEĞİL <c>0xF01C RECV_BUSY</c> ile bildirdi (ekranında "Kağıt bitti"
+    /// penceresi açıkken komut kabul etmiyor). <c>0xF01C</c> beyaz listede olmadığı için PAHALI
+    /// sayıldı, süpürme sekiz denemede durdu ve fiş 990 kuruş tahsilatla açık kaldı —
+    /// kullanıcının elle müdahalesi gerekti.</para>
     ///
-    /// <para>Doğru yön: <b>yalnız BİLİNEN kodlar ucuzdur, geri kalan her şey pahalıdır.</b>
-    /// Bilinmeyen bir kodun ne kadar sürdüğünü bilmiyoruz; bilmediğimizi ucuz saymak,
-    /// ölçmediğimiz bir şeyi bedava ilan etmektir.</para>
+    /// <para><b>Ama ölçüm o sınıflandırmayı çürüttü:</b> her <c>RECV_BUSY</c> denemesi
+    /// <b>5,5 saniye</b> sürdü (5489–5517 ms, altı ölçüm) ve 5 dakikada bir koşuyordu — yani
+    /// cihazın <b>%1,8'i</b>. Bu "rehin alma" değil. Asıl korktuğum şey 100 saniyelik zaman
+    /// aşımlarıydı: onlar aynı ritimde cihazın <b>%58'ini</b> yer.</para>
     ///
-    /// <para>Bugünkü tek üye: <c>0x0020 TRAN_RESULT_NO_PAPER</c> — sahada ölçüldü, milisaniyeler
-    /// içinde dönüyor. Yeni bir kodun buraya girmesi için <b>hızlı döndüğünün ölçülmüş olması</b>
-    /// gerekir.</para>
+    /// <para>Yani doğru ölçüt kodun kendisi değil, <b>denemenin gerçekte ne kadar sürdüğü</b>.
+    /// Kod listesi önceden yazılmış bir tahmindi; süre ölçümdür ve tanımadığımız kodlar için de
+    /// çalışır.</para>
+    ///
+    /// <para><b>Eşik 15 sn</b> — ölçülenleri geniş bir payla ayırıyor: <c>0x0020</c> 0,5 sn ve
+    /// <c>0xF01C</c> 5,5 sn bir yanda; zaman aşımı adımları 100 sn ve bütçe 165 sn öte yanda.
+    /// Arada ölçülmüş hiçbir şey yok.</para>
+    ///
+    /// <para>⚠️ Parametre <b>nullable DEĞİL</b> ve bilerek: süre her zaman ölçülüyor. Önce
+    /// <c>TimeSpan?</c> yazıp "ölçülemezse pahalı say" diye bir dal koymuştum; mutasyon testi o
+    /// dalın hiç çalışmadığını gösterdi — bir koruma değil, koruma GÖRÜNTÜSÜYDÜ. Aynı şey
+    /// süpürmedeki `uygula &&` kapısında da olmuştu. Çalışmayan koruma, okuyanı yanıltır.</para>
     /// </summary>
-    private static bool UcuzBasarisizlik(string? kod) =>
-        kod is not null
-        && kod.Equals($"0x{GmpCodes.NoPaper:X4}", StringComparison.OrdinalIgnoreCase);
+    private static readonly TimeSpan UcuzDenemeEsigi = TimeSpan.FromSeconds(15);
+
+    private static bool PahaliDeneme(TimeSpan sure) => sure > UcuzDenemeEsigi;
+
 
     /// <summary>
     /// <b>W116 — ucuz başarısızlıkta SABİT ve KISA aralık.</b>
@@ -156,9 +163,9 @@ public sealed class LocalSaleHandler : IDeviceIdleGate
     /// </summary>
     private static readonly TimeSpan UcuzDenemeAraligi = TimeSpan.FromSeconds(10);
 
-    /// <summary>Bir sonraki denemenin aralığı — bedeline göre.</summary>
-    private static TimeSpan TamamlamaAraligi(int deneme, string? kod) =>
-        UcuzBasarisizlik(kod) ? UcuzDenemeAraligi : Outbox.Bekleme(deneme);
+    /// <summary>Bir sonraki denemenin aralığı — denemenin ÖLÇÜLEN bedeline göre.</summary>
+    private static TimeSpan TamamlamaAraligi(int deneme, TimeSpan sure) =>
+        PahaliDeneme(sure) ? Outbox.Bekleme(deneme) : UcuzDenemeAraligi;
 
     /// <summary>Otomatik sınır dolunca kaydın ertelendiği süre — insan ölçeği, cihaz ölçeği değil.</summary>
     private static readonly TimeSpan TamamlamaErtelemesi = TimeSpan.FromHours(24);
@@ -1130,6 +1137,12 @@ public sealed class LocalSaleHandler : IDeviceIdleGate
             }
 
             StuckTicketResult s;
+            // W121: denemenin BEDELİ ÖLÇÜLÜR — sınıflandırmayı bu belirliyor, kod değil.
+            // Ölçüm ENJEKTE EDİLMİŞ saatle (`_now`), `Stopwatch` ile DEĞİL: kronometre gerçek
+            // zamanı okur ve testte 15 saniyeyi geçmek için gerçekten 15 saniye beklemek
+            // gerekirdi. Sınıflandırmanın kendisi test edilebilir olmalı — yoksa eşik sessizce
+            // kayar ve kimse fark etmez.
+            var baslangic = _now();
             // W110: süpürme denemesine de BÜTÇE. Kasa beklemiyor ama cihaz KİLİTLİ: bütçesiz
             // bir deneme cihazı 310 sn'ye kadar tutabilir ve o sırada gelen satış kilit
             // tavanını (150 sn) doldurup `TERMINAL_BUSY` alır. Bütçeyle en kötü tutma ~175 sn.
@@ -1169,13 +1182,14 @@ public sealed class LocalSaleHandler : IDeviceIdleGate
             }
 
             // ŞART ②: ertelenir, sayılır; eşiği aşınca ses yükselir. Vazgeçilmez.
+            var sure = _now() - baslangic;
             var deneme = _store.MarkFinishAttempt(f.TicketId, s.BasarisizAdim, s.Kod, simdi,
-                TamamlamaAraligi(f.Attempts + 1, s.Kod));
+                TamamlamaAraligi(f.Attempts + 1, sure));
 
             // W108/W114: otomatik pencere YALNIZ PAHALI denemeler için dolar. Cihaz hızlı ve
             // kesin cevap veriyorsa (ör. `0x0020` kâğıt yok) denemek cihazı rehin almaz ve
             // kullanıcının istediği gibi "başarılı olana kadar" sürer.
-            if (deneme >= TamamlamaOtomatikSiniri && PahaliBasarisizlik(s.Kod))
+            if (deneme >= TamamlamaOtomatikSiniri && PahaliDeneme(sure))
             {
                 _store.DeferFinish(f.TicketId, TamamlamaErtelemesi, simdi);
                 _log("[uyarı] yarım fiş OTOMATİK tamamlanamadı — otomatik denemeler DURDURULDU " +
@@ -1192,7 +1206,9 @@ public sealed class LocalSaleHandler : IDeviceIdleGate
                 f.TicketId, deneme, adim = s.BasarisizAdim, kod = s.Kod,
                 neden = s.Plan.Neden, ureticiAdimi = s.Plan.UreticiAdimi,
                 // W116: ucuz başarısızlıkta sabit 10 sn, pahalıda üstel eğri.
-                sonrakiDenemeSn = (int)TamamlamaAraligi(deneme, s.Kod).TotalSeconds,
+                sureMs = (int)sure.TotalMilliseconds,
+                bedel = PahaliDeneme(sure) ? "PAHALI" : "ucuz",
+                sonrakiDenemeSn = (int)TamamlamaAraligi(deneme, sure).TotalSeconds,
             };
 
             if (s.Meshgul)

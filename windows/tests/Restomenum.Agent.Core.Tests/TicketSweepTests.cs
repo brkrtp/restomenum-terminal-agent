@@ -52,9 +52,13 @@ public class TicketSweepTests : IDisposable
         public BaskiButcesi? SonButce;
         /// <summary>Doluysa çağrı bunu FIRLATIR — istisna yolunun aralığını ölçmenin tek yolu.</summary>
         public Exception? Patlat;
+        /// <summary>Çağrı SIRASINDA çalışır — testin sahte saati ilerletip denemeyi PAHALI
+        /// yapmasının tek yolu (gerçekten 15 saniye beklemek yerine).</summary>
+        public Action? Sirasinda;
         public StuckTicketResult FinishStuckTicket(bool uygula, BaskiButcesi? butce = null)
         {
             Cagrilar.Add(uygula); SonButce = butce;
+            Sirasinda?.Invoke();
             if (Patlat is not null) throw Patlat;
             return Sonuc;
         }
@@ -199,7 +203,9 @@ public class TicketSweepTests : IDisposable
         var (h, tasima) = Kur();
         tasima.Sonuc = new StuckTicketResult(false, false, false,
             new FisBitirmePlani(FisBitirmeAdimi.MfVeKapat, TicketFinish.Tamamlanabilir, 5),
-            0, "PrintMF", "0xF003");   // 0xF003 = ZAMAN AŞIMI → PAHALI deneme
+            0, "PrintMF", "0xF003");
+        // W121: PAHALI olmasını sağlayan şey KOD değil SÜRE — çağrı 16 sn sürüyormuş gibi.
+        tasima.Sirasinda = () => _saatMs += 16_000;
         _store.MarkTicketNeedsFinish("tkt_1", "t1", "oturum-A", null, null, 0, _saatMs);
 
         // Sekiz denemeyi doldur (her turda geri çekilmeyi aş).
@@ -269,7 +275,8 @@ public class TicketSweepTests : IDisposable
         var (h, tasima) = Kur();
         tasima.Sonuc = new StuckTicketResult(false, false, false,
             new FisBitirmePlani(FisBitirmeAdimi.MfVeKapat, TicketFinish.Tamamlanabilir, 5),
-            0, "PrintMF", "0xF003");                 // zaman aşımı = PAHALI
+            0, "PrintMF", "0xF003");
+        tasima.Sirasinda = () => _saatMs += 16_000;   // W121: 16 sn süren deneme = PAHALI
         _store.MarkTicketNeedsFinish("tkt_1", "t1", "oturum-A", null, null, 0, _saatMs);
 
         await h.DrainOutboxAsync();                  // 1. deneme
@@ -294,6 +301,7 @@ public class TicketSweepTests : IDisposable
         tasima.Sonuc = new StuckTicketResult(false, false, false,
             new FisBitirmePlani(FisBitirmeAdimi.MfVeKapat, TicketFinish.Tamamlanabilir, 5),
             0, "PrintMF", "0x0817");                 // eşlenmemiş cihaz kodu (2071)
+        tasima.Sirasinda = () => _saatMs += 16_000;   // ve UZUN sürüyor → PAHALI
         _store.MarkTicketNeedsFinish("tkt_1", "t1", "oturum-A", null, null, 0, _saatMs);
 
         for (var i = 0; i < 12; i++) { await h.DrainOutboxAsync(); _saatMs += 10 * 60_000; }
@@ -345,6 +353,50 @@ public class TicketSweepTests : IDisposable
         // (biri Host'ta kullanılıyor); ilişkileri ancak burada çivilenebilir.
         Assert.True(AjanTuru.DrainAraligi <= TimeSpan.FromSeconds(10),
             $"tur {AjanTuru.DrainAraligi.TotalSeconds} sn — ucuz deneme aralığından (10 sn) seyrek olamaz");
+    }
+
+    [Fact]
+    public async Task RECV_BUSY_UCUZ_sayilir_ve_SINIRLANMAZ_kagit_boyle_gorunebiliyor()
+    {
+        // ← ÇİVİ: SAHADA ISIRDI (2026-09-10 03:32–03:57). Kâğıt bitti ama cihaz bunu `0x0020`
+        // ile DEĞİL `0xF01C RECV_BUSY` ile bildirdi — ekranında "Kağıt bitti" penceresi açıkken
+        // komut kabul etmiyor. Eski kural kodu beyaz listede aramıştı, `0xF01C` yoktu, PAHALI
+        // sayıldı ve süpürme SEKİZ denemede durdu. Fiş 990 kuruş tahsilatla açık kaldı ve
+        // kullanıcının elle müdahalesi gerekti.
+        //
+        // Ölçüm o sınıflandırmayı çürüttü: her deneme 5,5 saniye (5489–5517 ms, altı ölçüm),
+        // 5 dakikada bir → cihazın %1,8'i. Bu rehin alma değil.
+        var (h, tasima) = Kur();
+        tasima.Sonuc = new StuckTicketResult(false, false, Meshgul: true,
+            new FisBitirmePlani(FisBitirmeAdimi.Dokunma, "DEVICE_BUSY", 0), 0, "Start", "0xF01C");
+        tasima.Sirasinda = () => _saatMs += 5_500;    // sahada ölçülen süre
+        _store.MarkTicketNeedsFinish("tkt_1", "t1", "oturum-A", null, null, 0, _saatMs);
+
+        for (var i = 0; i < 12; i++) { await h.DrainOutboxAsync(); _saatMs += 20_000; }
+
+        // ← ÇİVİ: 5,5 saniye UCUZDUR. Sekizde durmaz; kullanıcının istediği gibi kâğıt gelene
+        // kadar denemeye devam eder ve rulo takıldığı an fiş kendiliğinden kapanır.
+        Assert.True(tasima.Cagrilar.Count > 8, $"deneme {tasima.Cagrilar.Count} — 5,5 sn ucuzdur, durmamalıydı");
+        Assert.False(LogVar("otomatik denemeler DURDURULDU"));
+    }
+
+    [Fact]
+    public async Task ZAMAN_ASIMI_denemeleri_PAHALI_kalir_ve_SINIRLANIR()
+    {
+        // ← ÇİVİ: kuralın diğer yarısı. 100 saniyelik zaman aşımı adımları 5 dakikada bir
+        // koşarsa cihazın %58'ini yer — asıl korunmak istediğim buydu ve korunuyor.
+        var (h, tasima) = Kur();
+        tasima.Sonuc = new StuckTicketResult(false, false, false,
+            new FisBitirmePlani(FisBitirmeAdimi.MfVeKapat, TicketFinish.Tamamlanabilir, 5),
+            0, "PrintMF", "0xF003");
+        tasima.Sirasinda = () => _saatMs += 100_000;   // zaman aşımı: gerçekten pahalı
+        _store.MarkTicketNeedsFinish("tkt_1", "t1", "oturum-A", null, null, 0, _saatMs);
+
+        for (var i = 0; i < 12; i++) { await h.DrainOutboxAsync(); _saatMs += 10 * 60_000; }
+
+        Assert.True(LogVar("otomatik denemeler DURDURULDU"));
+        Assert.Equal(8, tasima.Cagrilar.Count);
+        Assert.Single(_store.PendingFinishes(_saatMs + (long)TimeSpan.FromDays(2).TotalMilliseconds));
     }
 
     [Fact]
