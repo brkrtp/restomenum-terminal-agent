@@ -849,3 +849,48 @@ dönmeli. Bakılacak şey süreden önce **KOD**: `0xF003` → keepalive çalı�
 Bu senaryoda 66 saniyenin **44'ü boşa**: ölü adrese üç kez bağlanmayı denemek
 hiçbir şey kazandırmıyor. `IpRetryCount` 3 → 1 bu senaryoyu **~21 saniyeye**
 indirir; cihaz varken davranış değişmez (ilk denemede bağlanır).
+
+---
+
+## W135 — `IpRetryCount` DEĞİŞTİRİLEMİYOR: DLL, `GMP.XML`'i ayrıştırdığı anda GERİ YAZIYOR
+
+W134'te ölçtüğüm "66 saniyenin 44'ü boşa" kazancını uygulamayı denedim.
+**Tutmadı.**
+
+```
+00:46            GMP.XML s.26: <IpRetryCount>3</IpRetryCount> → 1   (diff tek satır)
+00:47:03         ajan yeniden başlatıldı
+00:47:04.097     DLL izi: Interface Data = ... IpRetryCount:3 ...
+00:47:04.097268  GMP.XML dosya damgası — AYNI MİLİSANİYE
+```
+
+DLL, dosyayı **ayrıştırdığı anda geri yazıyor**. Diskteki değer yine 3;
+düzenleme açılışta ezildi.
+
+### Dosya OKUNUYOR — değer reddediliyor
+
+Aynı satırda `IsTcpKeepAlive:TRUE` görünüyor; o da benim değişikliğim ve
+**korunmuş**. Yani DLL dosyayı okuyor, `IsTcpKeepAlive`'ı olduğu gibi geri
+yazıyor, ama `IpRetryCount=1`'i kabul etmeyip 3'e çeviriyor.
+
+En olası açıklama bir **alt sınır/normalleştirme** (muhtemelen minimum 3).
+⚠️ **ÖLÇÜLMEDİ, çıkarım.** Kesinleştirmenin yolu 2 yazıp ne geri geldiğine
+bakmak — bir yeniden başlatma daha.
+
+### Sonuç
+
+Kablo çekikken **3 × 21 sn ≈ 66 sn taban** ve `GMP.XML` üzerinden
+düşürülemiyor. 21 saniyenin kendisi zaten işletim sisteminin TCP connect zaman
+aşımı ve GMP ayarlarına bağlı değil.
+
+> Panelde "Cihaza gönderiliyor…" yazısının 66+ saniye sürmesi **ayarla
+> çözülebilecek bir şey değil.** Kasa tarafındaki ara evre (`waitingDevice`)
+> bu yüzden yardımcı değil, **asıl** çözüm.
+
+### Yöntem notu
+
+Bu, "kod değişti ≠ çalışan kod değişti" dersinin **dördüncü** kılığı — ve ilk
+kez düzeltme *hiç* uygulanmadığı hâlde uygulanmış görünüyordu. Panel ajanının
+"açılış izinden doğrula" uyarısı olmasa "yaptım" diye rapor edilecekti.
+**Yapılandırma değişikliği, çalışan sistemde doğrulanana kadar yapılmamış
+sayılır.**
