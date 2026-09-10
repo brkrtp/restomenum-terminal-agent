@@ -167,8 +167,23 @@ public sealed class LocalSaleHandler : IDeviceIdleGate
     private static TimeSpan TamamlamaAraligi(int deneme, TimeSpan sure) =>
         PahaliDeneme(sure) ? Outbox.Bekleme(deneme) : UcuzDenemeAraligi;
 
-    /// <summary>Otomatik sınır dolunca kaydın ertelendiği süre — insan ölçeği, cihaz ölçeği değil.</summary>
-    private static readonly TimeSpan TamamlamaErtelemesi = TimeSpan.FromHours(24);
+    /// <summary>
+    /// <b>W125 — otomatik pencere dolunca DURMA YOK, SEYRELME var.</b>
+    ///
+    /// <para><b>Eskiden 24 saatti ve bu yanlıştı.</b> Ölçüm (2026-09-10 06:37): kâğıt bitti,
+    /// süpürme 484 deneme uğraştı, cihaz kademeli kötüleşti (<c>0xF01C</c> 5,5 sn →
+    /// <c>0xF003</c> 13,8 sn → <c>0xF000</c> 66 sn) ve tek pahalı deneme pencereyi kapattı.
+    /// Üzerinde <b>990 kuruş</b> olan fiş 24 saat park edildi — rulo takılsa bile kendiliğinden
+    /// kapanmayacaktı. Kullanıcının değişmez şartı ise "başarılı olana kadar".</para>
+    ///
+    /// <para><b>30 dakika neden yeter:</b> ölçülen en pahalı deneme 66 saniye. 66/1800 =
+    /// cihazın <b>%3,7'si</b> — seyrek ama vazgeçmiş değil. 24 saat "vazgeçme"nin başka adıydı.</para>
+    ///
+    /// <para>Asıl kurtarma bunu beklemez: cihaz düzelince ilk BAŞARILI baskı parkı hemen
+    /// boşaltır (<see cref="ITicketSnapshotStore.UndeferPendingFinishes"/>). Bu süre, hiç satış
+    /// yapılmayan durum için EN KÖTÜ hâldir.</para>
+    /// </summary>
+    private static readonly TimeSpan TamamlamaErtelemesi = TimeSpan.FromMinutes(30);
 
     /// <summary>
     /// <b>W109</b> — satış yolunda cihaz kilidini beklemenin ÜST sınırı.
@@ -1192,12 +1207,12 @@ public sealed class LocalSaleHandler : IDeviceIdleGate
             if (deneme >= TamamlamaOtomatikSiniri && PahaliDeneme(sure))
             {
                 _store.DeferFinish(f.TicketId, TamamlamaErtelemesi, simdi);
-                _log("[uyarı] yarım fiş OTOMATİK tamamlanamadı — otomatik denemeler DURDURULDU " +
-                    "(kayıt SİLİNMEDİ, üzerinde PARA VAR). Kâğıt/yazıcı düzeltilince elle tamamlayın: " +
-                    "--finish-ticket --onayla", new
+                _log("[uyarı] yarım fiş tamamlanamıyor — otomatik denemeler SEYRELTİLDİ " +
+                    "(DURDURULMADI; kayıt SİLİNMEDİ, üzerinde PARA VAR). Cihaz düzelip ilk başarılı " +
+                    "baskı olduğunda hemen yeniden denenir. Elle: --finish-ticket --onayla", new
                     {
                         f.TicketId, deneme, adim = s.BasarisizAdim, kod = s.Kod,
-                        sonrakiOtomatikSaat = (int)TamamlamaErtelemesi.TotalHours,
+                        sonrakiDenemeDk = (int)TamamlamaErtelemesi.TotalMinutes,
                     });
                 continue;
             }

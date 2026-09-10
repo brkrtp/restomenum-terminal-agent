@@ -671,6 +671,27 @@ public sealed class CommandStore : ITicketSnapshotStore, IDisposable
     /// dokunma insan ölçeğine çekilir; elle tamamlama (<c>--finish-ticket</c>) her an çalışır ve
     /// <c>TicketQuery</c> durumu göstermeye devam eder.</para>
     /// </summary>
+    /// <summary>
+    /// <b>W125</b> — park edilmiş bütün yarım fişleri şimdi denenebilir yapar.
+    /// Kayıt SİLİNMEZ, deneme sayacı SIFIRLANMAZ: yalnız sıradaki denemenin saati öne çekilir.
+    /// </summary>
+    public void UndeferPendingFinishes(long? now = null)
+    {
+        lock (_gate)
+        {
+            using var cmd = _conn.CreateCommand();
+            // ⚠️ `WHERE` bir KORUMA DEĞİL, yalnız gereksiz yazmayı önler — mutasyonla ölçüldü:
+            // kaldırınca davranış AYNI kalıyor (sırası gelmiş satır `$now`a çekilse de hâlâ
+            // `<= now`, yani hâlâ sırada). Bunu "geciktirmeyi önlüyor" diye anlatmak, olmayan
+            // bir savunmayı varmış gibi göstermek olurdu.
+            cmd.CommandText =
+                "UPDATE pending_finish SET next_attempt_at = $now WHERE next_attempt_at > $now";
+            cmd.Parameters.AddWithValue("$now",
+                now ?? DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
+            cmd.ExecuteNonQuery();
+        }
+    }
+
     public void DeferFinish(string ticketId, TimeSpan sure, long? now = null)
     {
         lock (_gate)

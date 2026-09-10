@@ -163,6 +163,16 @@ public interface ITicketSnapshotStore
     /// </summary>
     void SetPaperWarning(string terminalId, bool var, string? step = null, long? now = null);
 
+    /// <summary>
+    /// <b>W125 — park edilmiş yarım fişleri HEMEN yeniden denenebilir yapar.</b>
+    ///
+    /// <para>Otomatik pencere dolunca kayıt ertelenir. Erteleme cihazı korur ama tek başına
+    /// bırakıldığında kurtarmayı kâğıt üstünde bırakır: insanın 30 saniyede çözdüğü bir arıza
+    /// için fiş saatlerce park kalır. Çağrıldığı an <b>cihazın gerçekten çalıştığı kanıtlanmış</b>
+    /// olmalı — tahmin değil, ölçüm.</para>
+    /// </summary>
+    void UndeferPendingFinishes(long? now = null);
+
     /// <summary>Kâğıt uyarısı açık mı? <c>null</c> = uyarı YOK.</summary>
     (long GorulmeMs, string? Adim)? ReadPaperWarning(string terminalId);
 

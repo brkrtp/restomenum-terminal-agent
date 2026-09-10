@@ -365,3 +365,51 @@ Cihaz kâğıtsızlığı **bir kez** bildirir. Sonrasında kendi penceresi aç�
 için her komuta yalnız "meşgulüm" der — yani kâğıt durumu **sorulabilir bir şey
 değil, yakalanması gereken bir an**. Kaçırılırsa geri getirilemez; bu yüzden
 kalıcılık kusuru doğrudan görünmezliğe dönüşüyordu.
+
+---
+
+## W125 — 24 saatlik park, kurtarmayı kâğıt üstünde bırakıyordu
+
+**Ölçüm (2026-09-10, üçüncü kâğıt testi):** cihaz kademeli kötüleşti.
+
+```
+06:35:51  deneme 482  0xF01C   sureMs =  5 474   ucuz
+06:36:15  deneme 483  0xF003   sureMs = 13 785   ucuz    ← eşiğin 1,2 sn ALTI
+06:37:31  deneme 484  0xF000   ~66 000 ms        PAHALI  → 24 SAAT PARK
+```
+
+Kural doğru çalıştı: tek pahalı deneme otomatik pencereyi kapattı. Ama sonucu
+kabul edilemezdi — üzerinde **990 kuruş** olan fiş 24 saat park edildi ve **rulo
+takılsa bile kendiliğinden kapanmayacaktı**. Kullanıcının değişmez şartı ise
+"başarılı olana kadar". 24 saat, "vazgeçme"nin başka adıydı.
+
+### İki düzeltme
+
+**① Durma yok, seyrelme var.** `TamamlamaErtelemesi` 24 saat → **30 dakika**.
+Ölçülen en pahalı deneme 66 saniye; 66/1800 = cihazın **%3,7'si**. Seyrek ama
+vazgeçmiş değil. Log da artık doğruyu söylüyor: "DURDURULDU" → "SEYRELTİLDİ".
+
+**② Park, cihaz düzelince İPTAL edilir.** Serbest bırakan olay tahmin değil
+ölçüm olmalı: **olağan bir satışın baskı zinciri baştan sona geçtiyse** kâğıt
+vardır ve cihaz komut alıyordur. `ITicketSnapshotStore.UndeferPendingFinishes`
+tam orada çağrılır — yeni bir cihaz çağrısı eklemeden, bedelsiz.
+
+> ⚠️ Kurtarmanın kendi başarısı bunu yapamaz: kurtarma rulo çıkıkken bile
+> başarılı olabiliyor (04:20'de ölçüldü), yani cihazın düzeldiğini KANITLAMAZ.
+
+### W121'de yazdığım bir iddia ÇÜRÜDÜ
+
+W121'i belgelerken "eşiğin iki yakası arasında ölçülmüş hiçbir şey yok" demiştim.
+**13 785 ms bunu çürüttü** — eşiğin 1,2 saniye altında gerçek bir ölçüm var.
+Eşik hâlâ savunulabilir (o deneme gerçekten ucuzdu) ama sandığım kadar geniş bir
+boşlukta oturmuyor ve bir dahaki ölçüm onu aşabilir.
+
+### Mutasyonun yakaladıkları
+
+- **Gerçek ölü savunma:** başarılı baskıdaki park boşaltma kancası hiç test
+  edilmiyordu — silsen 626 test yeşil kalıyordu. Düzeltmenin CAN DAMARI buydu.
+- **Benim yanlış iddiam:** `WHERE next_attempt_at > $now`'ı "geciktirmeyi önler"
+  diye anlatmıştım. Mutasyon gösterdi ki kaldırınca davranış aynı kalıyor —
+  o bir koruma değil, yalnız gereksiz yazmayı önlüyor. Yorum düzeltildi, o
+  savunmayı çivilediğini iddia eden test **kaldırıldı**: mutasyonu yeşil geçen
+  bir test çivi değildir, çivi görüntüsüdür.

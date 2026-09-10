@@ -1122,6 +1122,10 @@ public class GmpTerminalTransportTests
         private readonly Dictionary<string, (string Terminal, string? Oturum)> _bekleyenTerminal = new();
         private readonly Dictionary<string, long> _bekleyenIsaret = new();
 
+        /// <summary>W125: park boşaltma çağrıları — cihazın düzeldiği ANIN çivisi.</summary>
+        public int ParkBosaltildi;
+        public void UndeferPendingFinishes(long? now = null) => ParkBosaltildi++;
+
         public IReadOnlyList<PendingFinishRow> PendingFinishes(long? now = null)
             => Bekleyen.Select(x => new PendingFinishRow(x.Key,
                 _bekleyenTerminal.TryGetValue(x.Key, out var t) ? t.Terminal : "t1",
@@ -2200,6 +2204,49 @@ public class GmpTerminalTransportTests
         Assert.Equal("CLOSED", r.TicketState);     // fiş kapandı
         Assert.Equal("PrintMF", r.PrintFailedStep); // ama basılamadı
         Assert.NotNull(snap.KagitUyarisi);          // ← uyarı DURUYOR
+    }
+
+    [Fact]
+    public async Task BASARILI_BASKI_park_edilmis_fisleri_SERBEST_BIRAKIR()
+    {
+        // ← ÇİVİ: MUTASYON BUNU ÖLÜ SAVUNMA OLARAK YAKALADI — kancayı silsem 626 test yeşil
+        // kalıyordu. Oysa W125'in CAN DAMARI burası: park edilmiş fişi serbest bırakan tek olay.
+        //
+        // Ölçüm (2026-09-10 06:37): cihaz kademeli kötüleşti (0xF01C 5,5 sn → 0xF003 13,8 sn →
+        // 0xF000 66 sn), tek pahalı deneme pencereyi kapattı ve üzerinde 990 kuruş olan fiş park
+        // edildi. Erteleme iptal edilebilir olmasaydı rulo takılsa bile kapanmayacaktı.
+        var g = new FakeGmp();
+        var snap = new FakeSnapshots();
+        g.Ticket = new GmpTicket(990, 0, 0, 0);
+        g.AfterPayment = new GmpTicket(990, 990, 1, GmpPaymentTypes.Cash);
+        var t = new GmpTerminalTransport(g, snap);
+
+        var r = await t.SaleAsync(Req(amount: 990, paymentType: GmpPaymentTypes.Cash,
+            oturum: "oturum-A", satisToplam: 990));
+
+        Assert.Equal("CLOSED", r.TicketState);
+        Assert.Null(r.PrintFailedStep);            // zincir baştan sona geçti
+        Assert.Equal(1, snap.ParkBosaltildi);      // ← park boşaldı
+    }
+
+    [Fact]
+    public async Task BASKI_PATLAYINCA_park_BOSALTILMAZ()
+    {
+        // ← ÇİVİ: kancanın diğer yarısı. Baskı patladıysa cihazın çalıştığına dair KANIT YOK;
+        // parkı boşaltmak, ertelemenin varlık sebebini sessizce ortadan kaldırırdı — pahalı
+        // denemeler yeniden peş peşe koşar ve cihaz rehin alınırdı.
+        var g = new FakeGmp();
+        var snap = new FakeSnapshots();
+        g.Ticket = new GmpTicket(990, 0, 0, 0);
+        g.AfterPayment = new GmpTicket(990, 990, 1, GmpPaymentTypes.Cash);
+        g.PrintMfFailures = 3;
+        var t = new GmpTerminalTransport(g, snap);
+
+        var r = await t.SaleAsync(Req(amount: 990, paymentType: GmpPaymentTypes.Cash,
+            oturum: "oturum-A", satisToplam: 990));
+
+        Assert.Equal("PrintMF", r.PrintFailedStep);
+        Assert.Equal(0, snap.ParkBosaltildi);
     }
 
     [Fact]

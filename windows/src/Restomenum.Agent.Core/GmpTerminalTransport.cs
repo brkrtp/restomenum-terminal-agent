@@ -435,7 +435,25 @@ public sealed partial class GmpTerminalTransport : ITerminalTransport
                 // sorunsuz geçti, yani normal işleyiş geri döndü. Kurtarmanın başarısı bunu
                 // KANITLAMAZ: kurtarma zaten uyarıyı doğuran olayı çözüyor ve rulo çıkıkken bile
                 // başarılı olabildiği ölçüldü (04:20).
+            {
                 _snapshots?.SetPaperWarning(request.TerminalId, false);
+                // ══ W125 — CİHAZIN DÜZELDİĞİNİN TEK KANITI BURASI ═════════════════════
+                //
+                // Ölçüm (2026-09-10 06:37): kâğıt bitti, süpürme 484 deneme boyunca uğraştı ve
+                // cihaz kademeli kötüleşti — 0xF01C 5,5 sn → 0xF003 13,8 sn → 0xF000 66 sn.
+                // Tek PAHALI deneme otomatik pencereyi kapattı ve fiş **24 saat** park edildi.
+                // Üzerinde 990 kuruş vardı. Rulo takılsa bile kendiliğinden kapanmayacaktı:
+                // kural doğru çalıştı, eksik olan şey ertelemenin İPTAL EDİLEBİLİR olmasıydı.
+                //
+                // Burası, cihazın çalıştığını KANITLAYAN tek nokta: olağan bir satışın zinciri
+                // baştan sona geçti, kâğıt var ve cihaz komut alıyor. Tahmin değil, ölçüm.
+                // Bu yüzden park edilmiş fişler burada serbest bırakılır — yeni bir cihaz
+                // çağrısı eklemeden, bedelsiz.
+                //
+                // ⚠️ Kurtarmanın başarısı bunu yapamaz: kurtarma rulo çıkıkken bile
+                // başarılı olabiliyor (04:20'de ölçüldü) — yani cihazın düzeldiğini kanıtlamaz.
+                _snapshots?.UndeferPendingFinishes();
+            }
             if (kapandi)
             {
                 fisDurumu = "CLOSED";

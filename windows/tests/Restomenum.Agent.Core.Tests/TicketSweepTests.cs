@@ -209,19 +209,58 @@ public class TicketSweepTests : IDisposable
         _store.MarkTicketNeedsFinish("tkt_1", "t1", "oturum-A", null, null, 0, _saatMs);
 
         // Sekiz denemeyi doldur (her turda geri çekilmeyi aş).
-        for (var i = 0; i < 10; i++) { await h.DrainOutboxAsync(); _saatMs += 10 * 60_000; }
+        // Seyreltme ANINI yakala: sonrasında saati ilerletmek, ölçmek istediğimiz
+        // "yakın vadede gelmiyor" penceresini kaydırırdı.
+        for (var i = 0; i < 10 && !LogVar("SEYRELTİLDİ"); i++)
+        { await h.DrainOutboxAsync(); _saatMs += 10 * 60_000; }
 
         // ← ÇİVİ: kâğıt gerçekten bittiyse her deneme `PrintMF`'te dakikalarca bloke olur ve
         // cihaz o süre boyunca HERKESE kapalıdır. Sonsuza kadar denemek, cihazı rehin almak
         // ve kasiyerin elle kurtarmasını da engellemek olurdu.
-        Assert.True(LogVar("otomatik denemeler DURDURULDU"));
+        Assert.True(LogVar("SEYRELTİLDİ"));
         Assert.Equal(8, tasima.Cagrilar.Count);   // sekizinciden sonra CİHAZA GİDİLMEDİ
 
         // ← ÇİVİ: VAZGEÇME DEĞİL. Fişte gerçek para var; kayıt SİLİNMEZ ve elle tamamlama
-        // her an çalışır. Yalnız 24 saatlik insan ölçeğine çekilir.
+        // her an çalışır. Yalnız seyrek bir ritme çekilir.
         var kalan = Assert.Single(_store.PendingFinishes(_saatMs + (long)TimeSpan.FromDays(2).TotalMilliseconds));
         Assert.Equal(8, kalan.Attempts);
-        Assert.Empty(_store.PendingFinishes(_saatMs));   // yakın vadede artık gelmiyor
+        Assert.Empty(_store.PendingFinishes(_saatMs));   // hemen değil
+
+        // ← ÇİVİ (W125): ama YARIM SAAT SONRA YİNE GELİR. Eskiden 24 saatti ve bu, "vazgeçme"nin
+        // başka adıydı: 2026-09-10 06:37'de 990 kuruşluk bir fiş tam da böyle park edildi ve rulo
+        // takılsa bile kendiliğinden kapanmayacaktı. Kullanıcının şartı "başarılı olana kadar".
+        Assert.Single(_store.PendingFinishes(_saatMs + (long)TimeSpan.FromMinutes(31).TotalMilliseconds));
+    }
+
+    [Fact]
+    public async Task PARK_EDILEN_FIS_cihaz_duzelince_HEMEN_serbest_kalir()
+    {
+        // ← ÇİVİ: 24 saatlik park, kurtarmayı kâğıt üstünde bırakıyordu — insanın 30 saniyede
+        // çözdüğü bir arıza için fiş saatlerce bekliyordu. Ölçüm (06:37): cihaz kademeli
+        // kötüleşti (0xF01C 5,5 sn → 0xF003 13,8 sn → 0xF000 66 sn), tek pahalı deneme pencereyi
+        // kapattı, üzerinde 990 kuruş olan fiş park edildi.
+        //
+        // Serbest bırakan olay TAHMİN DEĞİL ÖLÇÜM olmalı: olağan bir satışın baskı zinciri
+        // baştan sona geçtiyse kâğıt vardır ve cihaz komut alıyordur. Kurtarmanın kendi başarısı
+        // bunu KANITLAMAZ (rulo çıkıkken de başarılı olabildiği 04:20'de ölçüldü).
+        var (h, tasima) = Kur();
+        tasima.Sonuc = new StuckTicketResult(false, false, false,
+            new FisBitirmePlani(FisBitirmeAdimi.MfVeKapat, TicketFinish.Tamamlanabilir, 5),
+            0, "PrintMF", "0xF003");
+        tasima.Sirasinda = () => _saatMs += 16_000;
+        _store.MarkTicketNeedsFinish("tkt_1", "t1", "oturum-A", null, null, 0, _saatMs);
+        // Seyreltme ANINI yakala: sonrasında saati ilerletmek, ölçmek istediğimiz
+        // "yakın vadede gelmiyor" penceresini kaydırırdı.
+        for (var i = 0; i < 10 && !LogVar("SEYRELTİLDİ"); i++)
+        { await h.DrainOutboxAsync(); _saatMs += 10 * 60_000; }
+        Assert.Empty(_store.PendingFinishes(_saatMs));   // park edildi
+
+        // Cihaz düzeldi: başarılı baskının yaptığı şey.
+        _store.UndeferPendingFinishes(_saatMs);
+
+        // Kayıt SİLİNMEDİ, sayaç SIFIRLANMADI — yalnız sırası öne çekildi.
+        var kalan = Assert.Single(_store.PendingFinishes(_saatMs));
+        Assert.Equal(8, kalan.Attempts);
     }
 
     [Fact]
@@ -244,7 +283,7 @@ public class TicketSweepTests : IDisposable
 
         // Sekizinci denemeden SONRA da denemeye devam etti.
         Assert.True(tasima.Cagrilar.Count > 8, $"deneme sayısı {tasima.Cagrilar.Count}, 8'de durmamalıydı");
-        Assert.False(LogVar("otomatik denemeler DURDURULDU"));
+        Assert.False(LogVar("SEYRELTİLDİ"));
         Assert.Single(_store.PendingFinishes(_saatMs));
     }
 
@@ -275,7 +314,7 @@ public class TicketSweepTests : IDisposable
         Assert.True(LogVar("KURTARILAMIYOR"), "sekizinci denemede sesini çıkarmalıydı");
 
         // Ama denemeyi BIRAKMAZ — üzerinde para olan fiş unutulmaz.
-        Assert.False(LogVar("otomatik denemeler DURDURULDU"));
+        Assert.False(LogVar("SEYRELTİLDİ"));
         Assert.Single(_store.PendingFinishes(_saatMs));
 
         // Ve HER TURDA bağırmaz: 9→25 arasında yalnız 10 ve 20'de. Sürekli WARN, gürültüdür.
@@ -345,9 +384,11 @@ public class TicketSweepTests : IDisposable
 
         for (var i = 0; i < 12; i++) { await h.DrainOutboxAsync(); _saatMs += 10 * 60_000; }
 
-        // Bilinmeyen kod PAHALI sayılır → sekizde durur.
-        Assert.True(LogVar("otomatik denemeler DURDURULDU"));
-        Assert.Equal(8, tasima.Cagrilar.Count);
+        // Bilinmeyen kod PAHALI sayılır → sekizde pencere kapanır.
+        Assert.True(LogVar("SEYRELTİLDİ"));
+        // W125: DURMAZ, SEYRELİR. Pencere içinde 8; sonrasında 120 dakikalık benzetimde
+        // yarım saatte bir → en fazla bir tane daha. "Vazgeçme" ile "seyrelme" farkı budur.
+        Assert.InRange(tasima.Cagrilar.Count, 8, 9);
     }
 
     [Fact]
@@ -416,7 +457,7 @@ public class TicketSweepTests : IDisposable
         // ← ÇİVİ: 5,5 saniye UCUZDUR. Sekizde durmaz; kullanıcının istediği gibi kâğıt gelene
         // kadar denemeye devam eder ve rulo takıldığı an fiş kendiliğinden kapanır.
         Assert.True(tasima.Cagrilar.Count > 8, $"deneme {tasima.Cagrilar.Count} — 5,5 sn ucuzdur, durmamalıydı");
-        Assert.False(LogVar("otomatik denemeler DURDURULDU"));
+        Assert.False(LogVar("SEYRELTİLDİ"));
     }
 
     [Fact]
@@ -433,8 +474,8 @@ public class TicketSweepTests : IDisposable
 
         for (var i = 0; i < 12; i++) { await h.DrainOutboxAsync(); _saatMs += 10 * 60_000; }
 
-        Assert.True(LogVar("otomatik denemeler DURDURULDU"));
-        Assert.Equal(8, tasima.Cagrilar.Count);
+        Assert.True(LogVar("SEYRELTİLDİ"));
+        Assert.InRange(tasima.Cagrilar.Count, 8, 9);   // W125: durmaz, seyrelir
         Assert.Single(_store.PendingFinishes(_saatMs + (long)TimeSpan.FromDays(2).TotalMilliseconds));
     }
 
