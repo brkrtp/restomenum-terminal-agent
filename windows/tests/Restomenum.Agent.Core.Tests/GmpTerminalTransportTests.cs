@@ -2085,41 +2085,49 @@ public class GmpTerminalTransportTests
     }
 
     [Fact]
-    public async Task KAGIT_UYARISI_fis_KAPANSA_BILE_DURUR()
+    public async Task KAGIT_UYARISI_KURTARMA_KAPATSA_BILE_DURUR()
     {
-        // ← ÇİVİ: BU GECENİN EN İNCE HATASI. Baskı 0x0020 ile patladı, kasaya `OUT_OF_PAPER`
-        // GİTTİ (kasa gövdeyi gösterdi) — ama süpürme fişi 6,1 SANİYEDE kapattı ve uyarı
-        // ekrandan silindi. Kullanıcı kâğıdın bittiğini HİÇ görmedi; rulonun bittiğini ancak
-        // elle müdahale ederken fark etti.
+        // ← ÇİVİ: SAHADA ISIRDI (2026-09-10 04:20) ve kullanıcı gördü:
+        //     04:20:03  baskı patladı (0x0020)  → uyarı AÇILDI
+        //     04:20:09  kurtarma başarıyla bastı → uyarı KAPANDI
+        //     ömür: **5,8 saniye**. Panel görmedi, kullanıcı görmedi.
         //
-        // Kurtarmayı 83 dakikadan 6 saniyeye indirirken uyarıyı da onunla birlikte silmişiz.
-        // Kâğıt durumu bir DENEMENİN özelliği değil, CİHAZIN durumudur.
-        var (t, g) = TamOdemeKur();
-        var snap = (FakeSnapshots)null!;
-        // TamOdemeKur kendi deposunu kuruyor; burada kendi kurulumumuzu yapıyoruz.
-        g = new FakeGmp();
-        snap = new FakeSnapshots();
+        // W120'de "yalnız başarılı bir baskı düşürür" demiş ve KURTARMAYI da o sayıya
+        // katmıştım. Kural kendi içinde tutarlıydı ama sonucu saçmaydı: uyarıyı DOĞURAN olayı
+        // çözen baskının o uyarıyı SİLMESİ, uyarının aynı olayın içinde doğup ölmesi demek.
+        //
+        // ⚠️ Üstelik "başarılı baskı = kâğıt var" da doğru değil: rulo ÇIKIKKEN `PrintBeforeMF`
+        // 4 saniye sonra başarılı oldu (aynı ölçüm).
+        var g = new FakeGmp();
+        var snap = new FakeSnapshots();
         g.Ticket = new GmpTicket(990, 0, 0, 0);
         g.AfterPayment = new GmpTicket(990, 990, 1, GmpPaymentTypes.Cash);
         g.Codes["PrintBeforeMF"] = GmpCodes.NoPaper;
-        t = new GmpTerminalTransport(g, snap);
+        var t = new GmpTerminalTransport(g, snap);
 
         await t.SaleAsync(Req(amount: 990, paymentType: GmpPaymentTypes.Cash,
             oturum: "oturum-A", satisToplam: 990));
-
-        // Uyarı AÇIK ve hangi adımda doğduğu yazılı.
         Assert.NotNull(snap.KagitUyarisi);
         Assert.Equal("PrintBeforeMF", snap.KagitUyarisi!.Value.Adim);
 
-        // ← ÇİVİ: kurtarma fişi kapatınca uyarı DÜŞMEZ... ama BAŞARILI baskı düşürür.
-        // İkisi ayrı: fişin kapanması kâğıdın geldiğini KANITLAMAZ, baskı kanıtlar.
+        // KURTARMA fişi kapatır — uyarı DURMALI.
         g.Codes.Remove("PrintBeforeMF");
         g.Codes["Start"] = GmpCodes.AlreadyDone;
         g.Ticket = new GmpTicket(990, 990, 1, GmpPaymentTypes.Cash,
             TransactionFlags: TicketFlags.TotalsAndPaymentsPrinted);
-        ((IStuckTicketFinisher)t).FinishStuckTicket(uygula: true);
+        var k = ((IStuckTicketFinisher)t).FinishStuckTicket(uygula: true);
 
-        Assert.Null(snap.KagitUyarisi);                       // başarılı baskı düşürdü
+        Assert.True(k.Kapandi);
+        Assert.NotNull(snap.KagitUyarisi);          // ← uyarı DURUYOR, insanı bekliyor
+
+        // Uyarıyı düşüren TEK şey: bir sonraki OLAĞAN satışın tam zinciri.
+        g.Codes.Remove("Start");
+        g.Ticket = new GmpTicket(990, 0, 0, 0);
+        g.AfterPayment = new GmpTicket(990, 990, 1, GmpPaymentTypes.Cash);
+        await t.SaleAsync(Req(amount: 990, paymentType: GmpPaymentTypes.Cash,
+            oturum: "oturum-B", satisToplam: 990, komut: "c2", odeme: "p2"));
+
+        Assert.Null(snap.KagitUyarisi);             // ← normal işleyiş döndü, uyarı düştü
         Assert.Equal(new[] { "ac:PrintBeforeMF", "kapat" }, snap.KagitSirasi);
     }
 
@@ -2164,6 +2172,28 @@ public class GmpTerminalTransportTests
         ((IStuckTicketFinisher)t).FinishStuckTicket(uygula: true);
 
         Assert.Empty(snap.KagitSirasi);   // ne açıldı ne kapatıldı
+    }
+
+    [Fact]
+    public async Task Fis_KAPANSA_bile_BASKI_PATLADIYSA_uyari_DUSMEZ()
+    {
+        // ← ÇİVİ: "fiş kapandı" ile "fiş BASILDI" AYRI şeyler. `PrintMF` üç denemede de
+        // patlayıp `Close` başarılı olduğunda fiş KAPANIR ama mali dip BASILAMAMIŞTIR —
+        // orada kâğıt uyarısını düşürmek, basılamamış bir fişi "her şey yolunda" saymak olurdu.
+        var g = new FakeGmp();
+        var snap = new FakeSnapshots();
+        snap.SetPaperWarning("t1", true, "PrintBeforeMF");
+        g.Ticket = new GmpTicket(990, 0, 0, 0);
+        g.AfterPayment = new GmpTicket(990, 990, 1, GmpPaymentTypes.Cash);
+        g.PrintMfFailures = 3;                     // üçü de patlar, `Close` yine de geçer
+        var t = new GmpTerminalTransport(g, snap);
+
+        var r = await t.SaleAsync(Req(amount: 990, paymentType: GmpPaymentTypes.Cash,
+            oturum: "oturum-A", satisToplam: 990));
+
+        Assert.Equal("CLOSED", r.TicketState);     // fiş kapandı
+        Assert.Equal("PrintMF", r.PrintFailedStep); // ama basılamadı
+        Assert.NotNull(snap.KagitUyarisi);          // ← uyarı DURUYOR
     }
 
     [Fact]

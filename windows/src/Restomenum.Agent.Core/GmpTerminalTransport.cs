@@ -431,6 +431,10 @@ public sealed partial class GmpTerminalTransport : ITerminalTransport
             if (baskiSebebi == RestomenumReasons.OutOfPaper)
                 _snapshots?.SetPaperWarning(request.TerminalId, true, baskiAdimi);
             else if (kapandi && baskiAdimi is null)
+                // W122: uyarıyı düşüren TEK yer burası — OLAĞAN bir satışın zinciri baştan sona
+                // sorunsuz geçti, yani normal işleyiş geri döndü. Kurtarmanın başarısı bunu
+                // KANITLAMAZ: kurtarma zaten uyarıyı doğuran olayı çözüyor ve rulo çıkıkken bile
+                // başarılı olabildiği ölçüldü (04:20).
                 _snapshots?.SetPaperWarning(request.TerminalId, false);
             if (kapandi)
             {

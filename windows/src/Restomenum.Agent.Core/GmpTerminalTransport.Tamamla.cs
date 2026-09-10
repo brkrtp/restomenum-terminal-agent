@@ -45,10 +45,23 @@ public sealed partial class GmpTerminalTransport : IStuckTicketFinisher
 
         var s = TicketFinishRunner.Calistir(_gmp, handle, uygula, _log, butce);
 
-        // ── W120: KÂĞIT UYARISININ TEK MEŞRU KAPATICISI ─────────────────────────
-        // Uyarıyı yalnız BAŞARILI bir baskı düşürür ve kurtarma zinciri tam da odur:
-        // `PrintTotalsAndPayments` + `PrintBeforeMF` + `PrintMF` geçtiyse kâğıt GERÇEKTEN
-        // gelmiştir — bu bir çıkarım değil, cihazın üç ayrı onayı.
+        // ── W122: KURTARMA UYARIYI **DÜŞÜRMEZ** ─────────────────────────────────
+        // ⚠️ W120'de "uyarıyı yalnız başarılı bir baskı düşürür" demiş ve kurtarmayı da o
+        // sayıya katmıştım. Kural kendi içinde tutarlıydı ama SONUCU YANLIŞTI ve saha
+        // gösterdi (2026-09-10 04:20):
+        //     04:20:03  baskı patladı (0x0020) → uyarı AÇILDI
+        //     04:20:09  kurtarma başarıyla bastı → uyarı KAPANDI
+        //     toplam ömür: **5,8 saniye**. Panel görmedi, kullanıcı görmedi.
+        // Uyarıyı DOĞURAN olayı çözen baskının o uyarıyı SİLMESİ saçma: aynı olayın içinde
+        // doğup ölüyor ve insana hiç ulaşmıyor.
+        //
+        // ⚠️ Üstelik "başarılı baskı = kâğıt var" da DOĞRU DEĞİL: rulo çıkıkken `PrintBeforeMF`
+        // 4 saniye sonra başarılı oldu (aynı ölçüm). Yani kurtarmanın başarısı kâğıdı
+        // KANITLAMIYOR bile.
+        //
+        // Yeni kural: kurtarma uyarıyı yalnız AÇAR, hiç kapatmaz. Kapatan tek şey
+        // **bir sonraki OLAĞAN satışın tam zinciri** (`GmpTerminalTransport.Sale`) — yani
+        // normal işleyişin geri döndüğünün kanıtı. Uyarı o zamana kadar insanı bekler.
         // ⚠️ Kuru prova (`uygula: false`) buraya zararsız düşer ve AYRI bir koruma gerektirmez:
         // o yolda hiçbir baskı çağrılmaz, dolayısıyla `Kapandi` false ve `Kod` null olur —
         // yani ne düşürme ne açma dalı çalışır. (Mutasyon testi bunu gösterdi: `uygula &&`
@@ -61,8 +74,7 @@ public sealed partial class GmpTerminalTransport : IStuckTicketFinisher
         var kagitTerminali = _terminalId.Length > 0 ? _terminalId : TekTerminal();
         if (_snapshots is { } d && kagitTerminali is not null)
         {
-            if (s.Kapandi) d.SetPaperWarning(kagitTerminali, false);
-            else if (s.Kod == $"0x{GmpCodes.NoPaper:X4}")
+            if (s.Kod == $"0x{GmpCodes.NoPaper:X4}")
                 d.SetPaperWarning(kagitTerminali, true, s.BasarisizAdim);
         }
 
