@@ -76,6 +76,46 @@ public sealed partial class GmpTerminalTransport
         code == GmpCodes.InvalidHandle || code == GmpCodes.NoHandle;
 
     /// <summary>
+    /// <b>W128 — TANITICI ALMANIN TEK KAPISI.</b> Geçerli bir tanıtıcı döner; <c>null</c> =
+    /// cihazda <b>açık fiş YOK</b>.
+    ///
+    /// <para><b>Neden var (kalıcı sebep):</b> <c>_handle == 0</c>, "tanıtıcı lazım"ın tek
+    /// işareti sanılıyordu. Oysa <b>sıfır olmayan ama ÖLÜ</b> bir tanıtıcı da geçersizdir ve
+    /// kendini yalnız çağrı anında 2317 ile belli eder. Bayat tanıtıcı kurtarması 2026-09-06 ve
+    /// 09-07'de ölçülüp <see cref="ReadTicket"/>'e eklenmişti — ama <b>yalnız oraya</b>.
+    /// İptal yolları aynı ölü tanıtıcıyı kullanmaya devam etti.</para>
+    ///
+    /// <para><b>Sonucu sahada görüldü (2026-09-10 16:30 ve 16:39):</b> rulo takılı, cihaz ekranı
+    /// normal, buna rağmen iptal <b>273 ms</b>'de <c>TICKET_READ_FAILED</c> ile döndü. Cihaza
+    /// gidip bekleyen bir çağrı o kadar hızlı dönmez — ölü tanıtıcı hemen döner. Süreç 12 saattir
+    /// ayakta ve tanıtıcı olay anında ölmüştü; ajan yeniden başlayana kadar iptal çalışamazdı.</para>
+    ///
+    /// <para>⚠️ Bu yüzden düzeltme nokta yaması DEĞİL: her yeni yol kendi kurtarmasını
+    /// hatırlamak zorunda kalırsa kusur, <b>bir sonraki kapıdan yine girer</b>. Aynı kusurun
+    /// üçüncü kez tekrarlamasının tek yolu, tanıtıcıyı buradan almamaktır.</para>
+    /// </summary>
+    private ulong? GecerliTanitici()
+    {
+        ulong h;
+        lock (_gate) h = _handle;
+
+        if (h == 0)
+        {
+            if (TanitciyiYenile() is not null) return null;   // açık fiş yok
+            lock (_gate) h = _handle;
+            return h;                                          // taze tanıtıcı, sınamaya gerek yok
+        }
+
+        // Elimizdeki tanıtıcı SIFIR DEĞİL — ama yaşadığının kanıtı yok. Ucuz bir çağrıyla sına.
+        if (!BayatTanitici(_gmp.OptionFlags(h, GmpEchoFlags.Reload).Code)) return h;
+
+        _log("[gmp] tanıtıcı bayat (2317) — yenileniyor", new { eski = h });
+        if (TanitciyiYenile() is not null) return null;        // yenilenince açık fiş yokmuş
+        lock (_gate) h = _handle;
+        return h;
+    }
+
+    /// <summary>
     /// <c>FP3_Start</c> yoklamasıyla tanıtıcıyı tazeler. Dönüş <c>null</c> ise <b>açık fiş VAR</b> ve
     /// tanıtıcısı <c>_handle</c>'a yazıldı; dolu dönerse okunacak fiş yoktur.
     /// </summary>

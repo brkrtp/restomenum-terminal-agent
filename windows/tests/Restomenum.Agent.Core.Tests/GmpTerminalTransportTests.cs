@@ -1533,7 +1533,12 @@ public class GmpTerminalTransportTests
         Assert.Equal(TransportOutcome.Approved, r.Outcome);
         // Sıra: önce OKU (denetim izi), sonra iptal et. Fişin ne olduğu, SİLİNMEDEN ÖNCE loglanır;
         // sonra loglansaydı iptal sırasındaki bir çökmede ne sildiğimizi kimse bilemezdi.
-        Assert.Equal(new[] { "OptionFlags", "GetTicket", "VoidAll", "Close" }, g.Calls);
+        //
+        // İLK `OptionFlags` W128'in canlılık sınaması: elimizdeki tanıtıcı sıfır değil ama
+        // YAŞADIĞININ KANITI YOK. Bedeli bir DLL çağrısı; karşılığı, ölü tanıtıcının iptali
+        // süreç yeniden başlayana kadar kilitlememesi (sahada 2026-09-10'da tam bu oldu).
+        // Gizlemek yerine burada AÇIKÇA yazılı: fazladan çağrı bilinçli bir seçim.
+        Assert.Equal(new[] { "OptionFlags", "OptionFlags", "GetTicket", "VoidAll", "Close" }, g.Calls);
         Assert.DoesNotContain("VoidPayment", g.Calls);
         Assert.Equal(RestomenumReasons.TicketCancelled, r.Info);
     }
@@ -1554,6 +1559,35 @@ public class GmpTerminalTransportTests
         // İlk VoidAll 2069 verdi, ters işlemden sonra ikinci VoidAll da 2069 verecek şekilde
         // sahtelendiği için sonuç belirsiz — kritik olan ters işlemin DENENMESİ.
         Assert.Equal(TransportOutcome.Unknown, r.Outcome);
+    }
+
+    [Fact]
+    public async Task BAYAT_TANITICI_IPTALDE_de_YENILENIR()
+    {
+        // ← ÇİVİ: BU KUSUR İKİNCİ KEZ TEKRARLADI ve sebebi tam olarak buydu.
+        //
+        // Bayat tanıtıcı kurtarması 2026-09-06/07'de ölçülüp `ReadTicket`e eklendi — ama YALNIZ
+        // ORAYA. İptal yolları `_handle == 0` dışında bir geçersizlik tanımıyordu; SIFIR OLMAYAN
+        // ama ÖLÜ bir tanıtıcı görünmez kalıyordu.
+        //
+        // Sahada (2026-09-10 16:39): rulo takılı, cihaz ekranı normal, iptal 273 ms'de
+        // TICKET_READ_FAILED. Cihaza gidip bekleyen bir çağrı o kadar hızlı dönmez — ölü
+        // tanıtıcı hemen döner. Ajan 12 saattir ayaktaydı; yeniden başlamadan iptal edilemezdi.
+        var (t, g, _) = Kur();
+        g.AfterPayment = new GmpTicket(3000, 990, 1, GmpPaymentTypes.Cash);
+        await t.SaleAsync(Req(amount: 990, paymentType: GmpPaymentTypes.Cash, satisToplam: 3000));
+        g.StaleHandles.Add(42);                    // elimizdeki tanıtıcı cihaz tarafında ÖLDÜ
+        g.NextStartHandle = 43;                    // yenileme YENİ tanıtıcı verecek
+        g.Codes["Start"] = GmpCodes.AlreadyDone;   // açık fiş VAR (2080)
+        g.Calls.Clear();
+        g.Ticket = new GmpTicket(3000, 990, 1, GmpPaymentTypes.Cash);
+
+        var r = await t.VoidTicketAsync("t1");
+
+        // Ölü tanıtıcıyla pes ETMEDİ: yeniledi ve iptali TAMAMLADI.
+        Assert.Equal(TransportOutcome.Approved, r.Outcome);
+        Assert.Contains("VoidAll", g.Calls);
+        Assert.Equal(990, r.VoidedAmountMinor);
     }
 
     [Fact]

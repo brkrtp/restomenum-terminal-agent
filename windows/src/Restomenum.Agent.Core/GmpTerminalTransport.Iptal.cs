@@ -21,21 +21,14 @@ public sealed partial class GmpTerminalTransport
 
     private TransportResult Void()
     {
-        ulong h;
-        lock (_gate) h = _handle;
-
-        // TANITICI KURTARMASI: iptal isteği çoğu zaman satıştan SONRA, hatta ajan yeniden
-        // başladıktan sonra gelir — tanıtıcı bellekte olmaz. Eskiden burada doğrudan
-        // "NO_OPEN_TICKET" dönülüyordu, yani **iptalin en tipik vakası hiç çalışmıyordu.**
-        // `FP3_Start` açık fiş varsa 2080 döner ve hTrx'i AÇIK FİŞİN tanıtıcısıyla doldurur.
-        if (h == 0)
-        {
-            var yok = TanitciyiYenile();
-            if (yok is not null)
-                return new TransportResult(TransportOutcome.Declined,
-                    ProviderResultCode: "NO_OPEN_TICKET", ErrorCondition: "NotFound");
-            lock (_gate) h = _handle;
-        }
+        // W128: tanıtıcı TEK KAPIDAN alınır — hem yokluğu hem BAYATLIĞI orada çözülür.
+        // Eskiden burada yalnız `h == 0` sınanıyordu; sıfır olmayan ÖLÜ bir tanıtıcı fark
+        // edilmiyor ve iptal, süreç yeniden başlayana kadar hızlı hızlı patlıyordu.
+        var th = GecerliTanitici();
+        if (th is null)
+            return new TransportResult(TransportOutcome.Declined,
+                ProviderResultCode: "NO_OPEN_TICKET", ErrorCondition: "NotFound");
+        var h = th.Value;
 
         // Denetim izi: neyi iptal ettiğimiz, iptalden ÖNCE yazılır. Aynı okuma kasaya dönecek
         // sayaçların da tek kaynağı — iptalden SONRA fiş yok, sorulacak yer kalmaz.
@@ -150,17 +143,13 @@ public sealed partial class GmpTerminalTransport
 
     private TicketVoidResult VoidTicket(string terminalId)
     {
-        ulong h;
-        lock (_gate) h = _handle;
-
-        if (h == 0)
-        {
-            var yok = TanitciyiYenile();
-            if (yok is not null)
-                return new TicketVoidResult(TransportOutcome.Approved, TicketWasOpen: false,
-                    ProviderResultCode: "NO_OPEN_TICKET");
-            lock (_gate) h = _handle;
-        }
+        // W128: bkz. GecerliTanitici — bayat tanıtıcı burada da görünmez kalıyordu ve
+        // sahada 2026-09-10 16:39'da iptalin 273 ms'de patlamasının sebebi buydu.
+        var th = GecerliTanitici();
+        if (th is null)
+            return new TicketVoidResult(TransportOutcome.Approved, TicketWasOpen: false,
+                ProviderResultCode: "NO_OPEN_TICKET");
+        var h = th.Value;
 
         // Denetim izi: neyi iptal ettiğimiz SİLİNMEDEN ÖNCE okunur ve yazılır.
         var of = _gmp.OptionFlags(h, GmpEchoFlags.Reload);

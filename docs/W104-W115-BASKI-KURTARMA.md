@@ -504,3 +504,62 @@ Ayrıca banka yolundaki `Approved` dalı tutar/sayı/oturumu bildirmiyordu (rapo
 deliği) — eklendi.
 
 Mutasyon: 4 mutasyon, hepsi kırmızı.
+
+---
+
+## W128 — KALICI SEBEP: bayat tanıtıcı kurtarması TEK YOLA konmuştu
+
+**Kullanıcı:** "Bu bug'ı daha önce çözmüştük fakat şimdi tekrarlandı. Kalıcı
+sebebini araştır."
+
+**Cevap: tekrarlamadı — aynı kusur BAŞKA KAPIDAN girdi.**
+
+### Kanıt kodun kendi yorumunda duruyordu
+
+```
+// ── BAYAT TANITICI KURTARMASI ──  (Okuma.cs)
+// Bu ölçüldü: 2026-09-06 01:50 ve 2026-09-07 14:30 … 6 turun 6'sında 2317
+// aldı ve belirsizlik ÇÖZÜLEMEDİ — tam da en gerekli anda.
+```
+
+Daha önce çözülen bug buydu. Ama kurtarma **yalnız `ReadTicket`'e** kondu:
+
+| yol | `h == 0` tazeleme | bayat (2317) kurtarma |
+|---|---|---|
+| `ReadTicket` | var | **var** |
+| `Void` | var | **YOK** |
+| `VoidTicket` | var | **YOK** |
+
+`_handle == 0`, "tanıtıcı lazım"ın **tek** işareti sanılmıştı. Sıfır olmayan ama
+**ölü** bir tanıtıcı `ReadTicket` dışında hiçbir yerde görünmüyordu.
+
+### Sahadaki ölçüm
+
+```
+16:30:02 → 16:30:03   iptal, 727 ms,  outcome=Unknown
+16:39:48 → 16:39:48   iptal, 273 ms,  outcome=Unknown   ← RULO TAKILI
+```
+
+Cihaza gidip bekleyen bir çağrı 273 ms'de dönmez; **ölü tanıtıcı hemen döner.**
+Süreç 12 saattir ayaktaydı (04:25:12) ve tanıtıcı olay anında ölmüştü — ajan
+yeniden başlamadan iptal çalışamazdı. "Yeniden başlatınca düzeliyor" desenİnin
+tamamı bu.
+
+### Neden nokta yaması yapılmadı
+
+Her yeni yol kendi kurtarmasını hatırlamak zorunda kalırsa kusur **bir sonraki
+kapıdan yine girer** — bugün olan tam olarak buydu. Tanıtıcı artık **tek kapıdan**
+alınıyor (`GecerliTanitici`): hem yokluğu hem bayatlığı orada çözülüyor.
+
+Bedeli, tanıtıcı elde varken bir ek `OptionFlags` canlılık sınaması. Testte
+gizlenmedi, **açıkça yazıldı**: bilinçli bir seçim.
+
+### İkinci kusur: teşhis edilemezlik
+
+`[iptal] fiş sonucu` log satırı cihazın kodunu **yazmıyordu**. Kod üretiliyor ve
+kasaya gidiyordu ama bizim tarafımızda hiçbir yerde görünmüyordu — bugün iptalin
+neden patladığını log'dan çıkaramamamızın sebebi buydu. `kod` alanı eklendi.
+
+> Teşhis edilemeyen bir kusur, çözülmüş sayılamaz.
+
+Mutasyon: 4 mutasyon, hepsi kırmızı.

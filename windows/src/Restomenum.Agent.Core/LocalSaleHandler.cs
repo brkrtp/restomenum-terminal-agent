@@ -514,6 +514,10 @@ public sealed class LocalSaleHandler : IDeviceIdleGate
             req.PaymentId, outcome = sonuc.Outcome.ToString(), acikFisVarMiydi = sonuc.TicketWasOpen,
             odemeSayisi = sonuc.VoidedPaymentCount, tutar = sonuc.VoidedAmountMinor,
             iptalEdilenOturum = sonuc.CancelledSaleSessionId ?? "(bağ yok)",
+            // W128: CİHAZIN KODU. Bu alan olmadığı için 2026-09-10'da iptalin neden patladığı
+            // log'dan ANLAŞILAMADI — kod üretiliyor ve kasaya gidiyordu ama bizim tarafımızda
+            // hiçbir yerde görünmüyordu. Teşhis edilemeyen kusur, çözülmüş sayılamaz.
+            kod = sonuc.ProviderResultCode ?? "(yok)",
             ticketCancelId = req.TicketCancelId ?? "(yok)",
         });
 
