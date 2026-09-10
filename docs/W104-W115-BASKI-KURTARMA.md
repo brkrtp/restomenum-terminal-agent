@@ -664,3 +664,70 @@ bağlı) — bu ayrıca çivilendi, çünkü doğrulamayı ona da uygulamak bug�
 çalışan istekleri sessizce reddetmek olurdu.
 
 Mutasyon: 5 mutasyon, hepsi kırmızı (biri 22 testi düşürdü).
+
+---
+
+## W131 — `TICKET_NOT_COMPLETE` replay EDİLMEZ, ve bu DOĞRUDUR
+
+Panel ajanı aynı `ticketFinishId`'yi ikinci kez gönderdi (2026-09-10 18:48:01):
+
+```
+18:46:45  TicketFinish finishId=85b09a94-…-fin-227e3a79  → 1084 ms, TICKET_NOT_COMPLETE
+18:48:01  AYNI finishId                                  → 1071 ms, cihaza YİNE GİDİLDİ
+```
+
+`[bitir] tekrar gelen istek — saklanan sonuç replay edildi` satırı **çıkmadı**.
+
+Depoda ölçüldü:
+
+```
+command_id   85b09a94-…-fin-227e3a79
+kind         finish
+state        RECEIVED      ← final DEĞİL
+result_json  NULL
+```
+
+### Bu bir kusur DEĞİL — tasarım
+
+Sonuç yalnız `Kapandi || FisAcikDegil` olduğunda saklanır. `TICKET_NOT_COMPLETE`
+**geçici** bir durumdur: kalan tahsil edilirse fiş tamamlanabilir hâle gelir.
+Kesin sonuç diye saklamak, elle kurtarmayı tek denemeye indirirdi — oysa bu
+zarfın varlık sebebi insanın doğru anı seçebilmesi.
+
+Tekrar **güvenli**: fiş AÇIK olduğu için `FP3_Start` 2080 döner, yeni fiş
+açılmaz, mali numara tüketilmez, `plan = Dokunma` olduğu için fişe dokunulmaz.
+Bedeli ~1 saniye cihaz zamanı.
+
+> **Beklentim yanlıştı, kod doğruydu.** Kendi kodum hakkında saklama kuralına
+> bakmadan beklenti bildirdim; ölçüm onu çürüttü.
+
+### Sınırlı bir kalıntı (izlenerek bulundu, ölçülmedi)
+
+Fiş BAŞKA bir yolla kapanırsa (süpürme ya da kalanın tahsili) ve aynı `finishId`
+sonra tekrar gönderilirse: kayıt hâlâ `RECEIVED`, istek cihaza gider, açık fiş
+bulunmaz ve `TanitciyiYenile` yoklama fişi açıp kapatır → **bir mali numara
+tüketilir**. Sonrası güvenli: o çağrı `FisAcikDegil` döner, final saklanır,
+sonraki basışlar replay edilir. Yani kayıp **`finishId` başına en fazla bir**.
+
+Panel tarafı bunu kendi ucunda zaten önlüyor (E59d: tamamlamadan önce
+`queryDeviceTicket`, açık fiş yoksa istek gönderilmiyor).
+
+---
+
+## W132 — ÖLÇÜMÜN HANGİ KODDA YAPILDIĞI, ÖLÇÜMÜN KENDİSİ KADAR ÖNEMLİ
+
+`ticketFinishId` reddi için "66 > 64" teşhisini koydum, sonra **geri aldım**:
+iki reddin de gövdesi 317 bayttı ve anahtar kısalsaydı gövde de kısalırdı diye
+düşündüm — "alan gövdeye hiç girmiyor" dedim.
+
+**Geri alma YANLIŞTI.** Panel ajanı kısaltmayı yapmış ama süreci yeniden
+başlatmamıştı; Electron ana süreci diskten yeniden okumaz. Yani ölçtüğüm iki
+istek de **eski koddu** ve ikisi de 66 karakterlik anahtarı taşıyordu. Yeniden
+başlatıldıktan sonra aynı istek 300 bayt oldu (fark tam 17 = 66−49) ve **geçti**.
+
+İlk teşhis doğruydu; W129/W130 tam da onun düzeltmesi.
+
+> **Ders (üç kez farklı kılıkta çıktı):** ölçüm, ölçtüğünü sandığın kodda
+> yapılmıyor olabilir. Sahte depo gerçeği yansıtmıyordu (W124); mutasyon betiği
+> dosyayı geri koyarken zaman damgasını kaybedip bayat derleme ölçüyordu; şimdi
+> de yeni kod eski süreçte ölçüldü. **Kod değişti ≠ çalışan kod değişti.**
