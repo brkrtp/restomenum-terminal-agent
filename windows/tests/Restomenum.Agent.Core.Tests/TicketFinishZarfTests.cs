@@ -80,12 +80,54 @@ public class TicketFinishZarfTests : IDisposable
     [Fact]
     public void ticketFinishId_ZORUNLU_yoksa_istek_REDDEDILIR()
     {
-        Assert.NotNull(TicketFinishParser.Parse(Zarf("fin-1")));
+        Assert.NotNull(TicketFinishParser.Parse(Zarf("fin-1"), out _));
         // ← ÇİVİ: anahtarsız çalıştırmak, tekrar gelen bir isteğin cihaza İKİNCİ kez gitmesine
         // izin vermektir — ve `FP3_Start` yoklama fişi açıp MALİ NUMARA tüketir.
-        Assert.Null(TicketFinishParser.Parse(Zarf(null)));
-        Assert.Null(TicketFinishParser.Parse(Zarf("   ")));
-        Assert.Null(TicketFinishParser.Parse(Zarf(new string('x', 65))));
+        Assert.Null(TicketFinishParser.Parse(Zarf(null), out _));
+        Assert.Null(TicketFinishParser.Parse(Zarf("   "), out _));
+        Assert.Null(TicketFinishParser.Parse(Zarf(new string('x', TicketFinishParser.AnahtarEnCok + 1)), out _));
+    }
+
+    [Fact]
+    public void RED_SEBEBI_AYRISIR_yok_bos_ve_cok_uzun_ayni_sey_degil()
+    {
+        // ← ÇİVİ: SAHADA KÖR ARAMA YAPTIRDI. 2026-09-10 18:32:59'da kasa geçerli bir istek
+        // gönderdi, reddettim ve log yalnız "ticketFinishId zorunlu" dedi. Alan yok muydu,
+        // yanlış yerde miydi, çok mu uzundu — çıkarılamıyordu. Karşı taraf kendi tarafında
+        // hata aradı; oysa kusur BENDEYDİ: sınırım 64, anahtarları 66 karakterdi.
+        //
+        // Teşhis edilemeyen bir red, karşı tarafı kör arama yaptırır. W128'deki görünmez
+        // cihaz koduyla aynı sınıf hata.
+        Assert.Null(TicketFinishParser.Parse(Zarf(null), out var yok));
+        Assert.Contains("YOK", yok);
+
+        Assert.Null(TicketFinishParser.Parse(Zarf("   "), out var bos));
+        Assert.Contains("BOŞ", bos);
+
+        Assert.Null(TicketFinishParser.Parse(Zarf(new string('x', 200)), out var uzun));
+        Assert.Contains("ÇOK UZUN", uzun);
+        Assert.Contains("200", uzun);   // GELEN uzunluk da yazılır — karşı taraf ölçebilsin
+
+        // Başarıda sebep YOKTUR.
+        Assert.NotNull(TicketFinishParser.Parse(Zarf("fin-1"), out var sebepYok));
+        Assert.Null(sebepYok);
+    }
+
+    [Fact]
+    public void KASANIN_DETERMINISTIK_ANAHTARI_66_KARAKTER_KABUL_EDILIR()
+    {
+        // ← ÇİVİ: 64 sınırı GERÇEK bir anahtarı kesiyordu. Kasanın şekli
+        // `<uuid>-<terminalId>-ticketfinish` = 36+1+16+13 = 66 karakter ve bu iyi bir
+        // tasarım: deterministik, okunabilir, çakışmaz. Sınır taşmayı engellemek için var,
+        // makul anahtarları kesmek için değil.
+        var anahtar = "edb4d562-c4de-4c0d-9e7c-0f5850b2e4b3-windows-gmp-test-ticketfinish";
+        Assert.Equal(66, anahtar.Length);
+
+        var istek = TicketFinishParser.Parse(Zarf(anahtar), out var neden);
+
+        Assert.NotNull(istek);
+        Assert.Null(neden);
+        Assert.Equal(anahtar, istek!.TicketFinishId);
     }
 
     [Fact]

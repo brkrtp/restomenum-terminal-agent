@@ -563,3 +563,64 @@ neden patladığını log'dan çıkaramamamızın sebebi buydu. `kod` alanı ekl
 > Teşhis edilemeyen bir kusur, çözülmüş sayılamaz.
 
 Mutasyon: 4 mutasyon, hepsi kırmızı.
+
+---
+
+## W129 — kendi keyfi sınırım gerçek bir anahtarı kesti, ve red sebebi görünmüyordu
+
+**Ölçüm (2026-09-10 18:32:59):**
+
+```
+WRN geçersiz TicketFinish (ticketFinishId zorunlu)
+    [uzakUç=127.0.0.1:58174 ua=axios/1.15.0 uzunluk=317]
+```
+
+Kasa geçerli bir istek gönderdi; ben reddettim.
+
+### İki ayrı kusur
+
+**① Sınır yanlıştı.** Kasanın deterministik anahtar şekli
+`<uuid>-<terminalId>-ticketfinish` = 36+1+16+13 = **66 karakter**. Sınırım
+**64**'tü. 64 benim keyfi seçimimdi; anahtarın kendisi iyi tasarlanmıştı
+(deterministik, okunabilir, çakışmaz). Sınır **taşmayı** engellemek için var,
+makul anahtarları kesmek için değil → 128.
+
+**② Red sebebi görünmüyordu.** "Yok", "boş", "çok uzun" ve "yanlış yer" aynı tek
+mesajla yazılıyordu. Karşı taraf kendi tarafında hata aradı — oysa kusur bendeydi.
+Artık sebep ayrışıyor ve **gelen uzunluk da yazılıyor**, böylece karşı taraf
+ölçebiliyor.
+
+> W128'deki görünmez cihaz koduyla **aynı sınıf** hata:
+> **teşhis edilemeyen bir red, karşı tarafı kör arama yaptırır.**
+
+Mutasyon: 4 mutasyon, hepsi kırmızı.
+
+---
+
+## E58 turu — kurtarma düğmeden önce davrandı
+
+Aynı turda ölçülen tam iz (`tkt_d2d6126492c44b9fb1869b784d6776ce`):
+
+```
+18:28:33  kalem satırı basıldı { adet=1, eksik=False }   ← kâğıt VAR
+18:29:28→18:30:08  süpürme 5 tur ATLADI (cihaz satışta)
+18:29:48  UÇUŞTAKİ komutlar atlandı { atlanan=1 }        ← 19,80 kuralı çalıştı
+18:30:13  PrintBeforeMF patladı { 0xF003 } → reason=PRINT_TIMEOUT
+18:30:14  ödeme bildirimi APPROVED → COMPLETED
+18:30:23→18:31:41  denemeler 1–6: 0xF01C, ~5500 ms, bedel=ucuz, aralık 10 sn
+18:31:52  fiş okundu { 990/990, kalan=0, 0x00020006, TumBaskiVeKapat, adım 6 }
+18:31:55  ✓ FİŞ KAPANDI  (deneme 7)
+```
+
+**Baskı patlamasından kapanışa 101,7 saniye, gözetimsiz.**
+
+İki şey kanıtlandı:
+
+- **W121 bedelini ödedi:** altı deneme de `0xF01C`/5,5 sn olduğu için **ucuz**
+  sınıflandı ve 10 saniyede bir koştu. Eski kod-tabanlı kuralda `0xF01C` pahalı
+  sayılıyordu; öyle kalsaydı üstel geri çekilme devreye girer ve fiş dakikalarca
+  açık kalırdı.
+- **Kâğıt bitmesi ≠ baskı zaman aşımı.** Kalem satırı basıldı, yani kâğıt vardı;
+  `PrintBeforeMF` yine de 100 saniyede zaman aşımına düştü. `OUT_OF_PAPER` dalı
+  KOŞMADI ve `paperWarning` açılmadı — **doğrusu da bu**: cihaz kâğıtsız olduğunu
+  söylemedi.

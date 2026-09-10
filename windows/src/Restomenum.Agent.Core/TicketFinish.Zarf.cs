@@ -1,4 +1,4 @@
-using System.Text.Json;
+﻿using System.Text.Json;
 using System.Text.Json.Nodes;
 
 namespace Restomenum.Agent.Core;
@@ -28,10 +28,21 @@ public sealed record TicketFinishRequest(
 /// <summary><c>MessageCategory: "TicketFinish"</c> zarfının ayrıştırılması.</summary>
 public static class TicketFinishParser
 {
+    /// <summary>
+    /// <b>W129 — tekrar anahtarının en fazla uzunluğu.</b> 64'tü ve <b>gerçek bir anahtarı
+    /// kesiyordu</b>: kasanın deterministik şekli <c>&lt;uuid&gt;-&lt;terminalId&gt;-ticketfinish</c>
+    /// = 36+1+16+13 = <b>66</b> karakter (2026-09-10 18:32'de ölçüldü, istek reddedildi).
+    ///
+    /// <para>64 benim keyfi seçimimdi; anahtarın kendisi iyi tasarlanmıştı. Sınır, saldırıyı
+    /// değil taşmayı engellemek için var — 128 aynı işi görüyor ve makul anahtarları kesmiyor.</para>
+    /// </summary>
+    public const int AnahtarEnCok = 128;
+
     public const string Category = "TicketFinish";
 
-    public static TicketFinishRequest? Parse(string body)
+    public static TicketFinishRequest? Parse(string body, out string? neden)
     {
+        neden = null;
         JsonDocument doc;
         try { doc = JsonDocument.Parse(body); }
         catch (JsonException) { return null; }
@@ -42,20 +53,38 @@ public static class TicketFinishParser
             if (root.ValueKind != JsonValueKind.Object
                 || !root.TryGetProperty("SaleToPOIRequest", out var env) || env.ValueKind != JsonValueKind.Object
                 || !env.TryGetProperty("MessageHeader", out var hdr) || hdr.ValueKind != JsonValueKind.Object)
-                return null;
+            { neden = "SaleToPOIRequest/MessageHeader yok ya da nesne değil"; return null; }
 
-            if (Str(hdr, "MessageCategory") != Category) return null;
+            if (Str(hdr, "MessageCategory") != Category)
+            { neden = $"MessageCategory '{Str(hdr, "MessageCategory")}' — '{Category}' bekleniyordu"; return null; }
 
             var serviceId = Str(hdr, "ServiceID");
             var poiId = Str(hdr, "POIID");
-            if (string.IsNullOrEmpty(serviceId) || string.IsNullOrEmpty(poiId)) return null;
+            if (string.IsNullOrEmpty(serviceId) || string.IsNullOrEmpty(poiId))
+            { neden = "ServiceID ya da POIID boş"; return null; }
 
             // Tekrar anahtarı ZORUNLU. Yoksa istek REDDEDİLİR — "anahtarsız da çalıştıralım"
             // demek, tekrar gelen bir isteğin cihaza ikinci kez gitmesine izin vermektir.
             string? finishId = null;
             if (env.TryGetProperty("Restomenum", out var ek) && ek.ValueKind == JsonValueKind.Object)
                 finishId = Str(ek, "ticketFinishId");
-            if (string.IsNullOrWhiteSpace(finishId) || finishId!.Length > 64) return null;
+
+            // ══ W129 — RED SEBEBİ AYRIŞIR ═══════════════════════════════════════════
+            //
+            // 2026-09-10 18:32:59'da kasa geçerli bir `TicketFinish` gönderdi ve reddettim;
+            // log yalnız "ticketFinishId zorunlu" dedi. Alan YOK muydu, YANLIŞ YERDE miydi,
+            // yoksa ÇOK MU UZUNDU — log'dan çıkarılamıyordu. Karşı taraf kendi tarafında
+            // hata aradı, oysa kusur bendeydi.
+            //
+            // Aynı sınıf hata W128'de de vardı (iptalin cihaz kodu hiç loglanmıyordu).
+            // Teşhis edilemeyen bir red, karşı tarafı kör arama yaptırır.
+            if (finishId is null) { neden = "ticketFinishId YOK (SaleToPOIRequest.Restomenum içinde bekleniyor)"; return null; }
+            if (string.IsNullOrWhiteSpace(finishId)) { neden = "ticketFinishId BOŞ"; return null; }
+            if (finishId.Length > AnahtarEnCok)
+            {
+                neden = $"ticketFinishId ÇOK UZUN ({finishId.Length} > {AnahtarEnCok})";
+                return null;
+            }
 
             return new TicketFinishRequest(serviceId!, Str(hdr, "SaleID") ?? "", poiId!, finishId,
                 DateTimeOffset.UtcNow);

@@ -172,12 +172,14 @@ public sealed class AgentWorker : BackgroundService
             // hatasının satışı da bozması demekti.
             if (kategori == TicketFinishParser.Category)
             {
-                var bitir = TicketFinishParser.Parse(body);
+                var bitir = TicketFinishParser.Parse(body, out var redNedeni);
                 if (bitir is null)
                 {
-                    // En sık sebep: `ticketFinishId` YOK. Anahtarsız çalıştırmak, tekrar gelen
-                    // bir isteğin cihaza İKİNCİ kez gitmesine izin vermek olurdu.
-                    _log.LogWarning("geçersiz TicketFinish (ticketFinishId zorunlu) [{Kaynak}]", Kaynak());
+                    // W129: SEBEP YAZILIR. 2026-09-10 18:32'de kasa geçerli bir istek gönderdi,
+                    // reddettim ve log yalnız "ticketFinishId zorunlu" dedi — alan yok muydu,
+                    // yanlış yerde miydi, çok mu uzundu belli değildi. Karşı taraf kendi
+                    // tarafında hata aradı; oysa kusur bendeydi (sınır 64, anahtar 66).
+                    _log.LogWarning("geçersiz TicketFinish: {Neden} [{Kaynak}]", redNedeni ?? "bilinmiyor", Kaynak());
                     Respond(ctx, 400, "{\"error\":\"MALFORMED\"}");
                     return;
                 }
