@@ -206,10 +206,26 @@ public sealed class CommandStore : ITicketSnapshotStore, IDisposable
                     attempts        INTEGER NOT NULL DEFAULT 0,
                     next_attempt_at INTEGER NOT NULL,
                     last_step       TEXT,
-                    last_code       TEXT
+                    last_code       TEXT,
+                    parked_until    INTEGER
                 )
                 """;
             cmd.ExecuteNonQuery();
+
+            // ── ŞEMA GEÇİŞİ: `parked_until` (W126) ────────────────────────────────────
+            // `next_attempt_at`ten TÜRETİLEMEZ. Sıradaki denemenin 10 saniye sonra olması ile
+            // kaydın PARK EDİLMİŞ olması, o alanda birbirinden ayırt edilemez — ikisi de
+            // "gelecekte". Zamandan çıkarım yapmak tam da kaçındığımız şey: kasiyere
+            // "bekle, çözülür" demekle "bekleme, çözülmeyecek" demek arasındaki fark bu.
+            // Bu yüzden park AÇIKÇA işaretlenir. NULL = park edilmemiş.
+            cmd.CommandText = "PRAGMA table_info(pending_finish)";
+            var pfKolon = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            using (var r = cmd.ExecuteReader()) while (r.Read()) pfKolon.Add(r.GetString(1));
+            if (!pfKolon.Contains("parked_until"))
+            {
+                cmd.CommandText = "ALTER TABLE pending_finish ADD COLUMN parked_until INTEGER";
+                cmd.ExecuteNonQuery();
+            }
 
             // ── ŞEMA GEÇİŞİ: `kind` sütunu (genişlet → geçir → daralt) ─────────────────
             // Sütun sonradan eklendi ve varsayılanı 'sale'. Böylece ESKİ kayıtlar bozulmadan
@@ -608,7 +624,7 @@ public sealed class CommandStore : ITicketSnapshotStore, IDisposable
         {
             using var cmd = _conn.CreateCommand();
             cmd.CommandText = """
-                SELECT ticket_id, terminal_id, sale_session_id, attempts, last_step, last_code, marked_at
+                SELECT ticket_id, terminal_id, sale_session_id, attempts, last_step, last_code, marked_at, parked_until
                 FROM pending_finish WHERE next_attempt_at <= $now ORDER BY marked_at
                 """;
             cmd.Parameters.AddWithValue("$now", now ?? DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
@@ -618,7 +634,7 @@ public sealed class CommandStore : ITicketSnapshotStore, IDisposable
                 liste.Add(new PendingFinishRow(r.GetString(0), r.GetString(1),
                     r.IsDBNull(2) ? null : r.GetString(2), r.GetInt32(3),
                     r.IsDBNull(4) ? null : r.GetString(4), r.IsDBNull(5) ? null : r.GetString(5),
-                    r.GetInt64(6)));
+                    r.GetInt64(6), r.IsDBNull(7) ? null : r.GetInt64(7)));
             return liste;
         }
     }
@@ -643,6 +659,7 @@ public sealed class CommandStore : ITicketSnapshotStore, IDisposable
             using var cmd = _conn.CreateCommand();
             cmd.CommandText = """
                 UPDATE pending_finish SET attempts = $n, next_attempt_at = $now + $bekleme,
+                    parked_until = NULL,
                     last_step = $adim, last_code = $kod
                 WHERE ticket_id = $f
                 """;
@@ -685,7 +702,8 @@ public sealed class CommandStore : ITicketSnapshotStore, IDisposable
             // `<= now`, yani hâlâ sırada). Bunu "geciktirmeyi önlüyor" diye anlatmak, olmayan
             // bir savunmayı varmış gibi göstermek olurdu.
             cmd.CommandText =
-                "UPDATE pending_finish SET next_attempt_at = $now WHERE next_attempt_at > $now";
+                "UPDATE pending_finish SET next_attempt_at = $now, parked_until = NULL " +
+                "WHERE next_attempt_at > $now";
             cmd.Parameters.AddWithValue("$now",
                 now ?? DateTimeOffset.UtcNow.ToUnixTimeMilliseconds());
             cmd.ExecuteNonQuery();
@@ -697,7 +715,10 @@ public sealed class CommandStore : ITicketSnapshotStore, IDisposable
         lock (_gate)
         {
             using var cmd = _conn.CreateCommand();
-            cmd.CommandText = "UPDATE pending_finish SET next_attempt_at = $sonra WHERE ticket_id = $f";
+            // W126: park AÇIKÇA işaretlenir — `next_attempt_at` tek başına "10 sn sonra tekrar"
+            // ile "park edildi"yi ayırt edemez.
+            cmd.CommandText = "UPDATE pending_finish SET next_attempt_at = $sonra, " +
+                              "parked_until = $sonra WHERE ticket_id = $f";
             cmd.Parameters.AddWithValue("$f", ticketId);
             cmd.Parameters.AddWithValue("$sonra",
                 (now ?? DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()) + (long)sure.TotalMilliseconds);

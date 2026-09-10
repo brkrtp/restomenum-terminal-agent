@@ -233,6 +233,39 @@ public class TicketSweepTests : IDisposable
     }
 
     [Fact]
+    public void PARK_depoda_ACIKCA_isaretlenir_ve_TEMIZLENIR()
+    {
+        // ← ÇİVİ: park `next_attempt_at`ten TÜRETİLEMEZ — "10 sn sonra tekrar" ile "yarına
+        // kadar park" orada aynı görünür (ikisi de gelecekte). Zamandan çıkarım yapmak, tam da
+        // bu gece iki kez yanıldığımız yöntem. Bu yüzden park AÇIKÇA işaretlenir.
+        _store.MarkTicketNeedsFinish("tkt_1", "t1", "o", null, null, 0, _saatMs);
+        Assert.Null(_store.PendingFinishes(long.MaxValue).Single().ParkedUntil);   // olağan ritim
+
+        _store.DeferFinish("tkt_1", TimeSpan.FromMinutes(30), _saatMs);
+        var parkli = _store.PendingFinishes(long.MaxValue).Single();
+        Assert.Equal(_saatMs + 1_800_000, parkli.ParkedUntil);
+
+        // Park boşaltma İZİ DE siler — yoksa serbest kalmış bir kayıt hâlâ "park edilmiş"
+        // görünür ve kasiyere yanlışlıkla "bekleme, çözülmeyecek" denirdi.
+        _store.UndeferPendingFinishes(_saatMs);
+        Assert.Null(_store.PendingFinishes(long.MaxValue).Single().ParkedUntil);
+    }
+
+    [Fact]
+    public void YENI_DENEME_park_izini_siler()
+    {
+        // ← ÇİVİ: park süresi dolup kayıt yeniden denendiğinde iz kalırsa, olağan ritme dönmüş
+        // bir fiş panelde hâlâ "park edilmiş" görünürdü.
+        _store.MarkTicketNeedsFinish("tkt_1", "t1", "o", null, null, 0, _saatMs);
+        _store.DeferFinish("tkt_1", TimeSpan.FromMinutes(30), _saatMs);
+        Assert.NotNull(_store.PendingFinishes(long.MaxValue).Single().ParkedUntil);
+
+        _store.MarkFinishAttempt("tkt_1", "Start", "0x0020", _saatMs, TimeSpan.FromSeconds(10));
+
+        Assert.Null(_store.PendingFinishes(long.MaxValue).Single().ParkedUntil);
+    }
+
+    [Fact]
     public async Task PARK_EDILEN_FIS_cihaz_duzelince_HEMEN_serbest_kalir()
     {
         // ← ÇİVİ: 24 saatlik park, kurtarmayı kâğıt üstünde bırakıyordu — insanın 30 saniyede

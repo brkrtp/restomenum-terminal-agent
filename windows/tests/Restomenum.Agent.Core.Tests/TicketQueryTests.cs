@@ -320,6 +320,60 @@ public class TicketQueryTests : IDisposable
     }
 
     [Fact]
+    public void PARK_govdede_SURESIYLE_birlikte_gelir()
+    {
+        // ← ÇİVİ: `finishStalled` iki AYRI gerçeği aynı kutuya koyuyordu ve kasiyerin yapması
+        // gereken şey ikisinde ZIT:
+        //     takıldı ama deneniyor → BEKLE, kendiliğinden çözülebilir
+        //     park edildi           → BEKLEME, kendiliğinden ÇÖZÜLMEYECEK (rulo taksa bile)
+        // Sahada ölçüldü (2026-09-10 06:37): 990 kuruşluk fiş 24 saat park edildi.
+        //
+        // Süre de taşınır çünkü kasiyerin kararı ona bağlı: yarım saat beklenebilir, yarın
+        // beklenemez.
+        var simdi = DateTimeOffset.FromUnixTimeMilliseconds(1_700_000_000_000);
+        var park = simdi.ToUnixTimeMilliseconds() + 1_800_000;   // 30 dk
+        var s = new TicketQueryResult("OPEN", "tkt_1", "oturum-A", null, null, null,
+            8, "Start", "0xF000", FinishDeferredUntil: park);
+
+        var ek = JsonDocument.Parse(TicketQueryHandler.Govde(Istek(), s, simdi))
+            .RootElement.GetProperty("SaleToPOIResponse").GetProperty("Restomenum");
+
+        Assert.True(ek.GetProperty("finishDeferred").GetBoolean());
+        Assert.Equal(park, ek.GetProperty("finishDeferredUntil").GetInt64());
+    }
+
+    [Fact]
+    public void PARK_SURESI_GECMISSE_park_bitmistir()
+    {
+        // ← ÇİVİ: park bir DAMGA, bir bayrak değil. Süresi dolmuşsa kayıt yeniden olağan
+        // ritimde demektir; `true` demek kasiyeri boşuna vazgeçirirdi.
+        var simdi = DateTimeOffset.FromUnixTimeMilliseconds(1_700_000_000_000);
+        var s = new TicketQueryResult("OPEN", "tkt_1", "oturum-A", null, null, null,
+            8, "Start", "0xF000", FinishDeferredUntil: simdi.ToUnixTimeMilliseconds() - 1);
+
+        var ek = JsonDocument.Parse(TicketQueryHandler.Govde(Istek(), s, simdi))
+            .RootElement.GetProperty("SaleToPOIResponse").GetProperty("Restomenum");
+
+        Assert.False(ek.GetProperty("finishDeferred").GetBoolean());
+        // Bitmiş bir parkın saatini yazmak, geçmiş bir tarihi "bekleme süresi" diye sunardı.
+        Assert.False(ek.TryGetProperty("finishDeferredUntil", out _));
+    }
+
+    [Fact]
+    public void PARK_alanlari_bekleyen_kayit_YOKKEN_hic_yazilmaz()
+    {
+        // Ortada kurtarılacak fiş yokken `finishDeferred:false` yazmak, "park edilmedi,
+        // deneniyor" gibi olmayan bir kesinlik satardı.
+        var s = new TicketQueryResult("CLOSED", "tkt_1", "oturum-A", null, null, true, null, null, null);
+
+        var ek = JsonDocument.Parse(TicketQueryHandler.Govde(Istek(), s, DateTimeOffset.UtcNow))
+            .RootElement.GetProperty("SaleToPOIResponse").GetProperty("Restomenum");
+
+        Assert.False(ek.TryGetProperty("finishDeferred", out _));
+        Assert.False(ek.TryGetProperty("finishDeferredUntil", out _));
+    }
+
+    [Fact]
     public void FINISH_STALLED_bekleyen_kayit_YOKKEN_hic_yazilmaz()
     {
         // Alanın YOKLUĞU "bilinmiyor/geçersiz" demektir — bekleyen kayıt yokken `false` yazmak,

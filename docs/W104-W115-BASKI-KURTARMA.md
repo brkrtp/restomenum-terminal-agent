@@ -413,3 +413,43 @@ boşlukta oturmuyor ve bir dahaki ölçüm onu aşabilir.
   o bir koruma değil, yalnız gereksiz yazmayı önlüyor. Yorum düzeltildi, o
   savunmayı çivilediğini iddia eden test **kaldırıldı**: mutasyonu yeşil geçen
   bir test çivi değildir, çivi görüntüsüdür.
+
+---
+
+## W126 — "takıldı ama deneniyor" ile "park edildi" AYRI şeyler
+
+Panel ajanının isteği ve gerekçesi doğru: `finishStalled` iki farklı gerçeği aynı
+kutuya koyuyordu ve **kasiyerin yapması gereken şey ikisinde zıt**.
+
+```
+takıldı ama deneniyor  →  BEKLE, kendiliğinden çözülebilir
+park edildi            →  BEKLEME, kendiliğinden ÇÖZÜLMEYECEK — rulo taksa bile
+```
+
+İkisine aynı şeyi söylemek, "rulo takın, fiş kendiliğinden kapanacak" cümlesinin
+94 denemelik durumda yanlış umut vermesiyle aynı sınıf — hatta daha kötüsü,
+çünkü park hâlinde beklemek **kesinlikle** sonuç vermiyor.
+
+### Neden zamandan türetilmedi
+
+`next_attempt_at` her iki hâlde de "gelecekte"dir: 10 saniye sonrası ile yarın
+orada ayırt edilemez. Zamandan çıkarım yapmak tam da bu gece iki kez yanıldığımız
+yöntem. Bu yüzden park depoda **açıkça** işaretlenir: `pending_finish.parked_until`
+(NULL = park edilmemiş).
+
+İz üç yerde temizlenir — park boşaltmada, yeni denemede, kayıt düşerken. Temizlenmezse
+olağan ritme dönmüş bir fiş panelde hâlâ "park edilmiş" görünür ve kasiyer boşuna
+vazgeçerdi.
+
+### Gövde
+
+```json
+"finishStalled":      true,          // otomatik pencere kapandı (eşik 8)
+"finishDeferred":     true,          // ↑ bunun İÇİNDE daha dar hâl
+"finishDeferredUntil": 1757486251000 // yalnız park VARKEN
+```
+
+Bekleyen kayıt yoksa **üçü de hiç yazılmaz**; park bitmişse süre yazılmaz —
+geçmiş bir tarihi "bekleme süresi" diye sunmak olurdu.
+
+Mutasyon: 7 mutasyon, hepsi kırmızı.

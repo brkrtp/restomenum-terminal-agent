@@ -47,7 +47,17 @@ public readonly record struct ClosedTicketRow(
 /// </param>
 public readonly record struct PendingFinishRow(
     string TicketId, string TerminalId, string? SaleSessionId, int Attempts,
-    string? LastStep, string? LastCode, long MarkedAt);
+    string? LastStep, string? LastCode, long MarkedAt,
+
+    /// <param name="ParkedUntil">
+    /// <b>W126</b> — otomatik pencere dolduğu için PARK EDİLDİYSE parkın bittiği an (unix ms);
+    /// <c>null</c> = park edilmemiş, olağan ritimde deneniyor.
+    ///
+    /// <para><b>Neden ayrı alan:</b> <c>next_attempt_at</c> bunu söyleyemez — "10 saniye sonra
+    /// tekrar" ile "park edildi" orada aynı görünür (ikisi de gelecekte). Kasiyer açısından
+    /// fark keskin: birinde beklemek çözer, diğerinde beklemek <b>kesinlikle</b> çözmez.</para>
+    /// </param>
+    long? ParkedUntil = null);
 
 public interface ITicketSnapshotStore
 {

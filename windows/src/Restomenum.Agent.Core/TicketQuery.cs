@@ -136,7 +136,25 @@ public sealed record TicketQueryResult(
     /// hat). Kasiyere söylenecek dürüst cümle "yazıcı fişi basamıyor, kontrol edin"dir;
     /// "kâğıt bitti" ancak <see cref="PaperWarningAt"/> doluyken söylenebilir.</para>
     /// </param>
-    long? PrintingForMs = null);
+    long? PrintingForMs = null,
+
+    /// <param name="FinishDeferredUntil">
+    /// <b>W126 — PARK EDİLDİ Mİ, ve NE ZAMANA KADAR?</b> <c>null</c> = park edilmemiş.
+    ///
+    /// <para><b>Neden <see cref="PendingFinishAttempts"/> yetmiyor:</b> "otomatik pencere
+    /// kapandı" ile "park edildi" aynı şey DEĞİL ve kasiyerin yapması gereken şey ikisinde
+    /// zıt. Denemeye devam eden bir fişte BEKLEMEK çözer; park edilmiş bir fişte beklemek
+    /// <b>kesinlikle</b> çözmez — rulo takılsa bile. Orada ya olağan bir satış gerekir
+    /// (parkı boşaltır) ya elle tamamlama.</para>
+    ///
+    /// <para><b>Neden zamandan türetilmiyor:</b> <c>next_attempt_at</c> her iki hâlde de
+    /// "gelecekte"dir; 10 saniye sonrası ile yarın oradan ayırt edilemez. Park bu yüzden
+    /// depoda AÇIKÇA işaretlenir (<c>parked_until</c>).</para>
+    ///
+    /// <para>Süreyi de taşır çünkü kasiyerin kararı ona bağlı: <b>yarım saat</b> beklenebilir,
+    /// <b>yarın</b> beklenemez.</para>
+    /// </param>
+    long? FinishDeferredUntil = null);
 
 /// <summary><c>MessageCategory: "TicketQuery"</c> zarfının ayrıştırılması.</summary>
 public static class TicketQueryParser
@@ -218,7 +236,7 @@ public static class TicketQueryHandler
                 : null;
             return new TicketQueryResult("OPEN", hedef, acikOturum, null, null, null,
                 denemeler, bekleyen.LastStep, bekleyen.LastCode, cihazMesgul,
-                kagit?.GorulmeMs, kagit?.Adim, basiyor);
+                kagit?.GorulmeMs, kagit?.Adim, basiyor, bekleyen.ParkedUntil);
         }
 
         // ── 3. KAPANDI MI ─────────────────────────────────────────────────────────
@@ -227,7 +245,7 @@ public static class TicketQueryHandler
             return new TicketQueryResult("CLOSED", hedef, k.Row.SaleSessionId,
                 k.Row.TotalMinor, k.Row.PaidMinor, k.Notified,
                 denemeler, bekleyen.LastStep, bekleyen.LastCode, cihazMesgul,
-                kagit?.GorulmeMs, kagit?.Adim);
+                kagit?.GorulmeMs, kagit?.Adim, null, bekleyen.ParkedUntil);
 
         // ── 4. DEFTERDE İZ YOK ────────────────────────────────────────────────────
         // ⚠️ Bu "AÇIK" DEĞİLDİR. Kapanmış ve saklama süresi (7 gün) dolmuş olabilir, ya da bu
@@ -235,7 +253,7 @@ public static class TicketQueryHandler
         // yaymaktan iyidir — kasanın yanlış uyarısı tam olarak öyle bir kesinlikten doğdu.
         return new TicketQueryResult("UNKNOWN", hedef, null, null, null, null,
             denemeler, bekleyen.LastStep, bekleyen.LastCode, cihazMesgul,
-            kagit?.GorulmeMs, kagit?.Adim);
+            kagit?.GorulmeMs, kagit?.Adim, null, bekleyen.ParkedUntil);
     }
 
     /// <summary>Yanıt gövdesi — <c>SaleToPOIResponse</c> zarfı, veriler <c>Restomenum</c> altında.</summary>
@@ -269,6 +287,13 @@ public static class TicketQueryHandler
             // W122: sinyal SAYIYA DEĞİL, ANLAMA bağlansın — panel eşiği kendi bilmek zorunda
             // kalmasın. Eşik burada değişirse panel kendiliğinden doğru kalır.
             ek["finishStalled"] = n >= LocalSaleHandler.TamamlamaOtomatikSiniri;
+            // W126: `finishStalled` içindeki DAHA DAR hâl. Kasiyerin kararı burada ayrışıyor:
+            // takılmış ama deneniyorsa BEKLEMEK çözer; park edilmişse beklemek çözmez.
+            var parkli = sonuc.FinishDeferredUntil is long pu && pu > now.ToUnixTimeMilliseconds();
+            ek["finishDeferred"] = parkli;
+            // Süre YALNIZ park varken anlamlı. Park yokken yazmak, olmayan bir bitiş saati
+            // uydurmak olurdu — alanın YOKLUĞU burada da "geçerli değil" demek.
+            if (parkli) ek["finishDeferredUntil"] = sonuc.FinishDeferredUntil;
             if (sonuc.PendingFinishStep is not null) ek["pendingFinishStep"] = sonuc.PendingFinishStep;
             if (sonuc.PendingFinishCode is not null) ek["pendingFinishCode"] = sonuc.PendingFinishCode;
         }
