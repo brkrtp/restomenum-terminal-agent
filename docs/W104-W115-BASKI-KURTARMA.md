@@ -1060,3 +1060,53 @@ Her çağrı bir TCP el sıkışması demek. Cihaz erişilebilirken bu milisaniy
 (ölçülen soket açılış→kapanış: 0,35–1,6 sn arası, komuta göre). Ama cihaz
 ERİŞİLEMEZKEN her çağrı kendi 3 × 21 saniyesini ödüyor — kurtarma zincirinin
 neden bu kadar uzun sürebildiğinin bir parçası da bu.
+
+---
+
+## W140 — KEEPALIVE ÇALIŞTI: 90 saniye → 4,45 saniye
+
+Kart turu, kablo `FP3_Payment` sırasında çekildi (cihaz kart bekliyordu, soket
+KURULUYDU). W139'da "keepalive ancak tek uzun çağrıda anlamlı" demiştim; o tek
+çağrı buydu.
+
+```
+02:22:26.336  >>>>> FP3_Payment (TO : 90000)
+02:22:26.339  Socket Opened
+02:22:26.340  Socket Connected                    ← bağlantı KURULDU
+02:22:30.792  Socket recv Error!!  WSAGetLastError = 0
+02:22:30.792  FP3_Payment → 0x0000F003 DLL_RETCODE_TIMEOUT
+```
+
+**4,45 saniye.** 90 000 ms bütçenin %5'i. `AckTimeOut` 3000 ms — yani bir yoklama
+aralığı artı tespit. Kod `0xF003 TIMEOUT`, `0xF000 PORT_NOT_OPEN` değil.
+
+Düşülen tahminin üç maddesi de tuttu: `paymentInvoked` true, kod `0xF003`,
+zaman aşımı dolmadan dönüş.
+
+### Kasa 89 saniye ölçtü — ikisi de doğru, aynı şey değil
+
+```
+02:22:26.336 → 02:22:30.792   FP3_Payment                   4,45 sn  ← keepalive
+02:23:00.828 → 02:23:49.920   3 bağlanma denemesi (21+21+5)   ~79 sn  ← BELİRSİZLİK ÇÖZÜMÜ
+02:23:50.841                  cihazMs = 87743, toplamMs = 89372
+```
+
+O 79 saniye ödeme çağrısı değil: ödemenin cihaza inip inmediğini öğrenmek için
+fiş okunuyor ve o **yeni bir bağlantı** istiyor. Kablo hâlâ çekik olduğu için
+`connect()` aşamasında düşüyor — orada keepalive'ın canlı tutacağı bir şey yok
+(W139).
+
+> **Keepalive olmasaydı** `FP3_Payment` 90 saniyeyi doldururdu ve toplam ~175
+> saniye olurdu. Kasanın 180 saniyelik kapısına **5 saniye** kalırdı. Ayar
+> muhtemelen bizi zaman aşımına düşmekten kurtardı.
+
+### Yöntem notu
+
+Karşı taraf "keepalive süreyi kısaltmadı" diye negatif sonuç kaydetmek üzereydi
+ve ölçümü doğruydu — 89 390 ms gerçekten öyleydi. Yanlış olan, o sürenin
+**neyin** süresi olduğuydu. Toplam süre, içindeki tek çağrının süresi hakkında
+hiçbir şey söylemiyor.
+
+**Aynı sayı, iki farklı olguya ait.** Bu gece bunun üçüncü örneği: 68 vs 73
+saniye farkının cihazda değil bulut bacağında olması (W134), 21 saniyenin sabit
+sanılması (W137), ve şimdi bu.
