@@ -194,6 +194,32 @@ public sealed record TransportResult(
     long? DeviceRemainingMinor = null,
 
     /// <summary>
+    /// <b>W144 — bu satışın aldığı MALİ FİŞ NUMARASI.</b> <c>null</c> = bilinmiyor
+    /// (fiş kapanmadı, ya da okuma başarısız oldu).
+    ///
+    /// <para><b>Neden gerekli:</b> bir denetim ya da uzlaştırma "şu satış hangi mali fiş?" diye
+    /// sorduğunda bugüne kadar cevabımız YOKTU. <c>tkt_…</c> bizim ürettiğimiz bir etikettir ve
+    /// cihaz onu bilmez; kâğıttaki numara cihazındır ve ikisi arasında hiçbir bağ kaydedilmiyordu.</para>
+    ///
+    /// <para><b>Nasıl elde ediliyor — ve neden ÇIKARMA var:</b> <c>FP3_Echo</c>'nun <c>FisNo</c>
+    /// alanı <b>SONRAKİ</b> fiş numarasıdır, sonuncu değil. Ölçüldü (2026-09-12 01:05→01:08):
+    /// satıştan önce 3, kâğıda basılan numara 3, satıştan sonra 4. Dolayısıyla kesilen fişin
+    /// numarası <c>okunan − 1</c>.</para>
+    ///
+    /// <para><b>Neden fiş KAPANDIKTAN SONRA okunuyor:</b> numara mali kesinleşmede tüketiliyor
+    /// (boş <c>Start</c>→<c>Close</c> yoklaması tüketmiyor — 2026-09-12 00:58'de ölçüldü).
+    /// Okumayı baskı zincirinin İÇİNE koymak, kasanın 180 sn'lik kapısına yeni bir başarısızlık
+    /// noktası eklerdi; kapanıştan sonra okumak o riski taşımıyor.</para>
+    ///
+    /// <para>⚠️ Okuma cihaz kilidi HÂLÂ BİZDEYKEN yapılır. Bırakılsaydı araya giren başka bir
+    /// fiş numarayı kaydırır ve yanlış numara kaydedilirdi.</para>
+    ///
+    /// <para>⚠️ Okuma başarısızsa alan <c>null</c> kalır. Tahmin edilmez: yanlış bir mali numara
+    /// kaydetmek, hiç kaydetmemekten kötüdür.</para>
+    /// </summary>
+    uint? FiscalReceiptNo = null,
+
+    /// <summary>
     /// <b>W79 — kasanın İSTEDİĞİ tutar.</b> <see cref="ApprovedAmountMinor"/> ile aynı değerdir;
     /// ayrı alan olarak yazılır ki okuyanın hangi sayının ne olduğunu TAHMİN etmesi gerekmesin.
     /// </summary>

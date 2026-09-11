@@ -926,6 +926,9 @@ public sealed class LocalSaleHandler : IDeviceIdleGate
         {
             req.PaymentId, fisId, odemeSayisi = sonuc.ClosedTicketPayments?.Count ?? 0,
             cihazTahsil = sonuc.DevicePaidMinor, cihazToplam = sonuc.DeviceTicketTotalMinor,
+            // W144: bu satışın aldığı MALİ FİŞ NUMARASI. "(okunamadı)" ile "0" ayrı şeyler —
+            // biri ölçülemedi demek, öteki gerçek bir numara iddiası olurdu.
+            maliFisNo = sonuc.FiscalReceiptNo?.ToString() ?? "(okunamadı)",
         });
         try
         {

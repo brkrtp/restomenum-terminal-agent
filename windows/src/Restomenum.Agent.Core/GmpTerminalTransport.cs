@@ -254,6 +254,7 @@ public sealed partial class GmpTerminalTransport : ITerminalTransport
         // kasiyer kalanı ekleyecek. Fişi burada kapatmak, yarım ödenmiş fiş üretmek olurdu.
         // Fiş durumu ödemeden SONRA belirlenir; `CLOSED` yalnız `Close` gerçekten başarılıysa.
         var fisDurumu = "OPEN";
+        uint? mailFisNo = null;   // W144: bu satışın aldığı mali fiş numarası
         // W104: baskı/kapatma zinciri yarıda kalırsa NEREDE kaldığı kasaya taşınır. `null` = sorun yok.
         string? baskiSebebi = null, baskiAdimi = null, baskiKodu = null;
         IReadOnlyList<TicketPaymentRow>? kapanisOdemeleri = null;
@@ -457,6 +458,35 @@ public sealed partial class GmpTerminalTransport : ITerminalTransport
             if (kapandi)
             {
                 fisDurumu = "CLOSED";
+                // ══ W144 — BU SATIŞIN ALDIĞI MALİ FİŞ NUMARASI ════════════════════════
+                //
+                // Bugüne kadar "şu satış hangi mali fiş?" sorusunun cevabı YOKTU. `tkt_…`
+                // bizim ürettiğimiz bir etiket ve cihaz onu bilmiyor; kâğıttaki numara
+                // cihazın ve ikisi arasında hiçbir bağ kaydedilmiyordu.
+                //
+                // ⚠️ ÇIKARMA BİLEREK: `FisNo` SONRAKİ numaradır, sonuncu değil. Ölçüldü
+                // (2026-09-12 01:05→01:08): satıştan önce 3, kâğıda basılan 3, sonra 4.
+                //
+                // ⚠️ BURADA okunuyor çünkü: (a) numara mali kesinleşmede tüketiliyor, (b) cihaz
+                // kilidi HÂLÂ bizde — bırakılsaydı araya giren başka bir fiş numarayı kaydırırdı,
+                // (c) baskı zincirinin İÇİNE koymak kasanın 180 sn'lik kapısına yeni bir
+                // başarısızlık noktası eklerdi.
+                //
+                // ⚠️ Okuma patlarsa alan `null` KALIR. Tahmin edilmez: yanlış bir mali numara
+                // kaydetmek, hiç kaydetmemekten kötüdür.
+                if (_gmp.Echo(out var sayac).Ok && sayac.FisNo > 0)
+                {
+                    mailFisNo = sayac.FisNo - 1;
+                    _log("[gmp] mali fiş numarası", new
+                    {
+                        fisNo = mailFisNo, okunanSonraki = sayac.FisNo, zNo = sayac.ZNo,
+                        fisId,
+                    });
+                }
+                else
+                {
+                    _log("[gmp] mali fiş numarası OKUNAMADI — alan boş bırakıldı", new { fisId });
+                }
                 // Bağ SİLİNMEDEN önce oku — silindikten sonra fişin ödemelerini soracak kimlik kalmaz.
                 if (fisId is not null) kapanisOdemeleri = _snapshots?.ReadTicketPayments(fisId);
                 // ⚠️ SIRA ÖNEMLİ. Bağ silinmek ZORUNDA: bırakılsaydı aynı oturumun bir sonraki
@@ -522,6 +552,7 @@ public sealed partial class GmpTerminalTransport : ITerminalTransport
             ClosedTicketPayments: kapanisOdemeleri,
             DevicePaidMinor: cihazTahsil,
             DeviceTicketTotalMinor: cihazToplam,
-            DeviceRemainingMinor: cihazKalan);
+            DeviceRemainingMinor: cihazKalan,
+            FiscalReceiptNo: mailFisNo);
     }
 }

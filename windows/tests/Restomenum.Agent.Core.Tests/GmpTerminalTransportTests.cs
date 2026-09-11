@@ -1214,6 +1214,72 @@ public class GmpTerminalTransportTests
     }
 
     [Fact]
+    public async Task FIS_KAPANINCA_MALI_FIS_NUMARASI_kaydedilir_ve_BIR_EKSIGI_alinir()
+    {
+        // ← ÇİVİ: bir denetim "şu satış hangi mali fiş?" diye sorduğunda cevabımız YOKTU.
+        // `tkt_…` bizim ürettiğimiz etiket, cihaz onu bilmiyor; kâğıttaki numara cihazın.
+        //
+        // ⚠️ ÇIKARMA BİLEREK: `FisNo` SONRAKİ numaradır. Sahada ölçüldü (2026-09-12 01:05→01:08):
+        // satıştan önce 3 okundu, KÂĞIDA BASILAN numara 3 çıktı, satıştan sonra 4 okundu.
+        // Çıkarmayı unutmak, her fişi bir fazla numarayla kaydetmek olurdu.
+        var (t, g, _) = Kur();
+        g.AfterPayment = new GmpTicket(990, 990, 1, GmpPaymentTypes.Cash);
+        g.EchoDurumu = new EchoDurum(0x1D, ZNo: 92, FisNo: 4, EkuNo: 1, Handle: 0);
+
+        var r = await t.SaleAsync(Req(amount: 990, paymentType: GmpPaymentTypes.Cash,
+            oturum: "oturum-A", satisToplam: 990));
+
+        Assert.Equal("CLOSED", r.TicketState);
+        Assert.Equal(3u, r.FiscalReceiptNo);      // okunan 4 → kesilen fiş 3
+    }
+
+    [Fact]
+    public async Task FIS_ACIK_KALIRSA_MALI_NUMARA_YAZILMAZ()
+    {
+        // ← ÇİVİ: numara mali KESİNLEŞMEDE tüketiliyor. Fiş açıkken bir numara kaydetmek,
+        // henüz kesilmemiş bir belgeye numara atamak olurdu — ve o numarayı başka bir fiş alır.
+        var (t, g, _) = Kur();
+        g.AfterPayment = new GmpTicket(2380, 990, 1, GmpPaymentTypes.Cash);   // kısmi
+
+        var r = await t.SaleAsync(Req(amount: 990, paymentType: GmpPaymentTypes.Cash,
+            oturum: "oturum-A", satisToplam: 2380));
+
+        Assert.Equal("OPEN", r.TicketState);
+        Assert.Null(r.FiscalReceiptNo);
+    }
+
+    [Fact]
+    public async Task ECHO_OKUNAMAZSA_MALI_NUMARA_UYDURULMAZ()
+    {
+        // ← ÇİVİ: "ölçülemedi" ile "numara 0" ayrı şeyler. Yanlış bir mali numara kaydetmek,
+        // hiç kaydetmemekten KÖTÜDÜR — denetimde var olmayan bir belgeye işaret eder.
+        var (t, g, _) = Kur();
+        g.AfterPayment = new GmpTicket(990, 990, 1, GmpPaymentTypes.Cash);
+        g.Codes["Echo"] = GmpCodes.PortNotOpen;
+
+        var r = await t.SaleAsync(Req(amount: 990, paymentType: GmpPaymentTypes.Cash,
+            oturum: "oturum-A", satisToplam: 990));
+
+        Assert.Equal("CLOSED", r.TicketState);    // satış BOZULMAZ
+        Assert.Null(r.FiscalReceiptNo);           // ama numara UYDURULMAZ
+    }
+
+    [Fact]
+    public async Task ECHO_SIFIR_DONERSE_MALI_NUMARA_YAZILMAZ()
+    {
+        // ← ÇİVİ: bloke cihaz `retcode 0` ile TAMAMEN SIFIR dönebiliyor (2026-09-10 02:05:48).
+        // Sıfırdan bir çıkarmak `4294967295` üretirdi — sessiz ve saçma bir mali numara.
+        var (t, g, _) = Kur();
+        g.AfterPayment = new GmpTicket(990, 990, 1, GmpPaymentTypes.Cash);
+        g.EchoDurumu = new EchoDurum(0, 0, 0, 0, 0);
+
+        var r = await t.SaleAsync(Req(amount: 990, paymentType: GmpPaymentTypes.Cash,
+            oturum: "oturum-A", satisToplam: 990));
+
+        Assert.Null(r.FiscalReceiptNo);
+    }
+
+    [Fact]
     public async Task ECHO_MALI_SAYACLARI_TASIR_cihaz_zaten_gonderiyordu()
     {
         // ← ÇİVİ: bu alanlar cihazdan HER Echo'da geliyordu ve `ST_ECHO` sınıfında karşılıkları
@@ -1299,10 +1365,15 @@ public class GmpTerminalTransportTests
         // fiş erişilemez olur ve o satırların kaynağı kaybolur.
         // W50: `PrintUserMessage` zincirden ÇIKARILDI — BOŞ mesajla çağrılıyordu ve 14 kapanış
         // üzerinden 353 ms tutuyordu; sertifikalı referansın iki kapanış yolunda hiç yok.
+        // W144: `Close`'dan SONRA bir `Echo` eklendi — bu satışın aldığı MALİ FİŞ NUMARASINI
+        // okumak için. Bedeli kapanış başına bir çağrı (~0,2 sn) ve BİLİNÇLİ: numara mali
+        // kesinleşmede tüketiliyor, cihaz kilidi hâlâ bizde, ve baskı zincirinin İÇİNE koymak
+        // kasanın 180 sn'lik kapısına yeni bir başarısızlık noktası eklerdi.
+        // Gizlenmedi, burada AÇIKÇA yazılı.
         Assert.Equal(
             new[] { "Start", "TicketHeader", "OptionFlags", "ItemSale", "GetTicket", "Payment",
                     "OptionFlags", "GetTicket",
-                    "PrintTotalsAndPayments", "PrintBeforeMF", "PrintMF", "Close" },
+                    "PrintTotalsAndPayments", "PrintBeforeMF", "PrintMF", "Close", "Echo" },
             g.Calls);
         // ← ÇİVİ: kalan üç baskı adımı ZORUNLU ve bu SIRADA olmalı. `PrintBeforeMF` fişi mali
         // hafızaya yazan taahhüt noktası; ondan önce `PrintMF`'e geçilirse fiş mali kayda hiç

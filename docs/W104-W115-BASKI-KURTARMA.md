@@ -1331,3 +1331,52 @@ Tek mali fiş kesildi, alan **tam bir** arttı.
 bu AYRI bir yol ve ölçülmedi. 2026-09-11 02:39'daki iptal için karşı tarafa
 "tüketildi" demiştim; o iddia geri çekildi ve yerine **"ölçülmedi"** yazıldı.
 Artık güvenilir bir aletimiz var; istenirse tek turda ölçülebilir.
+
+---
+
+## W144 — SATIŞ BAŞINA MALİ FİŞ NUMARASI kaydediliyor
+
+Kullanıcının sorusu şuydu: *"Numaraları kim türetiyor, nereden alıyoruz?"*
+Ölçüm üç ayrı kaynak gösterdi:
+
+| numara | kim üretir | biz ne yaparız |
+|---|---|---|
+| `ZNo`, `FişNo`, `EküNo` | **CİHAZ** | yalnız okuruz (`FP3_Echo`) |
+| `tkt_…` | **BİZ** (`Guid.NewGuid()`) | cihaz bunu BİLMEZ |
+| `paymentId`, `saleSessionId`, `ticketCancelId`, `ticketFinishId` | **KASA/platform** | okur, tekrar anahtarı olarak kullanırız |
+
+Mali numaraları yazmıyoruz, **yazamıyoruz**: `FP3_Start`/`FP3_TicketHeader`
+imzalarında öyle bir parametre yok, ve `FP3_Start`'a geçirdiğimiz `UniqueId`
+**24 bayt sıfır** (sertifikalı kod da öyle gönderiyor). Bizden cihaza hiçbir
+kimlik gitmiyor.
+
+### Kapatılan açık
+
+"Şu satış hangi mali fiş?" sorusunun cevabı **yoktu**. `tkt_…` bizim
+etiketimiz; kâğıttaki numara cihazın; ikisi arasında hiçbir bağ
+kaydedilmiyordu.
+
+Artık fiş kapandığında bir `Echo` okunuyor ve `FisNo − 1` satışın kaydına
+yazılıyor.
+
+### Üç tasarım kararı, üçü de ölçüme dayanıyor
+
+1. **Çıkarma var.** `FisNo` SONRAKİ numaradır (2026-09-12 01:05→01:08: önce 3,
+   kâğıtta 3, sonra 4). Çıkarmayı unutmak her fişi bir fazla numarayla
+   kaydetmek olurdu.
+2. **Kapanıştan SONRA okunuyor**, baskı zincirinin içinde değil. Numara mali
+   kesinleşmede tüketiliyor; zincirin içine bir çağrı daha koymak kasanın
+   180 sn'lik kapısına yeni bir başarısızlık noktası eklerdi.
+3. **Cihaz kilidi hâlâ bizdeyken** okunuyor. Bırakılsaydı araya giren başka bir
+   fiş numarayı kaydırır ve yanlış numara kaydedilirdi.
+
+⚠️ Okuma patlarsa ya da sıfır dönerse alan **`null` kalır**. Sıfırdan bir
+çıkarmak `4294967295` üretirdi — sessiz ve saçma bir mali numara. Yanlış bir
+numara kaydetmek, hiç kaydetmemekten kötüdür: denetimde var olmayan bir belgeye
+işaret eder.
+
+**Bedeli:** kapanış başına bir `Echo` (~0,2 sn). Testteki çağrı sırası
+çivisinde gizlenmedi, açıkça yazıldı.
+
+Mutasyon 4/4 kırmızı (çıkarmayı unut · okuma patlayınca da yaz · sıfır
+kontrolünü kaldır · fiş açıkken de yaz). 652/652 yeşil.
