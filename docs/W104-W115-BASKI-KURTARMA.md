@@ -1244,3 +1244,59 @@ Z dönemi içinde anlamlı olacak.
 `asılıTanıtıcı=0` — cihazda asılı fiş yok. Bu sağlık bilgisi eskiden yalnız
 `FP3_Start` ile alınabiliyordu ve o çağrı açık fiş YOKKEN yeni fiş açıp **mali
 numara tüketiyordu**. Artık bedava.
+
+---
+
+## W143 — FNo turu: yoklama fişi mali numara TÜKETMEDİ (ve bir iddiam çürüdü)
+
+İlk kez sayaç okunabildiği için "boş fiş mali numara tüketir mi" sorusu ölçüldü.
+
+### Tasarım: önce KONTROL
+
+Sayaçlar yalnız açılışta okunuyor (`EchoAsync` üretimde hiç çağrılmıyor), yani
+okumak için yeniden başlatmak gerekiyor. O hâlde önce **yeniden başlatmanın
+kendisinin** sayaç tüketip tüketmediği ölçülmeli — kontrol olmadan sonuç
+yorumlanamaz.
+
+```
+00:51:49  ZNo=92 FişNo=3      ← kontrol 1
+00:57:29  ZNo=92 FişNo=3      ← kontrol 2
+00:57:53  ZNo=92 FişNo=3      ← kontrol 3
+```
+
+Üç yeniden başlatma, değişim yok. **Yeniden başlatma nötr.**
+
+### Deney
+
+Açık fiş YOKKEN `TicketFinish` gönderildi; `FP3_Start` yoklama fişi açmak
+zorunda kaldı (DLL izi):
+
+```
+00:58:36.743  FP3_Start → TRAN_RESULT_OK     ← 2080 DEĞİL: YENİ fiş açıldı
+00:58:37.226  FP3_Close → OK                 ← hemen kapatıldı
+00:58:56.580  ZNo=92 FişNo=3                 ← DEĞİŞMEDİ
+```
+
+### Sonuç ve çürüyen iddia
+
+**Bu yolda mali numara tüketilmiyor.** W131'de "`finishId` başına en fazla bir
+FNo kaybı" diye not ettiğim kalıntı, en azından bu yol için **yok**.
+
+⚠️ Ve 2026-09-11 02:39'daki iptal için karşı tarafa **"mali numara TÜKETİLDİ,
+kayda öyle geçirin"** demiştim. O iddia bir ölçüme değil, önceki bir nota
+dayanıyordu ve bu ölçüm onu desteklemiyor. Geri çekiyorum.
+
+### ⚠️ Ama sonuç HENÜZ KESİN DEĞİL — eksik kontrol
+
+İki açıklama da verilere uyuyor:
+
+1. Yoklama fişi gerçekten numara tüketmiyor.
+2. `FisNo` sandığım şeyi saymıyor (ham bir alan; anlamı **kanıtlanmadı**).
+
+Ayırmanın tek yolu **pozitif kontrol**: kesinlikle mali fiş kesen bir işlem
+yapıp `FisNo`nun arttığını görmek. Artıyorsa alan fiş sayıyor ve yukarıdaki
+sonuç sağlam; artmıyorsa alan başka bir şey ve ölçüm baştan geçersiz.
+
+O kontrol bir **gerçek satış** gerektiriyor (para hareket eder), bu yüzden
+kullanıcı kararına bırakıldı. **Pozitif kontrol yapılmadan bu sonuç sözleşmeye
+yazılmamalı.**
