@@ -96,8 +96,45 @@ public sealed partial class GmpTerminalTransport : IStuckTicketFinisher
         if (_snapshots is { } defter)
             TicketFinishLedger.Yaz(defter, fisId, terminalId!, oturum, s.ToplamMinor, s.TahsilMinor);
 
+        // ══ W148 — KURTARMANIN KAPATTIĞI FİŞİN DE MALİ NUMARASI YAZILSIN ═══════════
+        //
+        // W144/W145 numarayı yalnız OLAĞAN satış yoluna koymuştu; süpürmenin ya da elle
+        // `TicketFinish`'in kapattığı fişler numarasız kalıyordu. Oysa denetimde ya da bir
+        // itirazda aranacak fişler tam olarak onlar: arıza yaşamış, kurtarılmış olanlar.
+        //
+        // ⚠️ SIRA, W145'in dersi: kalıcı defter işi (`TicketFinishLedger.Yaz`) ÖNCE. Bu okuma
+        // bir ZENGİNLEŞTİRME; patlarsa kurtarmanın kendisi etkilenmemeli — çünkü buraya
+        // geldiysek fiş cihazda KAPANMIŞ ve para çoktan alınmıştır.
+        //
+        // ⚠️ try/catch: `FP3_Echo` yanıtı JSON'dan çözülüyor; beklenmedik bir değer
+        // ayrıştırıcıyı fırlatabilir ve tamamlanmış bir kurtarmayı patlatamaz.
+        uint? maliNo = null;
+        try
+        {
+            if (_gmp.Echo(out var sayac).Ok && sayac.FisNo > 0)
+            {
+                maliNo = sayac.FisNo - 1;                 // FisNo SONRAKİ numaradır
+                _snapshots?.SetFiscalReceiptNo(fisId, maliNo.Value);
+                _log("[bitir] mali fiş numarası", new
+                {
+                    fisNo = maliNo, okunanSonraki = sayac.FisNo, zNo = sayac.ZNo, fisId,
+                });
+            }
+            else
+            {
+                _log("[bitir] mali fiş numarası OKUNAMADI — alan boş bırakıldı", new { fisId });
+            }
+        }
+        catch (Exception e)
+        {
+            _log("[bitir] mali fiş numarası okunurken HATA — kurtarma etkilenmedi", new
+            {
+                fisId, hata = e.GetType().Name,
+            });
+        }
+
         return new StuckTicketResult(true, false, false, s.Plan, s.Bayraklar,
-            s.BasarisizAdim, s.Kod, s.ToplamMinor, s.TahsilMinor, fisId);
+            s.BasarisizAdim, s.Kod, s.ToplamMinor, s.TahsilMinor, fisId, maliNo);
     }
 
     /// <summary>

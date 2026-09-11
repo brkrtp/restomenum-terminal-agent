@@ -37,7 +37,14 @@ public readonly record struct StuckTicketResult(
     FisBitirmePlani Plan, uint Bayraklar,
     string? BasarisizAdim = null, string? Kod = null,
     long? ToplamMinor = null, long? TahsilMinor = null,
-    string? TicketId = null);
+    string? TicketId = null,
+
+    /// <param name="FiscalReceiptNo">
+    /// <b>W148</b> — kurtarmanın kapattığı fişin MALİ FİŞ NUMARASI; <c>null</c> = okunamadı.
+    /// Olağan satış yolundaki <see cref="TransportResult.FiscalReceiptNo"/> ile aynı anlam,
+    /// aynı kural: <c>FisNo − 1</c>, ve okunamazsa UYDURULMAZ.
+    /// </param>
+    uint? FiscalReceiptNo = null);
 
 /// <summary>
 /// Fiş tamamlandıktan sonraki DEFTER işi — cihazda kapatmak masayı AÇMAZ.

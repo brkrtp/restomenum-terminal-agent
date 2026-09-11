@@ -163,6 +163,33 @@ public class TicketFinishZarfTests : IDisposable
     // ── DAVRANIŞ ────────────────────────────────────────────────────────────────
 
     [Fact]
+    public async Task KURTARMANIN_KAPATTIGI_FISIN_de_MALI_NUMARASI_yazilir()
+    {
+        // ← ÇİVİ: W144 numarayı yalnız OLAĞAN satış yoluna koymuştu. Oysa denetimde ya da bir
+        // itirazda aranacak fişler tam olarak KURTARILANLAR — arıza yaşamış, yarım kalmış,
+        // sonradan kapatılmış olanlar. Onların numarası hiçbir yerde yoktu.
+        var (h, tasima) = Kur();
+        tasima.Sonuc = tasima.Sonuc with { FiscalReceiptNo = 7 };
+
+        var ek = Oku(await h.HandleTicketFinishAsync(Istek())).GetProperty("Restomenum");
+
+        Assert.Equal(7, ek.GetProperty("fiscalReceiptNo").GetInt32());
+    }
+
+    [Fact]
+    public async Task MALI_NUMARA_OKUNAMAZSA_GOVDEYE_YAZILMAZ()
+    {
+        // ← ÇİVİ: "yok" ile "0" ayrı şeyler. Sıfır yazmak, var olmayan bir fişe işaret eden
+        // gerçek bir numara iddiası olurdu; alanın YOKLUĞU "ölçülemedi" demektir.
+        var (h, tasima) = Kur();
+        tasima.Sonuc = tasima.Sonuc with { FiscalReceiptNo = null };
+
+        var ek = Oku(await h.HandleTicketFinishAsync(Istek())).GetProperty("Restomenum");
+
+        Assert.False(ek.TryGetProperty("fiscalReceiptNo", out _));
+    }
+
+    [Fact]
     public async Task BASKA_HESABIN_fisi_MALI_OLARAK_KESINLESTIRILMEZ()
     {
         // ← ÇİVİ: tamamlama, cihazdaki AÇIK FİŞİ tamamlar — hangi fiş olduğuna BAKMADAN.

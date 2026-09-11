@@ -2724,6 +2724,55 @@ public class GmpTerminalTransportTests
     // ── W105: TAMAMLAMA — CİHAZ TARAFI ──────────────────────────────────────────
 
     [Fact]
+    public void KURTARMA_kapatinca_MALI_NUMARAYI_GERCEKTEN_hesaplar_ve_yazar()
+    {
+        // ← ÇİVİ: MUTASYON BUNU ÖLÜ SAVUNMA OLARAK YAKALADI ve sebebi tanıdık: ilk yazdığım
+        // testler SAHTE tamamlayıcıya `FiscalReceiptNo = 7` koyup gövdeyi sınıyordu — yani
+        // zarf tesisatını test ediyordum, GERÇEK hesabı değil. `FisNo − 1` çıkarmasını silsem
+        // ve kalıcı yazmayı kaldırsam testler yeşil kalıyordu.
+        //
+        // Bu test GERÇEK taşımaya karşı koşuyor: cihazın verdiği `FisNo`dan numarayı kendisi
+        // çıkarıyor ve kalıcı kayda yazıyor mu?
+        var g = new FakeGmp();
+        var snap = new FakeSnapshots();
+        snap.BindOpenTicket("t1", "oturum-A");
+        g.Codes["Start"] = GmpCodes.AlreadyDone;
+        g.Ticket = new GmpTicket(990, 990, 1, GmpPaymentTypes.Cash,
+            TransactionFlags: TicketFlags.TotalsAndPaymentsPrinted);
+        g.EchoDurumu = new EchoDurum(0x1D, ZNo: 92, FisNo: 4, EkuNo: 1, Handle: 0);
+        var t = new GmpTerminalTransport(g, snap);
+
+        var s = ((IStuckTicketFinisher)t).FinishStuckTicket(uygula: true);
+
+        Assert.True(s.Kapandi);
+        Assert.Equal(3u, s.FiscalReceiptNo);                       // okunan 4 → kesilen 3
+        Assert.Equal(3u, snap.MaliNumaralar[s.TicketId!]);         // ve KALICI kayda yazıldı
+    }
+
+    [Fact]
+    public void KURTARMADA_ECHO_FIRLATIRSA_KURTARMA_BOZULMAZ()
+    {
+        // ← ÇİVİ: W145'in dersi kurtarma yolunda da geçerli. Buraya geldiysek fiş cihazda
+        // KAPANMIŞ ve para alınmıştır; bilgi amaçlı bir okuma onu patlatamaz. Patlatsaydı
+        // `TicketFinishLedger.Yaz` çoktan koşmuş olurdu ama çağıran istisna alır ve kurtarma
+        // başarısız sanılırdı — oysa fiş gerçekten kapanmıştır.
+        var g = new FakeGmp();
+        var snap = new FakeSnapshots();
+        snap.BindOpenTicket("t1", "oturum-A");
+        g.Codes["Start"] = GmpCodes.AlreadyDone;
+        g.Ticket = new GmpTicket(990, 990, 1, GmpPaymentTypes.Cash,
+            TransactionFlags: TicketFlags.TotalsAndPaymentsPrinted);
+        g.EchoPatlat = new InvalidOperationException("JSON bozuk");
+        var t = new GmpTerminalTransport(g, snap);
+
+        var s = ((IStuckTicketFinisher)t).FinishStuckTicket(uygula: true);
+
+        Assert.True(s.Kapandi);              // kurtarma BAŞARILI
+        Assert.Null(s.FiscalReceiptNo);      // numara yok, uydurulmadı
+        Assert.Single(snap.Kapananlar);      // defter işi YAPILDI
+    }
+
+    [Fact]
     public void FinishStuckTicket_kapatinca_DEFTERE_yazar_ve_bagi_siler()
     {
         var g = new FakeGmp();
@@ -2737,7 +2786,10 @@ public class GmpTerminalTransportTests
         var s = ((IStuckTicketFinisher)t).FinishStuckTicket(uygula: true);
 
         Assert.True(s.Kapandi);
-        Assert.Equal(new[] { "Start", "OptionFlags", "GetTicket", "PrintMF", "Close" }, g.Calls);
+        // W148: `Close`'dan SONRA bir `Echo` — kurtarmanın kapattığı fişin MALİ NUMARASINI
+        // okumak için. Kalıcı defter işinden SONRA ve try/catch içinde: buraya geldiysek
+        // fiş cihazda KAPANMIŞ ve para alınmıştır; bilgi amaçlı bir okuma onu patlatamaz.
+        Assert.Equal(new[] { "Start", "OptionFlags", "GetTicket", "PrintMF", "Close", "Echo" }, g.Calls);
         // ← ÇİVİ: cihazda kapatmak masayı AÇMAZ. Defter kaydı olmadan platform fişin
         // ödemelerini hiç yazmaz ve kullanıcının gördüğü arıza aynen sürer.
         Assert.Single(snap.Kapananlar);

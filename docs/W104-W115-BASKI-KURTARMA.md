@@ -1503,3 +1503,35 @@ Mutasyon 3/3 kırmızı. **658/658 + 3/3** yeşil.
 > **Ders:** bir maliyeti "önemsiz" diye geçerken hangi yolda ölçtüğüme bakmalıyım.
 > Sağlıklı cihazda milisaniye olan şey, arıza yolunda dakika olabiliyor — ve
 > kullanıcı zaten arıza yolundadır.
+
+---
+
+## W148 — mali fiş numarası KURTARMA yolunda da yazılıyor
+
+W144/W145 numarayı yalnız **olağan satış** yoluna koymuştu. Oysa bir denetimde ya
+da müşteri itirazında aranacak fişler tam olarak **kurtarılanlar**: arıza yaşamış,
+yarım kalmış, sonradan kapatılmış olanlar. Onların numarası hiçbir yerde yoktu.
+
+Artık süpürme ve elle `TicketFinish` de kapanıştan sonra okuyup yazıyor; yanıt
+gövdesine `fiscalReceiptNo` olarak da giriyor (okunamadıysa alan **hiç**
+yazılmaz).
+
+**W145'in dersi burada baştan uygulandı:** kalıcı defter işi
+(`TicketFinishLedger.Yaz`) **önce**, okuma **sonra** ve `try/catch` içinde.
+Buraya gelindiyse fiş cihazda kapanmış ve para alınmıştır; bilgi amaçlı bir okuma
+onu patlatamaz.
+
+### ⚠️ Ve aynı tuzağa BİR KEZ DAHA düştüm
+
+İlk yazdığım testler sahte tamamlayıcıya `FiscalReceiptNo = 7` koyup **gövdeyi**
+sınıyordu — yani zarf tesisatını test ediyordum, **gerçek hesabı değil**.
+Mutasyon iki savunmayı da ölü gösterdi: `FisNo − 1` çıkarmasını silsem ve kalıcı
+yazmayı kaldırsam testler yeşil kalıyordu.
+
+Bu, bu gecenin **beşinci** "sahte gerçeği yansıtmıyor" örneği ve bu kez sahteyi
+kendim o an kurmuştum. Testler gerçek taşımaya karşı yeniden yazıldı.
+
+> **Kural netleşti:** bir hesabın testi, o hesabı YAPAN katmana karşı koşmalı.
+> Sonucu elle kurup taşındığını doğrulamak, tesisatı test eder — hesabı değil.
+
+Mutasyon 5/5 kırmızı. **662/662 + 3/3** yeşil.

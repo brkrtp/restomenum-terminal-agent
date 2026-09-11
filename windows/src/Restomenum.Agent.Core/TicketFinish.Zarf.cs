@@ -133,6 +133,9 @@ public static class TicketFinishParser
         if (s.BasarisizAdim is not null) ek["printFailedStep"] = s.BasarisizAdim;
         if (s.Kod is not null) ek["printFailedCode"] = s.Kod;
         if (not is not null) ek["reason"] = not;
+        // W148: kurtarmanın kapattığı fişin mali numarası. Okunamadıysa alan HİÇ yazılmaz —
+        // "yok" ile "0" ayrı şeyler ve 0 gerçek bir fiş numarası iddiası olurdu.
+        if (s.FiscalReceiptNo is uint fno) ek["fiscalReceiptNo"] = fno;
 
         // ⚠️ Fiş KAPANMADIYSA sonuç `Failure`: kasiyer "tamam" görüp masayı kapatmamalı.
         // Ama fiş zaten AÇIK DEĞİLSE bu bir başarısızlık DEĞİL — yapılacak iş yoktu.
