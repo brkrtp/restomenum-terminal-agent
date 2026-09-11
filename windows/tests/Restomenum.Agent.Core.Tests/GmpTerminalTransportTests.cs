@@ -105,7 +105,13 @@ public class GmpTerminalTransportTests
         /// <summary>W142: sahte, cihazın GERÇEKTEN gönderdiği alanları taşır — sayaçlar dahil.
         /// Sahtenin gerçekten ayrıldığı her yer, yeşil bir testin altında saklanan kusurdur.</summary>
         public EchoDurum EchoDurumu = new(0x1D, ZNo: 91, FisNo: 2, EkuNo: 1, Handle: 0);
-        public GmpResult Echo(out EchoDurum durum) { durum = EchoDurumu; return Kod("Echo"); }
+        /// <summary>Doluysa `Echo` bunu FIRLATIR — ayrıştırıcı istisnasının karşılığı.</summary>
+        public Exception? EchoPatlat;
+        public GmpResult Echo(out EchoDurum durum)
+        {
+            if (EchoPatlat is not null) { Calls.Add("Echo"); throw EchoPatlat; }
+            durum = EchoDurumu; return Kod("Echo");
+        }
         public GmpResult GetPaymentApplicationsRaw(out string json, out int total, out int received, byte requested = 20)
         { json = "[]"; total = 0; received = 0; return Kod("GetPaymentApplications"); }
         public GmpResult Pair(GmpPairingConfig c, out GmpDeviceInfo i)
@@ -1129,6 +1135,10 @@ public class GmpTerminalTransportTests
         public int ParkBosaltildi;
         public void UndeferPendingFinishes(long? now = null) => ParkBosaltildi++;
 
+        /// <summary>W145: fişe yazılan mali fiş numarası.</summary>
+        public readonly Dictionary<string, uint> MaliNumaralar = new();
+        public void SetFiscalReceiptNo(string ticketId, uint no) => MaliNumaralar[ticketId] = no;
+
         public IReadOnlyList<PendingFinishRow> PendingFinishes(long? now = null)
             => Bekleyen.Select(x => new PendingFinishRow(x.Key,
                 _bekleyenTerminal.TryGetValue(x.Key, out var t) ? t.Terminal : "t1",
@@ -1211,6 +1221,54 @@ public class GmpTerminalTransportTests
         var g = new FakeGmp();
         var snap = new FakeSnapshots();
         return (new GmpTerminalTransport(g, snap), g, snap);
+    }
+
+    [Fact]
+    public async Task ECHO_FIRLATIRSA_SATIS_BOZULMAZ_ve_KAPANIS_DEFTERE_YAZILIR()
+    {
+        // ← ÇİVİ: BAĞIMSIZ DENETİM BUNU YAKALADI ve ben yazmıştım.
+        //
+        // `Echo` çağrısı ÖNCE `Close` ile `MarkTicketClosed` ARASINDA duruyordu. Yani para
+        // ALINMIŞ, mali fiş KESİLMİŞ, ama kalıcı "kapandı" kaydı henüz yazılmamışken cihaza
+        // bir çağrı daha yapılıyordu. O çağrı fırlatsaydı:
+        //   · satış istisnayla düşer, kasa HTTP 500 alır
+        //   · kapanış deftere HİÇ yazılmaz → platform kapanışı öğrenemez → masa kapanmaz
+        //   · açık fiş bağı silinmez → aynı oturumun sonraki satışı KAPANMIŞ fişin kimliğini
+        //     devralır
+        //
+        // `FP3_Echo` yanıtı JSON'dan çözülüyor ve W142 ile sayaç alanları eklendi; beklenmedik
+        // bir değer ayrıştırıcıyı fırlatabilir. Bilgi amaçlı bir okumanın tamamlanmış bir satışı
+        // patlatması kabul edilemez.
+        var (t, g, snap) = Kur();
+        g.AfterPayment = new GmpTicket(990, 990, 1, GmpPaymentTypes.Cash);
+        g.EchoPatlat = new InvalidOperationException("JSON bozuk");
+
+        var r = await t.SaleAsync(Req(amount: 990, paymentType: GmpPaymentTypes.Cash,
+            oturum: "oturum-A", satisToplam: 990));
+
+        Assert.Equal(TransportOutcome.Approved, r.Outcome);   // satış BOZULMADI
+        Assert.Equal("CLOSED", r.TicketState);
+        Assert.Null(r.FiscalReceiptNo);                       // numara yok, uydurulmadı
+        // ⚠️ ASIL ÇİVİ: kapanış DEFTERE YAZILDI ve bağ SİLİNDİ.
+        Assert.Single(snap.Kapananlar);
+        Assert.Null(snap.ReadOpenTicketBinding("t1"));
+    }
+
+    [Fact]
+    public async Task MALI_FIS_NUMARASI_KALICI_KAYDA_yazilir()
+    {
+        // ← ÇİVİ: denetim "numara hiçbir yere yazılmıyor, yalnız 14 gün saklanan log'a
+        // düşüyor" dedi ve haklıydı. Commit "kaydediliyor" diyordu ama denetim sorduğunda
+        // cevap verecek kalıcı bir yer YOKTU.
+        var (t, g, snap) = Kur();
+        g.AfterPayment = new GmpTicket(990, 990, 1, GmpPaymentTypes.Cash);
+        g.EchoDurumu = new EchoDurum(0x1D, ZNo: 92, FisNo: 4, EkuNo: 1, Handle: 0);
+
+        var r = await t.SaleAsync(Req(amount: 990, paymentType: GmpPaymentTypes.Cash,
+            oturum: "oturum-A", satisToplam: 990));
+
+        var fisId = r.TicketId!;
+        Assert.Equal(3u, snap.MaliNumaralar[fisId]);   // okunan 4 → kesilen 3, KALICI
     }
 
     [Fact]
@@ -1676,6 +1734,34 @@ public class GmpTerminalTransportTests
         // İlk VoidAll 2069 verdi, ters işlemden sonra ikinci VoidAll da 2069 verecek şekilde
         // sahtelendiği için sonuç belirsiz — kritik olan ters işlemin DENENMESİ.
         Assert.Equal(TransportOutcome.Unknown, r.Outcome);
+    }
+
+    [Fact]
+    public async Task BAYAT_TANITICI_YENILENINCE_ACIK_FIS_YOKSA_YOK_DENIR_BILINMIYOR_DEGIL()
+    {
+        // ← ÇİVİ: BAĞIMSIZ DENETİM BULDU. `GecerliTanitici`'nin "bayat → yenile → meğer açık
+        // fiş yokmuş" dalı testsizdi; `return null` yerine `return h` yazsan bütün testler
+        // yeşil kalıyordu.
+        //
+        // Etkisi tam olarak bu kod tabanının en çok önemsediği ayrım: "YOK" ile "BİLİNMİYOR".
+        // Dal bozulsaydı kasiyer, iptal edilecek bir şey olmadığı hâlde
+        // `Unknown/TICKET_READ_FAILED` görürdü — yani "belirsiz, operatöre git". Oysa doğru
+        // cevap "ortada iptal edilecek fiş yok, işin tamam".
+        var (t, g, _) = Kur();
+        g.AfterPayment = new GmpTicket(3000, 990, 1, GmpPaymentTypes.Cash);
+        await t.SaleAsync(Req(amount: 990, paymentType: GmpPaymentTypes.Cash, satisToplam: 3000));
+
+        g.StaleHandles.Add(42);                  // elimizdeki tanıtıcı ÖLDÜ
+        g.NextStartHandle = 43;
+        g.Codes["Start"] = GmpCodes.Ok;          // 2080 DEĞİL → cihazda açık fiş YOK
+        g.Calls.Clear();
+
+        var r = await t.VoidTicketAsync("t1");
+
+        Assert.Equal(TransportOutcome.Approved, r.Outcome);   // "yok" bir HATA değil
+        Assert.False(r.TicketWasOpen);
+        Assert.Equal("NO_OPEN_TICKET", r.ProviderResultCode);
+        Assert.DoesNotContain("VoidAll", g.Calls);            // fişe dokunulmadı
     }
 
     [Fact]

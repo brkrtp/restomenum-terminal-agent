@@ -320,6 +320,46 @@ public class TicketQueryTests : IDisposable
     }
 
     [Fact]
+    public void PRINTING_FOR_MS_baski_SURERKEN_gelir_PATLAYINCA_GELMEZ()
+    {
+        // ← ÇİVİ: BAĞIMSIZ DENETİM BUNU ÖLÜ SAVUNMA OLARAK BULDU — alan üretiliyordu ama
+        // hiçbir test okumuyordu; hesabı `false` yapsan bütün testler yeşil kalıyordu.
+        //
+        // ⚠️ Ve denetim daha derin bir şey gösterdi: `Attempts == 0` iki AYRI hâli birden
+        // gösteriyordu —
+        //   (a) işaret yazıldı, baskı HÂLÂ sürüyor            → süre anlamlı
+        //   (b) baskı PATLADI, ilk süpürme denemesi koşmadı   → süre YANILTICI
+        // (b)'de gövde aynı anda "hâlâ basıyor" ve "PrintBeforeMF'te patladı" diyordu.
+        //
+        // Bu test GERÇEK depoya karşı ve `Cevapla`'dan geçiyor — sonucu elle kurmak, tam da
+        // denetimin yakaladığı mantığı atlamak olurdu.
+        var simdi = 1_700_000_100_000L;
+        _store.BindOpenTicket("t1", "oturum-A");
+        var fis = _store.ReadOpenTicketId("t1")!;
+
+        // (a) işaret var, adım YOK → baskı sürüyor
+        _store.MarkTicketNeedsFinish(fis, "t1", "oturum-A", null, null, 0, 1_700_000_000_000);
+        var ek1 = Ek(TicketQueryHandler.Govde(Istek(),
+            TicketQueryHandler.Cevapla(_store, IstekNesnesi(), simdiMs: simdi),
+            DateTimeOffset.FromUnixTimeMilliseconds(simdi)));
+        Assert.Equal(100_000, ek1.GetProperty("printingForMs").GetInt64());
+
+        // (b) AYNI kayıt, ama artık baskı PATLADI (adım dolu, deneme sayacı hâlâ 0)
+        _store.MarkTicketNeedsFinish(fis, "t1", "oturum-A", "PrintBeforeMF", "0x0020", 0, 1_700_000_000_000);
+        var ek2 = Ek(TicketQueryHandler.Govde(Istek(),
+            TicketQueryHandler.Cevapla(_store, IstekNesnesi(), simdiMs: simdi),
+            DateTimeOffset.FromUnixTimeMilliseconds(simdi)));
+        Assert.False(ek2.TryGetProperty("printingForMs", out _));
+        Assert.Equal("PrintBeforeMF", ek2.GetProperty("pendingFinishStep").GetString());
+    }
+
+    private static JsonElement Ek(string govde) =>
+        JsonDocument.Parse(govde).RootElement.GetProperty("SaleToPOIResponse").GetProperty("Restomenum");
+
+    private static TicketQueryRequest IstekNesnesi() =>
+        new("svc12345", "kasa-1", "t1", null, DateTimeOffset.UtcNow);
+
+    [Fact]
     public void PARK_govdede_SURESIYLE_birlikte_gelir()
     {
         // ← ÇİVİ: `finishStalled` iki AYRI gerçeği aynı kutuya koyuyordu ve kasiyerin yapması

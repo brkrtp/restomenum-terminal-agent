@@ -231,7 +231,15 @@ public static class TicketQueryHandler
             // W123: işaret VAR ama henüz hiç deneme yapılmamışsa (`Attempts == 0`) baskı hâlâ
             // sürüyor demektir — işaret baskıdan ÖNCE yazılıyor (W111) ve zincir bitince
             // düşüyor. Damgası bize "ne kadardır basmaya çalışıyoruz"u verir.
+            // ⚠️ W146 — `Attempts == 0` TEK BAŞINA YETMİYOR (bağımsız denetim buldu).
+            // O şart iki AYRI hâli birden gösteriyor:
+            //   (a) işaret yazıldı, baskı HÂLÂ sürüyor            → süre anlamlı
+            //   (b) baskı PATLADI, ilk süpürme denemesi koşmadı   → süre YANILTICI
+            // (b)'de gövde aynı anda `printingForMs = 100000+` ve `pendingFinishStep =
+            // "PrintBeforeMF"` taşıyordu: "hâlâ basıyor" ile "baskı patladı" bir arada.
+            // Ayrım zaten elimizdeydi — `LastStep` (a)'da null, (b)'de dolu.
             long? basiyor = bekleyen.TicketId == hedef && bekleyen.Attempts == 0
+                && bekleyen.LastStep is null
                 ? Math.Max(0, (simdiMs ?? DateTimeOffset.UtcNow.ToUnixTimeMilliseconds()) - bekleyen.MarkedAt)
                 : null;
             return new TicketQueryResult("OPEN", hedef, acikOturum, null, null, null,

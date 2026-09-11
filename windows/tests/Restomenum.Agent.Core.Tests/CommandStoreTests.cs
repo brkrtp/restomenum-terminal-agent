@@ -157,6 +157,52 @@ public class CommandStoreTests
         Assert.DoesNotContain(bekleyen, k => k.CommandId == "iptal");
     }
 
+    [Fact]
+    public void ESKI_VERITABANINDA_parked_until_ve_fiscal_receipt_no_SUTUNLARI_EKLENIR()
+    {
+        // ← ÇİVİ: BAĞIMSIZ DENETİM BULDU. Şema geçişleri testsizdi ve testler HER ZAMAN taze
+        // veritabanı açtığı için geçiş yolu hiç koşmuyordu — oysa SAHADAKİ veritabanı eski ve
+        // üretimde koşan yol TAM OLARAK bu.
+        //
+        // Bozulsaydı: `PendingFinishes` SELECT'i her turda "no such column" atardı ve
+        // `YarimFisleriTamamla`'daki try yalnız `FinishStuckTicket`'i sardığı için KURTARMA
+        // TAMAMEN ÖLÜRDÜ — üzerinde para olan fişler sessizce açık kalırdı.
+        var yol = TempDb();
+
+        // ESKİ şema: iki sütun da YOK (W105/W38 dönemindeki hâl)
+        using (var eski = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={yol}"))
+        {
+            eski.Open();
+            using var c = eski.CreateCommand();
+            c.CommandText = """
+                CREATE TABLE pending_finish (
+                    ticket_id TEXT PRIMARY KEY, terminal_id TEXT NOT NULL, sale_session_id TEXT,
+                    marked_at INTEGER NOT NULL, attempts INTEGER NOT NULL DEFAULT 0,
+                    next_attempt_at INTEGER NOT NULL, last_step TEXT, last_code TEXT);
+                CREATE TABLE closed_tickets (
+                    ticket_id TEXT PRIMARY KEY, terminal_id TEXT NOT NULL, sale_session_id TEXT,
+                    total_minor INTEGER, paid_minor INTEGER, closed_at INTEGER NOT NULL,
+                    notified_at INTEGER);
+                INSERT INTO pending_finish VALUES ('tkt_eski','t1','o',1,0,1,NULL,NULL);
+                """;
+            c.ExecuteNonQuery();
+        }
+
+        using var store = CommandStore.Open(yol);
+
+        // Geçiş koştu: eski KAYIT duruyor ve yeni sütunlar okunabiliyor.
+        var satir = Assert.Single(store.PendingFinishes(long.MaxValue));
+        Assert.Equal("tkt_eski", satir.TicketId);
+        Assert.Null(satir.ParkedUntil);
+
+        // Ve yeni sütunlar gerçekten YAZILABİLİR.
+        store.DeferFinish("tkt_eski", TimeSpan.FromMinutes(30), 1_000);
+        Assert.Equal(1_000 + 1_800_000, store.PendingFinishes(long.MaxValue).Single().ParkedUntil);
+
+        store.MarkTicketClosed("tkt_kapali", "t1", "o", 990, 990);
+        store.SetFiscalReceiptNo("tkt_kapali", 7);   // fırlatmamalı
+    }
+
     // ── W11: KURTARMA YAŞ SINIRI ────────────────────────────────────────────────
 
     [Fact]

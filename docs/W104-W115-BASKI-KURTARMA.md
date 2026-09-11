@@ -1380,3 +1380,87 @@ işaret eder.
 
 Mutasyon 4/4 kırmızı (çıkarmayı unut · okuma patlayınca da yaz · sıfır
 kontrolünü kaldır · fiş açıkken de yaz). 652/652 yeşil.
+
+---
+
+## W145/W146 — BAĞIMSIZ DENETİM: kendi eklediğim kodda PARA RİSKİ buldu
+
+Kullanıcı gecenin bütün değişiklikleri için bağımsız bir denetim başlattı (farklı
+model). Altı bulgu çıktı; **en ağırı benim birkaç saat önce yazdığım koddaydı.**
+
+### ① KRİTİK — W144'ün `Echo`'su YANLIŞ YERDEYDİ
+
+```
+FP3_Close      ← PARA ALINDI, MALİ FİŞ KESİLDİ
+  ↓
+FP3_Echo       ← BURAYA KOYMUŞUM
+  ↓
+MarkTicketClosed  ← kalıcı "kapandı, bildirilmedi" kaydı
+```
+
+`Echo`, JSON'dan çözülüyor ve W142 ile sayaç alanları eklendi — beklenmedik bir
+değer ayrıştırıcıyı **fırlatabilir**. Fırlatsaydı:
+
+- satış istisnayla düşer, kasa HTTP 500 alır
+- kapanış **deftere hiç yazılmaz** → platform kapanışı öğrenemez → masa kapanmaz
+- açık fiş bağı silinmez → aynı oturumun sonraki satışı **kapanmış fişin
+  kimliğini devralır**
+
+Denetim bunu deneyerek gösterdi (sahteye istisna kancası taktı, `Kapananlar=0`
+ve bağın kaldığını ölçtü).
+
+⚠️ **Hemen altındaki yorum zaten bunu söylüyordu:** *"SIRA ÖNEMLİ… önce kalıcı
+'kapandı, bildirilmedi' kaydı, sonra silme."* Kendi uyarımı ihlal etmişim.
+
+**Düzeltme:** `Echo` kalıcı kayıttan ve bağ silmeden **sonraya** alındı ve
+`try/catch`'e sarıldı. Numara artık bir **zenginleştirme**; elde edilemezse
+kapanış yine sağlam. "Okunamazsa alan boş kalır" kuralı dönüş kodu için
+doğruydu, **istisna için değildi**.
+
+### ② Numara HİÇBİR YERE yazılmıyordu
+
+Commit "satışın kaydına yazılıyor" diyordu. Gerçekte tek tüketici **14 gün
+saklanan bir log satırıydı**. `closed_tickets`'ta sütun yoktu, kasaya giden
+gövdede yoktu. "Denetim sorduğunda cevap" iddiası karşılanmıyordu.
+
+**Düzeltme:** `closed_tickets.fiscal_receipt_no` + şema geçişi +
+`SetFiscalReceiptNo`. Kapanış kaydı **önce** yazılıyor (para güvenliği), numara
+**sonra** ekleniyor.
+
+### ③ `printingForMs` — ölü savunma VE anlam karışıklığı
+
+Alan üretiliyordu, hiçbir test okumuyordu. Dahası `Attempts == 0` iki ayrı hâli
+birden gösteriyordu: "baskı sürüyor" ve "baskı patladı, süpürme henüz koşmadı".
+İkincisinde gövde aynı anda `printingForMs = 100000+` ve
+`pendingFinishStep = "PrintBeforeMF"` taşıyordu.
+
+Ayrım zaten elimizdeydi: `LastStep is null`. Kodda kapatıldı ve **gerçek depoya
+karşı** çivilendi.
+
+### ④ `GecerliTanitici`'nin "yenile → açık fiş yokmuş" dalı testsizdi
+
+Bozulsaydı kasiyer, iptal edilecek bir şey yokken `Unknown/TICKET_READ_FAILED`
+görürdü — yani "belirsiz, operatöre git". Doğru cevap "ortada fiş yok, işin
+tamam". **"Yok" ile "bilinmiyor"** ayrımı, bu kod tabanının en çok önemsediği şey.
+
+### ⑤ Şema geçişleri testsizdi
+
+Testler hep taze veritabanı açıyordu; **sahadaki veritabanı eski** ve üretimde
+koşan yol tam da geçiş. `parked_until` bozulsaydı `PendingFinishes` her turda
+"no such column" atardı ve **kurtarma tamamen ölürdü**. Artık eski şemalı bir
+veritabanı kurup geçişi çiviliyoruz.
+
+### Kalan bulgu (düzeltilmedi, karar bekliyor)
+
+**⑥ İptal yolunda çift `OptionFlags`:** `GecerliTanitici` canlılık için bir
+`OptionFlags` yapıyor, çağıran aynı çağrıyı tekrarlıyor. Cihaz erişilebilirken
+milisaniyeler; **erişilemezken iptal ~53–66 sn yerine ~106–132 sn** sürüyor
+(W139: her çağrı kendi soketi). Bu benim W128'de eklediğim maliyet ve
+belgede "bir ek `OptionFlags`" derken bu senaryoyu saymamışım.
+
+Mutasyon: bu bölümde 9 mutasyon, hepsi kırmızı. 657/657 + 3/3 yeşil.
+
+> **Ders:** aynı gece yazılmış ve mutasyonla çivilenmiş bir kod bile, bağımsız
+> bir göz yanlış SIRADA durduğunu görebiliyor. Mutasyon testi "bu koruma
+> çalışıyor mu" sorusunu cevaplıyor; "bu kod doğru yerde mi" sorusunu
+> cevaplamıyor.

@@ -206,6 +206,9 @@ public interface ITicketSnapshotStore
     /// </summary>
     void UndeferPendingFinishes(long? now = null);
 
+    /// <inheritdoc cref="CommandStore.SetFiscalReceiptNo"/>
+    void SetFiscalReceiptNo(string ticketId, uint fiscalReceiptNo);
+
     /// <summary>Kâğıt uyarısı açık mı? <c>null</c> = uyarı YOK.</summary>
     (long GorulmeMs, string? Adim)? ReadPaperWarning(string terminalId);
 

@@ -165,10 +165,22 @@ public sealed class CommandStore : ITicketSnapshotStore, IDisposable
                     total_minor     INTEGER,
                     paid_minor      INTEGER,
                     closed_at       INTEGER NOT NULL,
-                    notified_at     INTEGER
+                    notified_at     INTEGER,
+                    fiscal_receipt_no INTEGER
                 )
                 """;
             cmd.ExecuteNonQuery();
+
+            // ── ŞEMA GEÇİŞİ: `fiscal_receipt_no` (W145) ───────────────────────────────
+            // Sahadaki veritabanı bu sütundan ÖNCE oluştu; üretimde koşan yol bu geçiş.
+            cmd.CommandText = "PRAGMA table_info(closed_tickets)";
+            var ctKolon = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
+            using (var r = cmd.ExecuteReader()) while (r.Read()) ctKolon.Add(r.GetString(1));
+            if (!ctKolon.Contains("fiscal_receipt_no"))
+            {
+                cmd.CommandText = "ALTER TABLE closed_tickets ADD COLUMN fiscal_receipt_no INTEGER";
+                cmd.ExecuteNonQuery();
+            }
 
             // ── W120: CİHAZ SAĞLIK DURUMU (kâğıt) ─────────────────────────────────────
             // Kâğıt durumu bir DENEMENİN özelliği DEĞİL, CİHAZIN durumudur. Bugüne kadar yalnız
@@ -847,6 +859,30 @@ public sealed class CommandStore : ITicketSnapshotStore, IDisposable
     /// Fişin KAPANDIĞINI, henüz bildirilmemiş olarak yazar. Bağ silinmeden ÖNCE çağrılır.
     /// Aynı fiş ikinci kez yazılmaz (kapanış bir kez olur).
     /// </summary>
+    /// <summary>
+    /// <b>W145 — kapanmış fişe MALİ FİŞ NUMARASINI ekler.</b> Kapanış kaydı ZATEN yazılmış
+    /// olmalı; bu çağrı onu zenginleştirir.
+    ///
+    /// <para><b>Neden AYRI bir yazma:</b> numara ancak cihaz okunabilirse elde edilir ve o
+    /// okuma başarısız olabilir. Kapanış kaydını okumaya BAĞLAMAK, okuma patladığında paranın
+    /// alındığı ama kapanışın deftere hiç yazılmadığı bir pencere açardı — denetim tam olarak
+    /// bunu buldu. Önce kapanış (para güvenliği), sonra numara (zenginleştirme).</para>
+    ///
+    /// <para>Kayıt yoksa hiçbir şey yapmaz: numara sahipsiz bir satır yaratmaz.</para>
+    /// </summary>
+    public void SetFiscalReceiptNo(string ticketId, uint fiscalReceiptNo)
+    {
+        lock (_gate)
+        {
+            using var cmd = _conn.CreateCommand();
+            cmd.CommandText =
+                "UPDATE closed_tickets SET fiscal_receipt_no = $n WHERE ticket_id = $f";
+            cmd.Parameters.AddWithValue("$f", ticketId);
+            cmd.Parameters.AddWithValue("$n", fiscalReceiptNo);
+            cmd.ExecuteNonQuery();
+        }
+    }
+
     public void MarkTicketClosed(string ticketId, string terminalId, string? saleSessionId,
         long? totalMinor, long? paidMinor, long? now = null)
     {

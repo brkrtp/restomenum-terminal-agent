@@ -458,35 +458,6 @@ public sealed partial class GmpTerminalTransport : ITerminalTransport
             if (kapandi)
             {
                 fisDurumu = "CLOSED";
-                // ══ W144 — BU SATIŞIN ALDIĞI MALİ FİŞ NUMARASI ════════════════════════
-                //
-                // Bugüne kadar "şu satış hangi mali fiş?" sorusunun cevabı YOKTU. `tkt_…`
-                // bizim ürettiğimiz bir etiket ve cihaz onu bilmiyor; kâğıttaki numara
-                // cihazın ve ikisi arasında hiçbir bağ kaydedilmiyordu.
-                //
-                // ⚠️ ÇIKARMA BİLEREK: `FisNo` SONRAKİ numaradır, sonuncu değil. Ölçüldü
-                // (2026-09-12 01:05→01:08): satıştan önce 3, kâğıda basılan 3, sonra 4.
-                //
-                // ⚠️ BURADA okunuyor çünkü: (a) numara mali kesinleşmede tüketiliyor, (b) cihaz
-                // kilidi HÂLÂ bizde — bırakılsaydı araya giren başka bir fiş numarayı kaydırırdı,
-                // (c) baskı zincirinin İÇİNE koymak kasanın 180 sn'lik kapısına yeni bir
-                // başarısızlık noktası eklerdi.
-                //
-                // ⚠️ Okuma patlarsa alan `null` KALIR. Tahmin edilmez: yanlış bir mali numara
-                // kaydetmek, hiç kaydetmemekten kötüdür.
-                if (_gmp.Echo(out var sayac).Ok && sayac.FisNo > 0)
-                {
-                    mailFisNo = sayac.FisNo - 1;
-                    _log("[gmp] mali fiş numarası", new
-                    {
-                        fisNo = mailFisNo, okunanSonraki = sayac.FisNo, zNo = sayac.ZNo,
-                        fisId,
-                    });
-                }
-                else
-                {
-                    _log("[gmp] mali fiş numarası OKUNAMADI — alan boş bırakıldı", new { fisId });
-                }
                 // Bağ SİLİNMEDEN önce oku — silindikten sonra fişin ödemelerini soracak kimlik kalmaz.
                 if (fisId is not null) kapanisOdemeleri = _snapshots?.ReadTicketPayments(fisId);
                 // ⚠️ SIRA ÖNEMLİ. Bağ silinmek ZORUNDA: bırakılsaydı aynı oturumun bir sonraki
@@ -498,6 +469,52 @@ public sealed partial class GmpTerminalTransport : ITerminalTransport
                     _snapshots?.MarkTicketClosed(fisId, request.TerminalId, request.SaleSessionId,
                         cihazToplam, cihazTahsil);
                 _snapshots?.ClearOpenTicketBinding(request.TerminalId);
+
+                // ══ W145 — MALİ FİŞ NUMARASI: KALICI KAYITTAN SONRA, ve YUTULARAK ═══════
+                //
+                // ⚠️ BU BLOK ÖNCE YANLIŞ YERDEYDİ ve bağımsız denetim yakaladı. `Close` ile
+                // `MarkTicketClosed` ARASINDA duruyordu: yani PARA ALINMIŞ ve mali fiş KESİLMİŞ
+                // olduğu hâlde, kalıcı "kapandı, bildirilmedi" kaydı henüz yazılmamışken cihaza
+                // bir çağrı daha yapıyordu. O çağrı fırlatsaydı satış istisnayla düşer, kapanış
+                // deftere HİÇ yazılmaz, bağ silinmez ve aynı oturumun sonraki satışı kapanmış
+                // fişin kimliğini devralırdı. Hemen yukarıdaki "SIRA ÖNEMLİ" uyarısı zaten bunu
+                // söylüyordu; ben onu ihlal etmişim.
+                //
+                // Şimdi: önce para güvenliği (kapanış kaydı + bağın silinmesi), SONRA numara.
+                // Numara bir ZENGİNLEŞTİRME; elde edilemezse kapanış yine sağlam.
+                //
+                // ⚠️ try/catch BİLEREK: `FP3_Echo` yanıtı JSON'dan çözülüyor ve W142 ile
+                // sayaç alanları eklendi — beklenmedik bir değer ayrıştırıcıyı FIRLATABİLİR.
+                // Tamamlanmış bir satışı, bilgi amaçlı bir okuma yüzünden patlatmak kabul
+                // edilemez. "Okunamazsa alan boş kalır" kuralı dönüş koduna ek olarak
+                // İSTİSNAYI da kapsamalı.
+                //
+                // ⚠️ ÇIKARMA: `FisNo` SONRAKİ numaradır (2026-09-12 01:05→01:08: önce 3,
+                // kâğıtta 3, sonra 4).
+                try
+                {
+                    if (_gmp.Echo(out var sayac).Ok && sayac.FisNo > 0)
+                    {
+                        mailFisNo = sayac.FisNo - 1;
+                        if (fisId is not null) _snapshots?.SetFiscalReceiptNo(fisId, mailFisNo.Value);
+                        _log("[gmp] mali fiş numarası", new
+                        {
+                            fisNo = mailFisNo, okunanSonraki = sayac.FisNo, zNo = sayac.ZNo, fisId,
+                        });
+                    }
+                    else
+                    {
+                        _log("[gmp] mali fiş numarası OKUNAMADI — alan boş bırakıldı", new { fisId });
+                    }
+                }
+                catch (Exception e)
+                {
+                    // Satış TAMAMLANDI ve deftere yazıldı; burası yalnız zenginleştirme.
+                    _log("[gmp] mali fiş numarası okunurken HATA — satış etkilenmedi", new
+                    {
+                        fisId, hata = e.GetType().Name,
+                    });
+                }
             }
         }
         else if (request.SaleSessionId is string oturum)
