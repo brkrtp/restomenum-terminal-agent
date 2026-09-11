@@ -1218,3 +1218,29 @@ Sonuncusu en önemlisi: derlenen ama sessizce sıfır üreten mutasyon — kusur
 gerçek şekli buydu ve artık yakalanıyor.
 
 648/648 (Core) + 3/3 (interop) yeşil.
+
+### W142 — SAHADA, ilk okuma
+
+Yayım 2026-09-12 00:51 (ikili damgası 00:51, GMP.XML ve GMPSmartDLL.dll hash'leri
+değişmedi, appsettings korundu).
+
+```
+00:51:49  [Pairing] mali sayaçlar (HAM): ZNo=92 FişNo=3 EküNo=1 asılıTanıtıcı=0
+```
+
+**İlk kez mali sayaçları okuyabiliyoruz.** Karşılaştırma, dün gece DLL izinden
+çıkardığım ham JSON ile:
+
+| | ZNo | FisNo | EkuNo |
+|---|---|---|---|
+| 11 Eylül 00:11 (DLL izi) | 91 | 2 | 1 |
+| 12 Eylül 00:51 (canlı log) | **92** | 3 | 1 |
+
+`ZNo` 91→92: arada bir **Z raporu** alınmış (gün sonu). `FisNo` o yüzden
+sıfırlanıp yeniden saymaya başlamış — iki nokta arasındaki fiş sayısı bu iki
+okumadan **hesaplanamaz**. Bundan sonraki öncesi/sonrası karşılaştırmalar aynı
+Z dönemi içinde anlamlı olacak.
+
+`asılıTanıtıcı=0` — cihazda asılı fiş yok. Bu sağlık bilgisi eskiden yalnız
+`FP3_Start` ile alınabiliyordu ve o çağrı açık fiş YOKKEN yeni fiş açıp **mali
+numara tüketiyordu**. Artık bedava.
