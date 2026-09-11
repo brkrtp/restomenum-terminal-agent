@@ -1300,3 +1300,34 @@ sonuç sağlam; artmıyorsa alan başka bir şey ve ölçüm baştan geçersiz.
 O kontrol bir **gerçek satış** gerektiriyor (para hareket eder), bu yüzden
 kullanıcı kararına bırakıldı. **Pozitif kontrol yapılmadan bu sonuç sözleşmeye
 yazılmamalı.**
+
+### W143 — POZİTİF KONTROL GEÇTİ: `FisNo` = SONRAKİ fiş numarası
+
+```
+01:05:06  ZNo=92 FişNo=3            ← taban
+01:06:47  Payment → fiş KAPANDI (4950/4950)
+          kâğıttaki fiş numarası: 3          (kullanıcı okudu)
+01:08:13  ZNo=92 FişNo=4            ← ARTTI
+```
+
+Tek mali fiş kesildi, alan **tam bir** arttı.
+
+**İki sonuç birden kapandı:**
+
+1. **`FisNo` gerçekten mali fiş sayıyor** — ve anlamı **SONRAKİ** numara, sonuncu
+   değil. Kanıt üçlü: satıştan önce 3 okundu, basılan fişin numarası 3 çıktı,
+   satıştan sonra 4 okundu. Sözleşmede "son kesilen fiş" diye kullanılırsa **bir
+   fazla** raporlanır.
+
+2. **Yoklama fişi mali numara TÜKETMİYOR** — dünkü ölçüm artık sağlam. Alan
+   sayıyor olduğuna göre, `FP3_Start`→`FP3_Close` boyunca 3'te kalması gerçek bir
+   olgu. W131'deki "`finishId` başına en fazla bir FNo kaybı" kalıntısı **yok**.
+
+`EkuNo` üç ölçümde de 1 — EKÜ numarası, nadiren değişiyor.
+
+### Hâlâ ölçülmemiş olan
+
+**Kalemleri olan ve `VoidAll` ile iptal edilen** bir fiş numara tüketiyor mu —
+bu AYRI bir yol ve ölçülmedi. 2026-09-11 02:39'daki iptal için karşı tarafa
+"tüketildi" demiştim; o iddia geri çekildi ve yerine **"ölçülmedi"** yazıldı.
+Artık güvenilir bir aletimiz var; istenirse tek turda ölçülebilir.
