@@ -24,7 +24,7 @@ public sealed partial class GmpTerminalTransport
         // W128: tanıtıcı TEK KAPIDAN alınır — hem yokluğu hem BAYATLIĞI orada çözülür.
         // Eskiden burada yalnız `h == 0` sınanıyordu; sıfır olmayan ÖLÜ bir tanıtıcı fark
         // edilmiyor ve iptal, süreç yeniden başlayana kadar hızlı hızlı patlıyordu.
-        var th = GecerliTanitici();
+        var th = GecerliTanitici(out var yankilama);
         if (th is null)
             return new TransportResult(TransportOutcome.Declined,
                 ProviderResultCode: "NO_OPEN_TICKET", ErrorCondition: "NotFound");
@@ -35,7 +35,11 @@ public sealed partial class GmpTerminalTransport
         long iptalTutar = 0;
         int iptalSayi = 0;
         var fisSahibi = _snapshots?.ReadOpenTicketBinding(_terminalId);
-        if (!_gmp.OptionFlags(h, GmpEchoFlags.Reload).Ok || !_gmp.GetTicket(h, out var oncesi).Ok)
+        // W147: canlılık sınaması ZATEN yapıldıysa tekrarlamıyoruz — cihaz erişilemezken bu
+        // tekrar iptali 53–66 sn'den ~106–132 sn'ye çıkarıyordu. Sınama yapılmadıysa
+        // (`yankilama is null`) kendi okumamızı yaparız; varsayım yok.
+        var of = yankilama ?? _gmp.OptionFlags(h, GmpEchoFlags.Reload);
+        if (!of.Ok || !_gmp.GetTicket(h, out var oncesi).Ok)
         {
             // ══ W127 — OKUNAMADI, "BOŞ" DEĞİLDİR: OKUYAMIYORSAK İPTAL ETMEYİZ ═══════
             //
@@ -145,14 +149,15 @@ public sealed partial class GmpTerminalTransport
     {
         // W128: bkz. GecerliTanitici — bayat tanıtıcı burada da görünmez kalıyordu ve
         // sahada 2026-09-10 16:39'da iptalin 273 ms'de patlamasının sebebi buydu.
-        var th = GecerliTanitici();
+        var th = GecerliTanitici(out var yankilama);
         if (th is null)
             return new TicketVoidResult(TransportOutcome.Approved, TicketWasOpen: false,
                 ProviderResultCode: "NO_OPEN_TICKET");
         var h = th.Value;
 
         // Denetim izi: neyi iptal ettiğimiz SİLİNMEDEN ÖNCE okunur ve yazılır.
-        var of = _gmp.OptionFlags(h, GmpEchoFlags.Reload);
+        // W147: bkz. Void() — sınama yapıldıysa tekrarlanmaz.
+        var of = yankilama ?? _gmp.OptionFlags(h, GmpEchoFlags.Reload);
         var gt = _gmp.GetTicket(h, out var fis);
         if (!of.Ok || !gt.Ok)
             return new TicketVoidResult(TransportOutcome.Unknown, TicketWasOpen: true,

@@ -1709,11 +1709,15 @@ public class GmpTerminalTransportTests
         // Sıra: önce OKU (denetim izi), sonra iptal et. Fişin ne olduğu, SİLİNMEDEN ÖNCE loglanır;
         // sonra loglansaydı iptal sırasındaki bir çökmede ne sildiğimizi kimse bilemezdi.
         //
-        // İLK `OptionFlags` W128'in canlılık sınaması: elimizdeki tanıtıcı sıfır değil ama
-        // YAŞADIĞININ KANITI YOK. Bedeli bir DLL çağrısı; karşılığı, ölü tanıtıcının iptali
-        // süreç yeniden başlayana kadar kilitlememesi (sahada 2026-09-10'da tam bu oldu).
-        // Gizlemek yerine burada AÇIKÇA yazılı: fazladan çağrı bilinçli bir seçim.
-        Assert.Equal(new[] { "OptionFlags", "OptionFlags", "GetTicket", "VoidAll", "Close" }, g.Calls);
+        // W128 canlılık sınamasını EKLEDİ, W147 tekrarı KALDIRDI: sınama sonucu artık çağırana
+        // geri veriliyor ve aynı çağrı iki kez yapılmıyor.
+        //
+        // ⚠️ Bu tekrar zararsız görünüyordu ("bir DLL çağrısı") ve ben de öyle yazmıştım.
+        // Bağımsız denetim bedelini saydı: her GMP çağrısı KENDİ SOKETİNİ açtığı için (W139)
+        // cihaz ERİŞİLEMEZKEN bağlanamama bedeli 53–66 saniye ve iki kez ödeniyordu —
+        // iptal ~106–132 saniye sürüyordu. Sağlıklı cihazdaki milisaniyelere bakıp
+        // "önemsiz" demek, arıza yolundaki maliyeti hiç saymamaktı.
+        Assert.Equal(new[] { "OptionFlags", "GetTicket", "VoidAll", "Close" }, g.Calls);
         Assert.DoesNotContain("VoidPayment", g.Calls);
         Assert.Equal(RestomenumReasons.TicketCancelled, r.Info);
     }
@@ -1733,6 +1737,35 @@ public class GmpTerminalTransportTests
         Assert.Contains("VoidPayment", g.Calls);
         // İlk VoidAll 2069 verdi, ters işlemden sonra ikinci VoidAll da 2069 verecek şekilde
         // sahtelendiği için sonuç belirsiz — kritik olan ters işlemin DENENMESİ.
+        Assert.Equal(TransportOutcome.Unknown, r.Outcome);
+    }
+
+    [Fact]
+    public async Task TANITICI_YENILENDIYSE_SINAMA_YAPILMAMIS_SAYILIR_varsayilmaz()
+    {
+        // ← ÇİVİ: W147'yi eklerken KENDİ kodumda ölü savunma bıraktım (mutasyon yakaladı).
+        //
+        // `GecerliTanitici` canlılık sınaması YAPTIYSA sonucu çağırana veriyor. Ama tanıtıcı
+        // YENİ oluşturulduysa (yoktu ya da bayattı, yenilendi) sınama YAPILMAZ ve `yankilama`
+        // null kalır — çağıran kendi okumasını yapmak zorundadır.
+        //
+        // ⚠️ Orayı "sınandı ve geçti" diye doldurmak, HİÇ YAPILMAMIŞ bir ölçümü varsaymak
+        // olurdu. Sonucu: yenilenmiş ama cevap vermeyen bir tanıtıcıyla `VoidAll`a gidilir —
+        // yani fişin ne olduğunu okumadan iptal. W127'nin kapattığı deliğin ta kendisi.
+        var (t, g, _) = Kur();
+        g.AfterPayment = new GmpTicket(3000, 990, 1, GmpPaymentTypes.Cash);
+        await t.SaleAsync(Req(amount: 990, paymentType: GmpPaymentTypes.Cash, satisToplam: 3000));
+
+        g.StaleHandles.Add(42);                      // eldeki tanıtıcı bayat → yenilenecek
+        g.NextStartHandle = 43;
+        g.Codes["Start"] = GmpCodes.AlreadyDone;     // cihazda açık fiş VAR
+        g.Codes["OptionFlags"] = GmpCodes.RecvBusy;  // YENİ tanıtıcıda okuma CEVAP VERMİYOR
+        g.Calls.Clear();
+
+        var r = await t.VoidTicketAsync("t1");
+
+        // Okuma doğrulanamadı → fişe DOKUNULMADI.
+        Assert.DoesNotContain("VoidAll", g.Calls);
         Assert.Equal(TransportOutcome.Unknown, r.Outcome);
     }
 

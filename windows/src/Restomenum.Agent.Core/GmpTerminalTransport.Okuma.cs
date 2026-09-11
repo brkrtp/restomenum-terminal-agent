@@ -94,8 +94,22 @@ public sealed partial class GmpTerminalTransport
     /// hatırlamak zorunda kalırsa kusur, <b>bir sonraki kapıdan yine girer</b>. Aynı kusurun
     /// üçüncü kez tekrarlamasının tek yolu, tanıtıcıyı buradan almamaktır.</para>
     /// </summary>
-    private ulong? GecerliTanitici()
+    /// <param name="yankilama">
+    /// <b>W147</b> — canlılık sınaması için YAPILMIŞSA <c>OptionFlags(Reload)</c> sonucu;
+    /// yapılmadıysa <c>null</c>.
+    ///
+    /// <para><b>Neden geri veriliyor:</b> çağıranlar zaten hemen ardından aynı çağrıyı
+    /// yapıyordu ve bu, cihaz ERİŞİLEMEZKEN iptali ikiye katlıyordu — her GMP çağrısı kendi
+    /// soketini açtığı için (W139) bağlanamama bedeli 53–66 saniye ve iki kez ödeniyordu:
+    /// <b>~106–132 sn</b>. Bağımsız denetim yakaladı; W128'de bu senaryoyu saymamıştım.</para>
+    ///
+    /// <para>⚠️ Her zaman dolu DEĞİL. Tanıtıcı yeni oluşturulduysa (yoktu ya da bayattı,
+    /// yenilendi) sınama YAPILMAZ ve çağıran kendi okumasını yapmak zorundadır. Boş geldiğinde
+    /// "sınandı ve geçti" diye yorumlamak, hiç yapılmamış bir ölçümü varsaymak olurdu.</para>
+    /// </param>
+    private ulong? GecerliTanitici(out GmpResult? yankilama)
     {
+        yankilama = null;
         ulong h;
         lock (_gate) h = _handle;
 
@@ -107,12 +121,13 @@ public sealed partial class GmpTerminalTransport
         }
 
         // Elimizdeki tanıtıcı SIFIR DEĞİL — ama yaşadığının kanıtı yok. Ucuz bir çağrıyla sına.
-        if (!BayatTanitici(_gmp.OptionFlags(h, GmpEchoFlags.Reload).Code)) return h;
+        var sinama = _gmp.OptionFlags(h, GmpEchoFlags.Reload);
+        if (!BayatTanitici(sinama.Code)) { yankilama = sinama; return h; }
 
         _log("[gmp] tanıtıcı bayat (2317) — yenileniyor", new { eski = h });
         if (TanitciyiYenile() is not null) return null;        // yenilenince açık fiş yokmuş
         lock (_gate) h = _handle;
-        return h;
+        return h;                                              // taze tanıtıcı: sınama YOK
     }
 
     /// <summary>

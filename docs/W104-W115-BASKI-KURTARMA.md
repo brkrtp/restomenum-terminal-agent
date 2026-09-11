@@ -1464,3 +1464,42 @@ Mutasyon: bu bölümde 9 mutasyon, hepsi kırmızı. 657/657 + 3/3 yeşil.
 > bir göz yanlış SIRADA durduğunu görebiliyor. Mutasyon testi "bu koruma
 > çalışıyor mu" sorusunu cevaplıyor; "bu kod doğru yerde mi" sorusunu
 > cevaplamıyor.
+
+---
+
+## W147 — iptal yolundaki ÇİFT `OptionFlags` kaldırıldı (denetimin 6. bulgusu)
+
+W128'de tanıtıcı canlılık sınaması ekledim ve belgeye *"bedeli bir ek
+`OptionFlags`"* diye yazdım. **Sağlıklı cihazdaki bedeli saymışım, arıza
+yolundakini saymamışım.**
+
+Her GMP çağrısı kendi soketini açıyor (W139). Cihaz erişilemezken bir çağrının
+bedeli 53–66 saniye (W134/W137) ve bu tekrar onu **iki kez** ödetiyordu:
+
+```
+iptal, cihaz erişilemez:   ~53–66 sn   →   ~106–132 sn
+```
+
+### Çözüm: sınama sonucunu ÇAĞIRANA geri ver
+
+Körlemesine silmek yanlış olurdu — sınamanın **yapılmadığı** durumlar var:
+
+| durum | sınama | çağıran ne yapar |
+|---|---|---|
+| tanıtıcı yoktu → yeni açıldı | **yapılmaz** | kendi okumasını yapar |
+| tanıtıcı vardı, sınandı | **yapıldı** | sonucu kullanır, tekrarlamaz |
+| tanıtıcı bayattı → yenilendi | **yapılmaz** | kendi okumasını yapar |
+
+`GecerliTanitici(out GmpResult? yankilama)` → `var of = yankilama ?? _gmp.OptionFlags(...)`.
+
+⚠️ **Ve burada kendi kodumda bir ölü savunma bıraktım** — mutasyon yakaladı.
+`yankilama`yı yenilenmiş tanıtıcıda da doldurmak, **hiç yapılmamış bir ölçümü
+varsaymak** olurdu: yenilenmiş ama cevap vermeyen bir tanıtıcıyla `VoidAll`'a
+gidilir, yani fişin ne olduğu okunmadan iptal edilir — W127'nin kapattığı
+deliğin ta kendisi. Çivilendi.
+
+Mutasyon 3/3 kırmızı. **658/658 + 3/3** yeşil.
+
+> **Ders:** bir maliyeti "önemsiz" diye geçerken hangi yolda ölçtüğüme bakmalıyım.
+> Sağlıklı cihazda milisaniye olan şey, arıza yolunda dakika olabiliyor — ve
+> kullanıcı zaten arıza yolundadır.
