@@ -1110,3 +1110,47 @@ hiçbir şey söylemiyor.
 **Aynı sayı, iki farklı olguya ait.** Bu gece bunun üçüncü örneği: 68 vs 73
 saniye farkının cihazda değil bulut bacağında olması (W134), 21 saniyenin sabit
 sanılması (W137), ve şimdi bu.
+
+---
+
+## W141 — W127/W128 CANLIDA DOĞRULANDI: bayat tanıtıcı yine oldu, 350 ms'de iyileşti
+
+Sıfır tahsilatlı fişin iptali (2026-09-11 02:38:57 → 02:39:00). Yayımdan sonraki
+ilk iptal.
+
+```
+02:38:57.019  FP3_OptionFlags → 2317 APP_ERR_GMP3_INVALID_HANDLE   ← BAYAT
+02:38:57.369  [gmp] tanıtıcı bayat (2317) — yenileniyor { eski = 7684097394182473636 }
+02:38:57.369  FP3_Start → 2080 ALREADY_DONE                        ← taze tanıtıcı
+02:38:57.705  FP3_OptionFlags → OK
+02:38:58.058  FP3_GetTicket   → OK
+02:38:58.432  FP3_VoidAll     → TRAN_RESULT_OK   (1,56 sn)
+02:38:59.994  FP3_Close       → OK
+```
+
+**Bu, 2026-09-10'da 12 saat boyunca iptali kilitleyen arızanın ta kendisi** —
+aynı kod, aynı yol. Fark: W128'in tek kapısı devreye girdi ve **350
+milisaniyede** çözdü. Karşı taraf "bayat tanıtıcı sorunu yok" diye okudu; sorun
+VARDI, düzeltme çalıştı.
+
+W127 de doğrulandı: denetim izi iptalden ÖNCE yazıldı
+(`toplam=2380, tahsil=0, odemeSayisi=0, bankaBacagi=False, sahibi=ed52b1c1…`).
+Okuma patlasaydı `VoidAll` hiç çağrılmayacaktı.
+
+W128'in ikinci parçası (`kod` alanı) da göründü: `kod = (yok)` — işlem başarılı
+olduğu için boş. Asıl değerini bir sonraki başarısızlıkta gösterecek.
+
+### ⚠️ Kayda geçen bir düzeltme: mali numara TÜKETİLDİ
+
+Karşı taraf "fiş iptal edildiğine göre mali numara tüketilmedi, doğru mu?" diye
+sordu. **Yanlış.** Baskı bitlerinin set edilmemesi doğru (`0x00020002` yalnız
+başlık), ama cihaz **açılıp yazdırılmadan iptal edilen fiş için de mali fiş
+numarasını harcıyor** (daha önce ölçüldü). İptal numarayı geri vermiyor.
+
+O boşluk **kayıp değil**, beklenen bir şey — ama "iptal ettik, numara yanmadı"
+diye kaydedilirse ileride sayaç denetiminde açıklanamayan bir atlama olarak
+görünür.
+
+⚠️ Bu turda YENİDEN ölçülmedi: FNo okuma ucu hâlâ bağlı değil
+(`FP3_GetCurrentFiscalCounters` interop'ta var, `IGmp`'ye bağlanmamış). Önceki
+ölçüme dayanıyor. Üretici belgesi bu iş için `FP3_ECHO`'yu öneriyor.
