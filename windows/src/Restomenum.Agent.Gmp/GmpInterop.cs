@@ -1,4 +1,4 @@
-#nullable disable
+﻿#nullable disable
 using Newtonsoft.Json;
 using System.Runtime.InteropServices;
 using System.Text;
@@ -54,6 +54,21 @@ namespace Restomenum.Agent.Gmp.Interop
         public byte ecrMode;
         public UInt16 mtuSize;
         public byte[] ecrVersion;
+
+        // ── W142: MALİ SAYAÇLAR ─────────────────────────────────────────────────
+        // Cihaz bunları HER Echo'da gönderiyordu; sınıfta karşılığı olmadığı için
+        // Newtonsoft sessizce DÜŞÜRÜYORDU. Ham JSON'dan ölçüldü (2026-09-11 00:11:26):
+        //   {"retcode":0,"status":29,…,"EkuNo":1,"ZNo":91,"FisNo":2,"Handle":0,…}
+        // Adlar cihazın gönderdiğiyle BİREBİR aynı olmalı — eşleşmezse yine sessizce düşer
+        // ve bu kez düştüğünü kimse fark etmez. (`szEcrVersion` hâlâ öyle: sınıfta
+        // `ecrVersion` yazıyor, cihaz `szEcrVersion` gönderiyor. Ayrı konu, dokunulmadı.)
+        public UInt32 ZNo;
+        public UInt32 FisNo;
+        public UInt32 EkuNo;
+        /// <summary>Cihazda ASILI işlem tanıtıcısı; 0 = açık fiş yok. Üreticinin
+        /// `FP3_GETCURRENTHANDLE` yerine önerdiği bilgi burada bedavaya geliyor.</summary>
+        public UInt64 Handle;
+
         public ST_DATE date;
         public ST_TIME time;
         public ST_CASHIER activeCashier;

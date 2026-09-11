@@ -1,4 +1,4 @@
-using Microsoft.Extensions.DependencyInjection;
+﻿using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
 using Restomenum.Agent.Core;
 
@@ -39,6 +39,13 @@ public static class WindowsPairing
         // satır yalnız bir sonraki olayda karşılaştırma yapabilmek için var.
         log.LogInformation("cihaz durumu (HAM, yorumlanmadı): status={Durum} — sağlıklı ölçüm 0x0000001D",
             $"0x{cihazDurumu:X8}");
+        // W142: MALİ SAYAÇLAR — açılışta bir kez kayda geçer. Cihaz bunları her Echo'da
+        // gönderiyordu, biz düşürüyorduk. Bir fişin mali numara tüketip tüketmediğini ancak
+        // öncesi/sonrası bu satırları karşılaştırarak ölçebiliriz.
+        log.LogInformation(
+            "mali sayaçlar (HAM): ZNo={ZNo} FişNo={FisNo} EküNo={EkuNo} asılıTanıtıcı={Handle}"
+            + " — ⚠️ sıfırlar 'sayaç sıfır' DEĞİL, boş yanıt olabilir",
+            cihazDurumu.ZNo, cihazDurumu.FisNo, cihazDurumu.EkuNo, cihazDurumu.Handle);
 
         gmp.CheckPairing(out var once);
         log.LogInformation("eşleşme durumu (önce): {Durum}", once ? "EŞLİ" : "eşli DEĞİL");

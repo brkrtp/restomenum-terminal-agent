@@ -59,6 +59,29 @@ public readonly record struct PendingFinishRow(
     /// </param>
     long? ParkedUntil = null);
 
+/// <summary>
+/// <b>W142 — cihazın <c>FP3_Echo</c> yanıtı.</b> HAM taşınır, yorumlanmaz.
+///
+/// <para><b>Neden eklendi:</b> mali sayaçlar cihazdan HER Echo'da geliyordu ve
+/// <c>ST_ECHO</c> sınıfında karşılıkları olmadığı için <b>sessizce düşürülüyordu</b>. Ham
+/// JSON'dan ölçüldü (2026-09-11 00:11:26): <c>"EkuNo":1,"ZNo":91,"FisNo":2,"Handle":0</c>.
+/// Üretici belgesi de sayaç sorgusu için <c>FP3_ECHO</c>'yu öneriyor
+/// (<i>GMP3 OPTIMIZASYONU_TR</i>, "Hafifletilmiş Sorgular").</para>
+///
+/// <para>⚠️ <b>Sıfır, "sayaç sıfır" DEMEK DEĞİLDİR.</b> 2026-09-10 02:05:48'de cihaz bloke
+/// olduğunda yanıt <c>retcode 0</c> ile tamamen sıfır geldi (status 0, ZNo 0, FisNo 0). Aynı
+/// desen <c>FP3_VoidPayment</c> hatasında da görüldü ve orada "boş yanıt" demekti. Bu yüzden
+/// hiçbir karar bu alanlara bağlanmaz; yalnız taşınır ve günlüğe yazılır.</para>
+/// </summary>
+/// <param name="Handle">
+/// Cihazda ASILI işlem tanıtıcısı; <c>0</c> = açık fiş yok. Üreticinin <c>FP3_Start</c> yerine
+/// önerdiği "asılı handle kontrolü" bilgisi (<c>FP3_GETCURRENTHANDLE</c>) burada bedavaya
+/// geliyor — <c>FP3_Start</c> açık fiş YOKKEN yeni fiş açıp mali numara tüketirken bu çağrı
+/// tüketmiyor.
+/// </param>
+public readonly record struct EchoDurum(
+    uint Status, uint ZNo, uint FisNo, uint EkuNo, ulong Handle);
+
 public interface ITicketSnapshotStore
 {
     /// <param name="saleSessionId">
@@ -817,7 +840,7 @@ public interface IGmpWrapper
     /// <para>Bu yüzden alan <b>yalnız taşınır ve günlüğe yazılır</b>; hiçbir karar ona
     /// bağlanmaz. Bir sonraki kâğıt olayında iki durumun farkı ÖLÇÜM olur.</para>
     /// </param>
-    GmpResult Echo(out uint status);
+    GmpResult Echo(out EchoDurum durum);
 
     /// <summary>
     /// Cihazda KURULU odeme (banka) uygulamalarini okur — <c>FP3_GetPaymentApplicationInfo</c>.

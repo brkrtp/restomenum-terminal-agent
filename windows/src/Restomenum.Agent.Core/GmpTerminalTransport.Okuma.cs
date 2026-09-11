@@ -329,7 +329,16 @@ public sealed partial class GmpTerminalTransport
         // W112: cihazın HAM durum alanı. Karar buna BAĞLANMIYOR — yalnız kayda geçiyor ki bir
         // sonraki kâğıt/bloke olayında sağlıklı değerle (ölçüm: 0x001D) karşılaştırılabilsin.
         // Alan bugüne kadar her eşleşmede geliyor ve ATILIYORDU.
-        _log("[gmp] echo", new { code = rc.ToString(), status = $"0x{durum:X8}" });
+        // W142: mali sayaçlar da taşınır. Cihaz bunları HER Echo'da gönderiyordu ve sınıfta
+        // karşılıkları olmadığı için sessizce düşüyorlardı.
+        // ⚠️ SIFIR "sayaç sıfır" DEMEK DEĞİL: bloke cihaz `retcode 0` ile tamamen sıfır
+        // dönebiliyor (02:05:48'de ölçüldü). Karar bunlara bağlanmaz, yalnız kayda geçer.
+        _log("[gmp] echo", new
+        {
+            code = rc.ToString(), status = $"0x{durum.Status:X8}",
+            zNo = durum.ZNo, fisNo = durum.FisNo, ekuNo = durum.EkuNo,
+            asiliTanitici = durum.Handle,
+        });
         return rc.Ok;
     }, ct);
 }

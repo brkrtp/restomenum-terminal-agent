@@ -102,7 +102,10 @@ public class GmpTerminalTransportTests
         { Sureler.Add(("Close", t)); return Kod("Close"); }
         /// <summary>Cihazin HAM durum alani (W112). Saglikli olcum: 0x0000001D.</summary>
         public uint EchoStatus = 0x0000001D;
-        public GmpResult Echo(out uint status) { status = EchoStatus; return Kod("Echo"); }
+        /// <summary>W142: sahte, cihazın GERÇEKTEN gönderdiği alanları taşır — sayaçlar dahil.
+        /// Sahtenin gerçekten ayrıldığı her yer, yeşil bir testin altında saklanan kusurdur.</summary>
+        public EchoDurum EchoDurumu = new(0x1D, ZNo: 91, FisNo: 2, EkuNo: 1, Handle: 0);
+        public GmpResult Echo(out EchoDurum durum) { durum = EchoDurumu; return Kod("Echo"); }
         public GmpResult GetPaymentApplicationsRaw(out string json, out int total, out int received, byte requested = 20)
         { json = "[]"; total = 0; received = 0; return Kod("GetPaymentApplications"); }
         public GmpResult Pair(GmpPairingConfig c, out GmpDeviceInfo i)
@@ -1208,6 +1211,49 @@ public class GmpTerminalTransportTests
         var g = new FakeGmp();
         var snap = new FakeSnapshots();
         return (new GmpTerminalTransport(g, snap), g, snap);
+    }
+
+    [Fact]
+    public async Task ECHO_MALI_SAYACLARI_TASIR_cihaz_zaten_gonderiyordu()
+    {
+        // ← ÇİVİ: bu alanlar cihazdan HER Echo'da geliyordu ve `ST_ECHO` sınıfında karşılıkları
+        // olmadığı için Newtonsoft onları SESSİZCE DÜŞÜRÜYORDU. Ham JSON'dan ölçüldü
+        // (2026-09-11 00:11:26): {"status":29,…,"EkuNo":1,"ZNo":91,"FisNo":2,"Handle":0}
+        //
+        // Yani "FNo'yu okuyamıyoruz" dediğim şey aslında okunuyordu — taşınmıyordu. Bu,
+        // "görünmez eksik alan" kusurunun ta kendisi: gövde doğru görünür, bir alan düşmüştür
+        // ve ancak karşı tarafın davranışından anlaşılır.
+        var loglar = new List<(string, object?)>();
+        var g = new FakeGmp { EchoDurumu = new EchoDurum(0x1D, ZNo: 91, FisNo: 2, EkuNo: 1, Handle: 0) };
+        var t = new GmpTerminalTransport(g, null, (m, o) => loglar.Add((m, o)));
+
+        Assert.True(await t.EchoAsync());
+
+        var veri = loglar.Single(x => x.Item1 == "[gmp] echo").Item2!.ToString()!;
+        Assert.Contains("zNo = 91", veri);
+        Assert.Contains("fisNo = 2", veri);
+        Assert.Contains("ekuNo = 1", veri);
+        // Asılı tanıtıcı da bedavaya geliyor — üreticinin `FP3_Start` yerine önerdiği bilgi.
+        Assert.Contains("asiliTanitici = 0", veri);
+    }
+
+    [Fact]
+    public async Task ECHO_SIFIRLARI_YORUMLANMAZ_sadece_tasinir()
+    {
+        // ← ÇİVİ: bloke cihaz `retcode 0` ile TAMAMEN SIFIR dönebiliyor (2026-09-10 02:05:48'de
+        // ölçüldü) ve aynı desen `FP3_VoidPayment` hatasında "boş yanıt" demekti. Sıfırı
+        // "sayaç sıfır" diye yorumlayan bir karar, boş yanıtı ölçüm sanardı.
+        //
+        // Bu yüzden burada sınanan şey bir KARAR değil: sıfırlar da olduğu gibi TAŞINIYOR mu.
+        var loglar = new List<(string, object?)>();
+        var g = new FakeGmp { EchoDurumu = new EchoDurum(0, 0, 0, 0, 0) };
+        var t = new GmpTerminalTransport(g, null, (m, o) => loglar.Add((m, o)));
+
+        Assert.True(await t.EchoAsync());
+
+        var veri = loglar.Single(x => x.Item1 == "[gmp] echo").Item2!.ToString()!;
+        Assert.Contains("status = 0x00000000", veri);
+        Assert.Contains("zNo = 0", veri);
     }
 
     // ── FAIL-CLOSED: terminale HİÇ dokunulmaz ────────────────────────────────

@@ -355,9 +355,20 @@ public sealed partial class GmpWrapper : IGmpWrapper
             .Replace('\u00FE', '\u015F')   // ş
             .TrimEnd('\0', ' ');
 
-    public GmpResult Echo(out uint status)
+    /// <summary>
+    /// <b>W142</b> — cihazın <c>ST_ECHO</c> yanıtını sözleşme kaydına çevirir.
+    ///
+    /// <para><b>Neden AYRI ve public:</b> bu eşleme, alan adlarının cihazın gönderdiğiyle
+    /// birebir tutmasına bağlı ve <b>okuyarak doğrulanamaz</b> — adlar tutmazsa Newtonsoft
+    /// sessizce düşürür, kimse fark etmez. Tam olarak bu yüzden mali sayaçlar haftalarca
+    /// görünmedi. Satır içi kaldığı sürece test edilemezdi.</para>
+    /// </summary>
+    public static EchoDurum Cevir(ST_ECHO echo) =>
+        new(echo.status, echo.ZNo, echo.FisNo, echo.EkuNo, echo.Handle);
+
+    public GmpResult Echo(out EchoDurum durum)
     {
-        status = 0;
+        durum = default;
         uint h = AcquireInterface();
         if (h == 0) return GmpCodes.PortNotOpen;
         var echo = new ST_ECHO();
@@ -365,7 +376,7 @@ public sealed partial class GmpWrapper : IGmpWrapper
         // W112: HAM taşınır. `retcode 0` ile birlikte 0 gelmesi "durum sıfır" DEĞİL, büyük
         // ihtimalle "yanıt boş" demek (aynı desen `FP3_VoidPayment` hatasında görüldü) —
         // ama bunu burada YORUMLAMIYORUZ, çağırana ham geçiyoruz.
-        status = echo.status;
+        durum = Cevir(echo);
         return rc;
     }
 

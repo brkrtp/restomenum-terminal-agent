@@ -1154,3 +1154,67 @@ görünür.
 ⚠️ Bu turda YENİDEN ölçülmedi: FNo okuma ucu hâlâ bağlı değil
 (`FP3_GetCurrentFiscalCounters` interop'ta var, `IGmp`'ye bağlanmamış). Önceki
 ölçüme dayanıyor. Üretici belgesi bu iş için `FP3_ECHO`'yu öneriyor.
+
+---
+
+## W142 — FNo ucu BAĞLANDI: sayaçlar zaten geliyordu, biz düşürüyorduk
+
+Peer'e iki kez "FNo kanıtı üretemem, sayaç ucu bağlı değil" demiştim. **Yanlıştı.**
+Sayaçlar her `FP3_Echo` yanıtında geliyordu; `ST_ECHO` sınıfında karşılıkları
+olmadığı için Newtonsoft onları **sessizce düşürüyordu.**
+
+Ham JSON, cihazın DLL izinden birebir (2026-09-11 00:11:26):
+
+```json
+{"retcode":0,"status":29,"kvc":"…","ecrMode":1,"mtuSize":8192,
+ "szEcrVersion":"2001010000","szEcrNewVersion":"215132107T",
+ "EkuNo":1,"ZNo":91,"FisNo":2,"Handle":0,"UniqueID":"…"}
+```
+
+Sınıfta yalnız `retcode, status, kvc, ecrMode, mtuSize, ecrVersion, date, time,
+activeCashier` vardı. Dördü de yoktu.
+
+### Eklenenler
+
+`ST_ECHO` → `ZNo`, `FisNo`, `EkuNo`, `Handle` (adlar cihazınkiyle **birebir**).
+Sözleşmeye `EchoDurum(Status, ZNo, FisNo, EkuNo, Handle)`; `IGmp.Echo` artık onu
+döndürüyor. Hem eşleşme açılışında hem `[gmp] echo` satırında kayda geçiyor.
+
+**Bedava gelen:** `Handle` — cihazda asılı işlem tanıtıcısı, `0` = açık fiş yok.
+Üretici belgesi asılı-handle kontrolü için `FP3_Start` yerine tam da bunu
+öneriyor (*"performans kaybı oluşturan FP3_START yerine
+FP3_GETCURRENTHANDLE"*), ve `FP3_Start` açık fiş YOKKEN yeni fiş açıp **mali
+numara tüketirken** bu bilgi tüketmiyor. W131'deki kalıntıyı kapatmanın yolu da
+bu.
+
+⚠️ **Sıfır, "sayaç sıfır" demek değil.** Bloke cihaz `retcode 0` ile tamamen
+sıfır dönebiliyor (2026-09-10 02:05:48). Hiçbir karar bu alanlara bağlanmadı;
+yalnız taşınıyor ve günlüğe yazılıyor.
+
+### Yeni test projesi — çünkü bu köprü HİÇ test edilmemişti
+
+Interop `net8.0-windows`, Core testleri `net8.0`. Referans alınamadığı için
+JSON→`ST_ECHO`→`EchoDurum` yolu bugüne kadar test edilmemişti — kusurun tam
+olarak orada saklanabilmesinin sebebi bu.
+
+`tests/Restomenum.Agent.Gmp.Tests` eklendi ve testler **cihazın gerçek
+yanıtına** karşı koşuyor; uydurma gövdeye karşı test yazmak kaçırdığımız kusuru
+yeniden üretirdi.
+
+Eşleme satır içinden `GmpWrapper.Cevir(ST_ECHO)` yordamına çıkarıldı — satır içi
+kaldığı sürece test edilemezdi.
+
+### Mutasyon
+
+| mutasyon | sonuç |
+|---|---|
+| sayaçları loga koyma | KIRMIZI |
+| ZNo ↔ FisNo karıştır (log) | KIRMIZI |
+| `Cevir` sayaçları taşımasın | KIRMIZI |
+| `Cevir`de ZNo ↔ FisNo değiştir | KIRMIZI |
+| **JSON eşlemesini sessizce boz** (`[JsonProperty("Zed")]`) | **KIRMIZI** |
+
+Sonuncusu en önemlisi: derlenen ama sessizce sıfır üreten mutasyon — kusurun
+gerçek şekli buydu ve artık yakalanıyor.
+
+648/648 (Core) + 3/3 (interop) yeşil.
