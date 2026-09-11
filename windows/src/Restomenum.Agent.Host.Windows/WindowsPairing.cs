@@ -38,7 +38,7 @@ public static class WindowsPairing
         // değil MEŞGUL olduğu için de böyle dönmüş olabilir. Hiçbir karar buna bağlanmıyor;
         // satır yalnız bir sonraki olayda karşılaştırma yapabilmek için var.
         log.LogInformation("cihaz durumu (HAM, yorumlanmadı): status={Durum} — sağlıklı ölçüm 0x0000001D",
-            $"0x{cihazDurumu:X8}");
+            $"0x{cihazDurumu.Status:X8}");   // W142: kayıt artık EchoDurum — .Status şart
         // W142: MALİ SAYAÇLAR — açılışta bir kez kayda geçer. Cihaz bunları her Echo'da
         // gönderiyordu, biz düşürüyorduk. Bir fişin mali numara tüketip tüketmediğini ancak
         // öncesi/sonrası bu satırları karşılaştırarak ölçebiliriz.
