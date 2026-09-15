@@ -602,7 +602,8 @@ public sealed partial class GmpWrapper : IGmpWrapper
             return new GmpTicket(total, paid, -1, 0, null, null,
                 TotalDiscountMinor: indirim, TotalTaxMinor: kdv,
                 PrinterLines: yaziciSatirlari, PrinterLineCount: t.totalNumberOfPrinterLines,
-                TransactionFlags: t.TransactionFlags);
+                TransactionFlags: t.TransactionFlags,
+                DeviceZNo: t.ZNo, DeviceFNo: t.FNo, DeviceEjNo: t.EJNo);
 
         var satirlar = new List<GmpPaymentLine>();
         int lastType = 0;
@@ -689,7 +690,8 @@ public sealed partial class GmpWrapper : IGmpWrapper
             PrinterLines: yaziciSatirlari, PrinterLineCount: t.totalNumberOfPrinterLines,
             // W104: HAM taşınır. Ödeme satırlarının aksine burada pencere/kırpma yok — cihazın
             // gönderdiği 32 bit olduğu gibi geçer; yorumu Core'da (`TicketFlags`).
-            TransactionFlags: t.TransactionFlags);
+            TransactionFlags: t.TransactionFlags,
+                DeviceZNo: t.ZNo, DeviceFNo: t.FNo, DeviceEjNo: t.EJNo);
     }
 
     private static bool Bos(string? s) => string.IsNullOrWhiteSpace(s);

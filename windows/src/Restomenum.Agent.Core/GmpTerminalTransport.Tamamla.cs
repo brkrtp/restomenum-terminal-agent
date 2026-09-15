@@ -108,16 +108,17 @@ public sealed partial class GmpTerminalTransport : IStuckTicketFinisher
         //
         // ⚠️ try/catch: `FP3_Echo` yanıtı JSON'dan çözülüyor; beklenmedik bir değer
         // ayrıştırıcıyı fırlatabilir ve tamamlanmış bir kurtarmayı patlatamaz.
-        uint? maliNo = null;
+        FiscalReceiptId? maliFis = null;
         try
         {
             if (_gmp.Echo(out var sayac).Ok && sayac.FisNo > 0)
             {
-                maliNo = sayac.FisNo - 1;                 // FisNo SONRAKİ numaradır
-                _snapshots?.SetFiscalReceiptNo(fisId, maliNo.Value);
+                // FisNo SONRAKİ numaradır; W151: üçlü birlikte (numara Z'de sıfırlanır).
+                maliFis = new FiscalReceiptId(sayac.FisNo - 1, sayac.ZNo, sayac.EkuNo);
+                _snapshots?.SetFiscalReceipt(fisId, maliFis);
                 _log("[bitir] mali fiş numarası", new
                 {
-                    fisNo = maliNo, okunanSonraki = sayac.FisNo, zNo = sayac.ZNo, fisId,
+                    fisNo = maliFis.ReceiptNo, okunanSonraki = sayac.FisNo, zNo = sayac.ZNo, ekuNo = sayac.EkuNo, fisId,
                 });
             }
             else
@@ -134,7 +135,7 @@ public sealed partial class GmpTerminalTransport : IStuckTicketFinisher
         }
 
         return new StuckTicketResult(true, false, false, s.Plan, s.Bayraklar,
-            s.BasarisizAdim, s.Kod, s.ToplamMinor, s.TahsilMinor, fisId, maliNo);
+            s.BasarisizAdim, s.Kod, s.ToplamMinor, s.TahsilMinor, fisId, maliFis);
     }
 
     /// <summary>

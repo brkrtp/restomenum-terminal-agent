@@ -32,8 +32,11 @@ public readonly record struct TicketPaymentRow(
     string PaymentId, long AmountMinor, int MethodType, int? BankBkmId);
 
 /// <summary>Kapanmış ama bildirimi henüz outbox'a devredilmemiş fiş.</summary>
+/// <param name="FiscalReceipt"><b>W151</b> — deftere yazılmış mali kimlik; üç sütun da doluysa
+/// dolu, biri bile boşsa <c>null</c> (yarım kimlik taşınmaz).</param>
 public readonly record struct ClosedTicketRow(
-    string TicketId, string TerminalId, string? SaleSessionId, long? TotalMinor, long? PaidMinor);
+    string TicketId, string TerminalId, string? SaleSessionId, long? TotalMinor, long? PaidMinor,
+    FiscalReceiptId? FiscalReceipt = null);
 
 /// <summary>
 /// <b>W105</b> — baskı zinciri yarıda kaldığı için ÜZERİNDE PARAYLA açık kalmış, tamamlanmayı
@@ -206,8 +209,8 @@ public interface ITicketSnapshotStore
     /// </summary>
     void UndeferPendingFinishes(long? now = null);
 
-    /// <inheritdoc cref="CommandStore.SetFiscalReceiptNo"/>
-    void SetFiscalReceiptNo(string ticketId, uint fiscalReceiptNo);
+    /// <inheritdoc cref="CommandStore.SetFiscalReceipt"/>
+    void SetFiscalReceipt(string ticketId, FiscalReceiptId fiscal);
 
     /// <summary>Kâğıt uyarısı açık mı? <c>null</c> = uyarı YOK.</summary>
     (long GorulmeMs, string? Adim)? ReadPaperWarning(string terminalId);
@@ -396,6 +399,14 @@ public readonly record struct GmpTicket(
     /// <see cref="PaymentsAreComplete"/> bu listenin fişin TAMAMI olup olmadığını söyler.
     /// </summary>
     IReadOnlyList<GmpPaymentLine>? Payments = null,
+
+    /// <summary>
+    /// <b>W151 — cihazın FİŞE yazdığı sayaçlar</b> (<c>ST_TICKET.ZNo/FNo/EJNo</c>), HAM.
+    /// <c>FP3_Echo</c>'dan türetilen kimlikten (<c>FisNo − 1</c>) BAĞIMSIZ ikinci kaynak; günlüğe
+    /// yan yana yazılır ki iki kaynak canlıda karşılaştırılsın. Karar bunlara bağlanmaz — açık
+    /// fişte ne taşıdıkları henüz ölçülmedi. <c>null</c> = okunmadı.
+    /// </summary>
+    uint? DeviceZNo = null, uint? DeviceFNo = null, uint? DeviceEjNo = null,
 
     /// <summary>
     /// <see cref="Payments"/> fişin TAMAMINI mı taşıyor (<c>numberOfPaymentsInThis ==

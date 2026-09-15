@@ -135,7 +135,13 @@ public static class TicketFinishParser
         if (not is not null) ek["reason"] = not;
         // W148: kurtarmanın kapattığı fişin mali numarası. Okunamadıysa alan HİÇ yazılmaz —
         // "yok" ile "0" ayrı şeyler ve 0 gerçek bir fiş numarası iddiası olurdu.
-        if (s.FiscalReceiptNo is uint fno) ek["fiscalReceiptNo"] = fno;
+        if (s.FiscalReceipt is { } mf)
+        {
+            // W151: üçü BİRLİKTE — numara tek başına Z sınırında çakışır.
+            ek["fiscalReceiptNo"] = mf.ReceiptNo;
+            ek["fiscalZNo"] = mf.ZNo;
+            ek["fiscalEkuNo"] = mf.EkuNo;
+        }
 
         // ⚠️ Fiş KAPANMADIYSA sonuç `Failure`: kasiyer "tamam" görüp masayı kapatmamalı.
         // Ama fiş zaten AÇIK DEĞİLSE bu bir başarısızlık DEĞİL — yapılacak iş yoktu.

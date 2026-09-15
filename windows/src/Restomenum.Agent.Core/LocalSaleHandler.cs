@@ -205,14 +205,17 @@ public sealed class LocalSaleHandler : IDeviceIdleGate
     /// diskteki eşlemeyle yapılır.
     /// </summary>
     private readonly IMappingRefresher? _mappingRefresher;
+    private readonly DeviceIdentityHolder? _kimlik;
 
     public LocalSaleHandler(
         IPaymentDetailClient amounts, AgentOrchestrator orch, CommandStore store,
         ILineDepartmentResolver departments, IPaymentMethodResolver paymentMethods,
         IResultNotifier notifier, Outbox outbox, ITerminalTransport transport,
         Func<DateTimeOffset>? now = null, Action<string, object?>? log = null,
-        IMappingRefresher? mappingRefresher = null, TimeSpan? satisKilitTavani = null)
+        IMappingRefresher? mappingRefresher = null, TimeSpan? satisKilitTavani = null,
+        DeviceIdentityHolder? kimlik = null)
     {
+        _kimlik = kimlik;
         _satisKilitTavani = satisKilitTavani ?? SatisKilitTavaniVarsayilan;
         _mappingRefresher = mappingRefresher;
         _transport = transport;
@@ -914,7 +917,8 @@ public sealed class LocalSaleHandler : IDeviceIdleGate
         var govde = SaleToPoiResponseBuilder.BuildTicketClosed(
             terminalId: req.PoiId, ticketId: fisId, saleSessionId: req.SaleSessionId,
             payments: sonuc.ClosedTicketPayments ?? Array.Empty<TicketPaymentRow>(),
-            totalMinor: sonuc.DeviceTicketTotalMinor, paidMinor: sonuc.DevicePaidMinor);
+            totalMinor: sonuc.DeviceTicketTotalMinor, paidMinor: sonuc.DevicePaidMinor,
+            fiscal: sonuc.FiscalReceipt, deviceSerial: CihazSerisi());
 
         var eid = fisId + ":ticket-closed";
         _outbox.Enqueue(eid, req.PaymentId, OutboxKinds.TicketClosed, govde, "",
@@ -928,7 +932,8 @@ public sealed class LocalSaleHandler : IDeviceIdleGate
             cihazTahsil = sonuc.DevicePaidMinor, cihazToplam = sonuc.DeviceTicketTotalMinor,
             // W144: bu satışın aldığı MALİ FİŞ NUMARASI. "(okunamadı)" ile "0" ayrı şeyler —
             // biri ölçülemedi demek, öteki gerçek bir numara iddiası olurdu.
-            maliFisNo = sonuc.FiscalReceiptNo?.ToString() ?? "(okunamadı)",
+            maliFisNo = sonuc.FiscalReceipt?.ReceiptNo.ToString() ?? "(okunamadı)",
+            maliZNo = sonuc.FiscalReceipt?.ZNo.ToString() ?? "(okunamadı)",
         });
         try
         {
@@ -1316,6 +1321,14 @@ public sealed class LocalSaleHandler : IDeviceIdleGate
     /// kapanış anında okunmuş hâliyle kayıtta. Cihaza tekrar sorulmaz — fiş kapandı, orada
     /// sorulacak bir şey kalmadı.</para>
     /// </summary>
+    /// <summary>W151: eşleşmede okunan cihaz serisi; okunmadıysa <c>null</c> (alan yazılmaz).</summary>
+    private string? CihazSerisi()
+    {
+        var (bilgi, _) = _kimlik?.Oku() ?? (null, null);
+        var seri = bilgi?.Serial?.Trim();
+        return string.IsNullOrEmpty(seri) ? null : seri;
+    }
+
     private void KayipKapanislariTopla()
     {
         // W76: YALNIZ eski kapanışlar. Normal akışta kapanış ile bildirimin outbox'a yazılması
@@ -1330,7 +1343,8 @@ public sealed class LocalSaleHandler : IDeviceIdleGate
                 var govde = SaleToPoiResponseBuilder.BuildTicketClosed(
                     terminalId: k.TerminalId, ticketId: k.TicketId, saleSessionId: k.SaleSessionId,
                     payments: _store.ReadTicketPayments(k.TicketId),
-                    totalMinor: k.TotalMinor, paidMinor: k.PaidMinor);
+                    totalMinor: k.TotalMinor, paidMinor: k.PaidMinor,
+                    fiscal: k.FiscalReceipt, deviceSerial: CihazSerisi());
                 // paymentId burada YOK (kapanış bir denemeye ait değil) ve replay türe göre
                 // yönleniyor, paymentId'ye bakmıyor.
                 _outbox.Enqueue(k.TicketId + ":ticket-closed", "", OutboxKinds.TicketClosed, govde, "");

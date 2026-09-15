@@ -1,4 +1,4 @@
-using System.Text.Json;
+﻿using System.Text.Json;
 using Restomenum.Agent.Core;
 using Xunit;
 
@@ -169,11 +169,14 @@ public class TicketFinishZarfTests : IDisposable
         // itirazda aranacak fişler tam olarak KURTARILANLAR — arıza yaşamış, yarım kalmış,
         // sonradan kapatılmış olanlar. Onların numarası hiçbir yerde yoktu.
         var (h, tasima) = Kur();
-        tasima.Sonuc = tasima.Sonuc with { FiscalReceiptNo = 7 };
+        tasima.Sonuc = tasima.Sonuc with { FiscalReceipt = new FiscalReceiptId(7, 93, 1) };
 
         var ek = Oku(await h.HandleTicketFinishAsync(Istek())).GetProperty("Restomenum");
 
         Assert.Equal(7, ek.GetProperty("fiscalReceiptNo").GetInt32());
+        // W151: numara tek başına kimlik değil — Z ve EKÜ de gider, üçü birlikte.
+        Assert.Equal(93, ek.GetProperty("fiscalZNo").GetInt32());
+        Assert.Equal(1, ek.GetProperty("fiscalEkuNo").GetInt32());
     }
 
     [Fact]
@@ -182,11 +185,13 @@ public class TicketFinishZarfTests : IDisposable
         // ← ÇİVİ: "yok" ile "0" ayrı şeyler. Sıfır yazmak, var olmayan bir fişe işaret eden
         // gerçek bir numara iddiası olurdu; alanın YOKLUĞU "ölçülemedi" demektir.
         var (h, tasima) = Kur();
-        tasima.Sonuc = tasima.Sonuc with { FiscalReceiptNo = null };
+        tasima.Sonuc = tasima.Sonuc with { FiscalReceipt = null };
 
         var ek = Oku(await h.HandleTicketFinishAsync(Istek())).GetProperty("Restomenum");
 
         Assert.False(ek.TryGetProperty("fiscalReceiptNo", out _));
+        Assert.False(ek.TryGetProperty("fiscalZNo", out _));
+        Assert.False(ek.TryGetProperty("fiscalEkuNo", out _));
     }
 
     [Fact]

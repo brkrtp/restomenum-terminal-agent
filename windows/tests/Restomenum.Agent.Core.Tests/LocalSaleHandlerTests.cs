@@ -116,7 +116,8 @@ public class LocalSaleHandlerTests : IDisposable
 
     private (LocalSaleHandler, SimulatorTransport, FakeNotifier) Kur(
         PaymentDetailResult amounts, int? dept = 3, TransportResult? terminal = null, int? rate = null,
-        int? paymentType = GmpPaymentTypes.Card, IMappingRefresher? refresher = null)
+        int? paymentType = GmpPaymentTypes.Card, IMappingRefresher? refresher = null,
+        DeviceIdentityHolder? kimlik = null)
     {
         var sim = new SimulatorTransport();
         if (terminal is not null) sim.Expect(terminal);
@@ -128,7 +129,7 @@ public class LocalSaleHandlerTests : IDisposable
             notifier, _outbox, sim,
             now: () => DateTimeOffset.FromUnixTimeMilliseconds(_saatMs),
             log: (m, o) => _loglar.Add((m, o)),
-            mappingRefresher: refresher);
+            mappingRefresher: refresher, kimlik: kimlik);
         return (h, sim, notifier);
     }
 
@@ -920,6 +921,83 @@ public class LocalSaleHandlerTests : IDisposable
         Assert.Equal("term-01", JsonDocument.Parse(govde).RootElement
             .GetProperty("SaleToPOIResponse").GetProperty("MessageHeader")
             .GetProperty("POIID").GetString());
+    }
+
+    // ── W151: MALİ KİMLİK PLATFORMA GİDER (fiş no + Z no + EKÜ no + cihaz serisi) ──────
+
+    private static DeviceIdentityHolder Kimlik(string seri)
+    {
+        var k = new DeviceIdentityHolder();
+        k.Kaydet(new GmpDeviceInfo("INGENICO       ", "IDE281          ", seri, "20010100"), null);
+        return k;
+    }
+
+    [Fact]
+    public async Task Fis_kapanis_bildirimi_MALI_KIMLIGI_ve_CIHAZ_SERISINI_tasir()
+    {
+        // ← ÇİVİ: fiş numarası her Z raporunda sıfırlanır (ölçüldü 2026-09-15); tek başına
+        // kimlik DEĞİL. Platformun tekilleştirme anahtarı (seri, EKÜ, Z, fiş) dörtlüsü — dördü
+        // de gitmeli. Seri eşleşmede okunan HAM değerden kırpılarak gider.
+        var (h, _, notifier) = Kur(new PaymentDetailResult.Ok(Detail()),
+            terminal: new TransportResult(TransportOutcome.Approved, ApprovedAmountMinor: 990,
+                TicketState: "CLOSED", TicketId: "tkt_abc",
+                ClosedTicketPayments: new[] { new TicketPaymentRow("pay-1", 990, GmpPaymentTypes.Cash, null) },
+                DevicePaidMinor: 990, DeviceTicketTotalMinor: 990,
+                FiscalReceipt: new FiscalReceiptId(ReceiptNo: 5, ZNo: 93, EkuNo: 1)),
+            kimlik: Kimlik("2B25035325 "));
+
+        await h.HandleAsync(Req());
+
+        var ek = JsonDocument.Parse(Assert.Single(notifier.TicketClosedBodies)).RootElement
+            .GetProperty("SaleToPOIResponse").GetProperty("Restomenum");
+        Assert.Equal(5, ek.GetProperty("fiscalReceiptNo").GetInt32());
+        Assert.Equal(93, ek.GetProperty("fiscalZNo").GetInt32());
+        Assert.Equal(1, ek.GetProperty("fiscalEkuNo").GetInt32());
+        Assert.Equal("2B25035325", ek.GetProperty("deviceSerial").GetString());
+    }
+
+    [Fact]
+    public async Task Mali_kimlik_okunamadiysa_alanlar_HIC_yazilmaz_ama_bildirim_GIDER()
+    {
+        // ← ÇİVİ: "yok" ile "0" ayrı beyanlar. Sıfır yazmak var olmayan bir fişe işaret ederdi;
+        // kimlik yokken bildirim yine gider — para alınmış, tahsilat deftere yazılmalı.
+        var (h, _, notifier) = Kur(new PaymentDetailResult.Ok(Detail()),
+            terminal: new TransportResult(TransportOutcome.Approved, ApprovedAmountMinor: 990,
+                TicketState: "CLOSED", TicketId: "tkt_abc",
+                ClosedTicketPayments: new[] { new TicketPaymentRow("pay-1", 990, GmpPaymentTypes.Cash, null) },
+                DevicePaidMinor: 990, DeviceTicketTotalMinor: 990,
+                FiscalReceipt: null));                       // kimlik yok, seri de yok
+
+        await h.HandleAsync(Req());
+
+        var ek = JsonDocument.Parse(Assert.Single(notifier.TicketClosedBodies)).RootElement
+            .GetProperty("SaleToPOIResponse").GetProperty("Restomenum");
+        Assert.Equal("tkt_abc", ek.GetProperty("ticketId").GetString());
+        Assert.False(ek.TryGetProperty("fiscalReceiptNo", out _));
+        Assert.False(ek.TryGetProperty("fiscalZNo", out _));
+        Assert.False(ek.TryGetProperty("fiscalEkuNo", out _));
+        Assert.False(ek.TryGetProperty("deviceSerial", out _));
+    }
+
+    [Fact]
+    public async Task Kurtarilan_kapanis_bildirimi_kimligi_DEFTERDEN_tasir()
+    {
+        // ← ÇİVİ: kurtarma yolu (süpürme / elle TicketFinish) gövdeyi DEFTERDEN kurar; kimlik
+        // yalnız taşıma sonucunda kalsaydı kurtarılan fişler — denetimde en çok aranacak olanlar —
+        // kimliksiz giderdi. Kalıcı üç sütun bu yüzden var.
+        var (h, _, notifier) = Kur(new PaymentDetailResult.Ok(Detail()), kimlik: Kimlik("2B25035325"));
+        _store.MarkTicketClosed("tkt_kayip", "term-01", "oturum-A", 990, 990, now: _saatMs - 31_000);
+        _store.RecordTicketPayment("tkt_kayip", "pay-1", 990, GmpPaymentTypes.Cash, null);
+        _store.SetFiscalReceipt("tkt_kayip", new FiscalReceiptId(6, 93, 1));
+
+        await h.DrainOutboxAsync();
+
+        var ek = JsonDocument.Parse(Assert.Single(notifier.TicketClosedBodies)).RootElement
+            .GetProperty("SaleToPOIResponse").GetProperty("Restomenum");
+        Assert.Equal(6, ek.GetProperty("fiscalReceiptNo").GetInt32());
+        Assert.Equal(93, ek.GetProperty("fiscalZNo").GetInt32());
+        Assert.Equal(1, ek.GetProperty("fiscalEkuNo").GetInt32());
+        Assert.Equal("2B25035325", ek.GetProperty("deviceSerial").GetString());
     }
 
     [Fact]

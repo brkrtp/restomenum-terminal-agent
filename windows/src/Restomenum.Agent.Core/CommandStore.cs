@@ -166,19 +166,22 @@ public sealed class CommandStore : ITicketSnapshotStore, IDisposable
                     paid_minor      INTEGER,
                     closed_at       INTEGER NOT NULL,
                     notified_at     INTEGER,
-                    fiscal_receipt_no INTEGER
+                    fiscal_receipt_no INTEGER,
+                    fiscal_z_no     INTEGER,
+                    fiscal_eku_no   INTEGER
                 )
                 """;
             cmd.ExecuteNonQuery();
 
-            // ── ŞEMA GEÇİŞİ: `fiscal_receipt_no` (W145) ───────────────────────────────
-            // Sahadaki veritabanı bu sütundan ÖNCE oluştu; üretimde koşan yol bu geçiş.
+            // ── ŞEMA GEÇİŞİ: `fiscal_receipt_no` (W145), `fiscal_z_no`/`fiscal_eku_no` (W151) ──
+            // Sahadaki veritabanı bu sütunlardan ÖNCE oluştu; üretimde koşan yol bu geçiş.
             cmd.CommandText = "PRAGMA table_info(closed_tickets)";
             var ctKolon = new HashSet<string>(StringComparer.OrdinalIgnoreCase);
             using (var r = cmd.ExecuteReader()) while (r.Read()) ctKolon.Add(r.GetString(1));
-            if (!ctKolon.Contains("fiscal_receipt_no"))
+            foreach (var sutun in new[] { "fiscal_receipt_no", "fiscal_z_no", "fiscal_eku_no" })
             {
-                cmd.CommandText = "ALTER TABLE closed_tickets ADD COLUMN fiscal_receipt_no INTEGER";
+                if (ctKolon.Contains(sutun)) continue;
+                cmd.CommandText = $"ALTER TABLE closed_tickets ADD COLUMN {sutun} INTEGER";
                 cmd.ExecuteNonQuery();
             }
 
@@ -870,17 +873,27 @@ public sealed class CommandStore : ITicketSnapshotStore, IDisposable
     ///
     /// <para>Kayıt yoksa hiçbir şey yapmaz: numara sahipsiz bir satır yaratmaz.</para>
     /// </summary>
-    public void SetFiscalReceiptNo(string ticketId, uint fiscalReceiptNo)
+    public void SetFiscalReceipt(string ticketId, FiscalReceiptId fiscal)
     {
         lock (_gate)
         {
             using var cmd = _conn.CreateCommand();
+            // W151: üçü BİRLİKTE yazılır — yarım kimlik (numara var, Z yok) Z sınırında çakışır.
             cmd.CommandText =
-                "UPDATE closed_tickets SET fiscal_receipt_no = $n WHERE ticket_id = $f";
+                "UPDATE closed_tickets SET fiscal_receipt_no = $n, fiscal_z_no = $z, fiscal_eku_no = $e WHERE ticket_id = $f";
             cmd.Parameters.AddWithValue("$f", ticketId);
-            cmd.Parameters.AddWithValue("$n", fiscalReceiptNo);
+            cmd.Parameters.AddWithValue("$n", fiscal.ReceiptNo);
+            cmd.Parameters.AddWithValue("$z", fiscal.ZNo);
+            cmd.Parameters.AddWithValue("$e", fiscal.EkuNo);
             cmd.ExecuteNonQuery();
         }
+    }
+
+    /// <summary>W151: üç sütun da doluysa kimlik, biri bile boşsa <c>null</c>.</summary>
+    private static FiscalReceiptId? MaliKimlik(Microsoft.Data.Sqlite.SqliteDataReader r, int ilkSutun)
+    {
+        if (r.IsDBNull(ilkSutun) || r.IsDBNull(ilkSutun + 1) || r.IsDBNull(ilkSutun + 2)) return null;
+        return new FiscalReceiptId((uint)r.GetInt64(ilkSutun), (uint)r.GetInt64(ilkSutun + 1), (uint)r.GetInt64(ilkSutun + 2));
     }
 
     public void MarkTicketClosed(string ticketId, string terminalId, string? saleSessionId,
@@ -925,7 +938,8 @@ public sealed class CommandStore : ITicketSnapshotStore, IDisposable
         {
             using var cmd = _conn.CreateCommand();
             cmd.CommandText = """
-                SELECT ticket_id, terminal_id, sale_session_id, total_minor, paid_minor
+                SELECT ticket_id, terminal_id, sale_session_id, total_minor, paid_minor,
+                       fiscal_receipt_no, fiscal_z_no, fiscal_eku_no
                 FROM closed_tickets WHERE notified_at IS NULL AND closed_at <= $esik ORDER BY closed_at
                 """;
             cmd.Parameters.AddWithValue("$esik", enGecKapanis ?? long.MaxValue);
@@ -935,7 +949,8 @@ public sealed class CommandStore : ITicketSnapshotStore, IDisposable
                 liste.Add(new ClosedTicketRow(r.GetString(0), r.GetString(1),
                     r.IsDBNull(2) ? null : r.GetString(2),
                     r.IsDBNull(3) ? null : r.GetInt64(3),
-                    r.IsDBNull(4) ? null : r.GetInt64(4)));
+                    r.IsDBNull(4) ? null : r.GetInt64(4),
+                    MaliKimlik(r, 5)));
             return liste;
         }
     }
@@ -958,7 +973,8 @@ public sealed class CommandStore : ITicketSnapshotStore, IDisposable
         {
             using var cmd = _conn.CreateCommand();
             cmd.CommandText = """
-                SELECT ticket_id, terminal_id, sale_session_id, total_minor, paid_minor, notified_at
+                SELECT ticket_id, terminal_id, sale_session_id, total_minor, paid_minor, notified_at,
+                       fiscal_receipt_no, fiscal_z_no, fiscal_eku_no
                 FROM closed_tickets WHERE ticket_id = $f
                 """;
             cmd.Parameters.AddWithValue("$f", ticketId);
@@ -967,7 +983,8 @@ public sealed class CommandStore : ITicketSnapshotStore, IDisposable
             return (new ClosedTicketRow(r.GetString(0), r.GetString(1),
                 r.IsDBNull(2) ? null : r.GetString(2),
                 r.IsDBNull(3) ? null : r.GetInt64(3),
-                r.IsDBNull(4) ? null : r.GetInt64(4)), !r.IsDBNull(5));
+                r.IsDBNull(4) ? null : r.GetInt64(4),
+                MaliKimlik(r, 6)), !r.IsDBNull(5));
         }
     }
 

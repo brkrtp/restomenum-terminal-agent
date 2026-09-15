@@ -191,7 +191,10 @@ public static class HostComposition
                 mappingRefresher: new HttpMappingRefresher(
                     sp.GetRequiredService<DeviceConfigClient>(),
                     sp.GetRequiredService<IDeviceMappingStore>(),
-                    sp.GetRequiredService<ILoggerFactory>().CreateLogger("MappingFresh")));
+                    sp.GetRequiredService<ILoggerFactory>().CreateLogger("MappingFresh")),
+                // W151: fiş kapanış bildirimine cihaz serisi (kimliğin dördüncü ayağı). Yalnız
+                // GMP'li kurulumda kayıtlı; yoksa null ve alan yazılmaz.
+                kimlik: sp.GetService<DeviceIdentityHolder>());
         });
 
         builder.Services.AddSingleton<IDeviceKey>(sp =>

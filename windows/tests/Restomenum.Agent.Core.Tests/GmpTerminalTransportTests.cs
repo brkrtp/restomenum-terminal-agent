@@ -1135,9 +1135,9 @@ public class GmpTerminalTransportTests
         public int ParkBosaltildi;
         public void UndeferPendingFinishes(long? now = null) => ParkBosaltildi++;
 
-        /// <summary>W145: fişe yazılan mali fiş numarası.</summary>
-        public readonly Dictionary<string, uint> MaliNumaralar = new();
-        public void SetFiscalReceiptNo(string ticketId, uint no) => MaliNumaralar[ticketId] = no;
+        /// <summary>W145/W151: fişe yazılan mali kimlik (numara, Z, EKÜ — birlikte).</summary>
+        public readonly Dictionary<string, FiscalReceiptId> MaliNumaralar = new();
+        public void SetFiscalReceipt(string ticketId, FiscalReceiptId f) => MaliNumaralar[ticketId] = f;
 
         public IReadOnlyList<PendingFinishRow> PendingFinishes(long? now = null)
             => Bekleyen.Select(x => new PendingFinishRow(x.Key,
@@ -1248,7 +1248,7 @@ public class GmpTerminalTransportTests
 
         Assert.Equal(TransportOutcome.Approved, r.Outcome);   // satış BOZULMADI
         Assert.Equal("CLOSED", r.TicketState);
-        Assert.Null(r.FiscalReceiptNo);                       // numara yok, uydurulmadı
+        Assert.Null(r.FiscalReceipt);                       // numara yok, uydurulmadı
         // ⚠️ ASIL ÇİVİ: kapanış DEFTERE YAZILDI ve bağ SİLİNDİ.
         Assert.Single(snap.Kapananlar);
         Assert.Null(snap.ReadOpenTicketBinding("t1"));
@@ -1268,7 +1268,7 @@ public class GmpTerminalTransportTests
             oturum: "oturum-A", satisToplam: 990));
 
         var fisId = r.TicketId!;
-        Assert.Equal(3u, snap.MaliNumaralar[fisId]);   // okunan 4 → kesilen 3, KALICI
+        Assert.Equal(new FiscalReceiptId(3, 92, 1), snap.MaliNumaralar[fisId]);   // okunan 4 → kesilen 3, KALICI, ÜÇLÜ
     }
 
     [Fact]
@@ -1288,7 +1288,8 @@ public class GmpTerminalTransportTests
             oturum: "oturum-A", satisToplam: 990));
 
         Assert.Equal("CLOSED", r.TicketState);
-        Assert.Equal(3u, r.FiscalReceiptNo);      // okunan 4 → kesilen fiş 3
+        // W151: kimlik ÜÇLÜ — numara tek başına Z sınırında çakışır. Z ve EKÜ Echo'dan aynen.
+        Assert.Equal(new FiscalReceiptId(3, 92, 1), r.FiscalReceipt);   // okunan 4 → kesilen fiş 3
     }
 
     [Fact]
@@ -1303,7 +1304,7 @@ public class GmpTerminalTransportTests
             oturum: "oturum-A", satisToplam: 2380));
 
         Assert.Equal("OPEN", r.TicketState);
-        Assert.Null(r.FiscalReceiptNo);
+        Assert.Null(r.FiscalReceipt);
     }
 
     [Fact]
@@ -1319,7 +1320,7 @@ public class GmpTerminalTransportTests
             oturum: "oturum-A", satisToplam: 990));
 
         Assert.Equal("CLOSED", r.TicketState);    // satış BOZULMAZ
-        Assert.Null(r.FiscalReceiptNo);           // ama numara UYDURULMAZ
+        Assert.Null(r.FiscalReceipt);           // ama numara UYDURULMAZ
     }
 
     [Fact]
@@ -1334,7 +1335,7 @@ public class GmpTerminalTransportTests
         var r = await t.SaleAsync(Req(amount: 990, paymentType: GmpPaymentTypes.Cash,
             oturum: "oturum-A", satisToplam: 990));
 
-        Assert.Null(r.FiscalReceiptNo);
+        Assert.Null(r.FiscalReceipt);
     }
 
     [Fact]
@@ -2745,8 +2746,8 @@ public class GmpTerminalTransportTests
         var s = ((IStuckTicketFinisher)t).FinishStuckTicket(uygula: true);
 
         Assert.True(s.Kapandi);
-        Assert.Equal(3u, s.FiscalReceiptNo);                       // okunan 4 → kesilen 3
-        Assert.Equal(3u, snap.MaliNumaralar[s.TicketId!]);         // ve KALICI kayda yazıldı
+        Assert.Equal(new FiscalReceiptId(3, 92, 1), s.FiscalReceipt);            // okunan 4 → kesilen 3
+        Assert.Equal(new FiscalReceiptId(3, 92, 1), snap.MaliNumaralar[s.TicketId!]);   // ve KALICI kayda ÜÇLÜ yazıldı
     }
 
     [Fact]
@@ -2768,7 +2769,7 @@ public class GmpTerminalTransportTests
         var s = ((IStuckTicketFinisher)t).FinishStuckTicket(uygula: true);
 
         Assert.True(s.Kapandi);              // kurtarma BAŞARILI
-        Assert.Null(s.FiscalReceiptNo);      // numara yok, uydurulmadı
+        Assert.Null(s.FiscalReceipt);      // numara yok, uydurulmadı
         Assert.Single(snap.Kapananlar);      // defter işi YAPILDI
     }
 

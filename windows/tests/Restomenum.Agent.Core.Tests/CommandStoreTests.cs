@@ -1,4 +1,4 @@
-using Restomenum.Agent.Core;
+﻿using Restomenum.Agent.Core;
 using Xunit;
 
 namespace Restomenum.Agent.Core.Tests;
@@ -200,7 +200,41 @@ public class CommandStoreTests
         Assert.Equal(1_000 + 1_800_000, store.PendingFinishes(long.MaxValue).Single().ParkedUntil);
 
         store.MarkTicketClosed("tkt_kapali", "t1", "o", 990, 990);
-        store.SetFiscalReceiptNo("tkt_kapali", 7);   // fırlatmamalı
+        store.SetFiscalReceipt("tkt_kapali", new FiscalReceiptId(7, 93, 1));   // fırlatmamalı (W151: üç sütun)
+        Assert.Equal(new FiscalReceiptId(7, 93, 1), store.ReadClosedTicket("tkt_kapali")!.Value.Row.FiscalReceipt);
+    }
+
+    [Fact]
+    public void W145_SONRASI_ama_W151_ONCESI_veritabaninda_Z_ve_EKU_sutunlari_EKLENIR()
+    {
+        // ← ÇİVİ: sahadaki veritabanı 09-12'de fiscal_receipt_no'yu aldı ama Z/EKÜ'yü almadı.
+        // Geçiş sütun sütun bakmalı; "fiscal_receipt_no var → geçiş bitti" sanmak, yeni SELECT'i
+        // "no such column" ile düşürür ve yarım kalmış kapanışların kurtarılması ölürdü.
+        var yol = TempDb();
+        using (var eski = new Microsoft.Data.Sqlite.SqliteConnection($"Data Source={yol}"))
+        {
+            eski.Open();
+            using var c = eski.CreateCommand();
+            c.CommandText = """
+                CREATE TABLE closed_tickets (
+                    ticket_id TEXT PRIMARY KEY, terminal_id TEXT NOT NULL, sale_session_id TEXT,
+                    total_minor INTEGER, paid_minor INTEGER, closed_at INTEGER NOT NULL,
+                    notified_at INTEGER, fiscal_receipt_no INTEGER);
+                INSERT INTO closed_tickets VALUES ('tkt_yarim','t1','o',990,990,1,NULL,5);
+                """;
+            c.ExecuteNonQuery();
+        }
+
+        using var store = CommandStore.Open(yol);
+
+        // Eski kayıt duruyor; numarası var ama Z/EKÜ yok → kimlik YARIM → null (yarım kimlik taşınmaz).
+        var satir = Assert.Single(store.PendingClosedTickets(long.MaxValue));
+        Assert.Equal("tkt_yarim", satir.TicketId);
+        Assert.Null(satir.FiscalReceipt);
+
+        // Yeni sütunlar yazılıp okunabiliyor.
+        store.SetFiscalReceipt("tkt_yarim", new FiscalReceiptId(5, 93, 1));
+        Assert.Equal(new FiscalReceiptId(5, 93, 1), store.PendingClosedTickets(long.MaxValue).Single().FiscalReceipt);
     }
 
     // ── W11: KURTARMA YAŞ SINIRI ────────────────────────────────────────────────

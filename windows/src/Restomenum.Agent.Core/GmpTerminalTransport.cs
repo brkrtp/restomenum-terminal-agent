@@ -254,7 +254,8 @@ public sealed partial class GmpTerminalTransport : ITerminalTransport
         // kasiyer kalanı ekleyecek. Fişi burada kapatmak, yarım ödenmiş fiş üretmek olurdu.
         // Fiş durumu ödemeden SONRA belirlenir; `CLOSED` yalnız `Close` gerçekten başarılıysa.
         var fisDurumu = "OPEN";
-        uint? mailFisNo = null;   // W144: bu satışın aldığı mali fiş numarası
+        FiscalReceiptId? maliFis = null;
+        GmpTicket? kapanisSayaclari = null;   // W151: cihazın fişe yazdığı Z/F/EJ (kapanış öncesi okuma)   // W144: bu satışın aldığı mali fiş numarası
         // W104: baskı/kapatma zinciri yarıda kalırsa NEREDE kaldığı kasaya taşınır. `null` = sorun yok.
         string? baskiSebebi = null, baskiAdimi = null, baskiKodu = null;
         IReadOnlyList<TicketPaymentRow>? kapanisOdemeleri = null;
@@ -332,6 +333,7 @@ public sealed partial class GmpTerminalTransport : ITerminalTransport
             {
                 cihazTahsil = kapanisFisi.PaidAmountMinor;
                 cihazToplam = kapanisFisi.TotalAmountMinor;
+                kapanisSayaclari = kapanisFisi;
 
                 // ── W73: CİHAZIN FİŞE BASTIĞI SATIRLAR GÜNLÜĞE ───────────────────────
                 // 2026-09-09: "indirim fişte çıktı mı" sorusunu saatlerce cevaplayamadık; elimizde
@@ -495,11 +497,15 @@ public sealed partial class GmpTerminalTransport : ITerminalTransport
                 {
                     if (_gmp.Echo(out var sayac).Ok && sayac.FisNo > 0)
                     {
-                        mailFisNo = sayac.FisNo - 1;
-                        if (fisId is not null) _snapshots?.SetFiscalReceiptNo(fisId, mailFisNo.Value);
+                        // W151: üçlü BİRLİKTE — numara Z'de sıfırlanır, tek başına kimlik değil.
+                        maliFis = new FiscalReceiptId(sayac.FisNo - 1, sayac.ZNo, sayac.EkuNo);
+                        if (fisId is not null) _snapshots?.SetFiscalReceipt(fisId, maliFis);
                         _log("[gmp] mali fiş numarası", new
                         {
-                            fisNo = mailFisNo, okunanSonraki = sayac.FisNo, zNo = sayac.ZNo, fisId,
+                            fisNo = maliFis.ReceiptNo, okunanSonraki = sayac.FisNo, zNo = sayac.ZNo, ekuNo = sayac.EkuNo, fisId,
+                            // W151: cihazın FİŞE yazdığı sayaçlar (ST_TICKET) — Echo türetimiyle
+                            // yan yana; iki kaynak canlıda karşılaştırılsın diye. Karar bağlanmaz.
+                            cihazFisZ = kapanisSayaclari?.DeviceZNo, cihazFisF = kapanisSayaclari?.DeviceFNo, cihazFisEj = kapanisSayaclari?.DeviceEjNo,
                         });
                     }
                     else
@@ -570,6 +576,6 @@ public sealed partial class GmpTerminalTransport : ITerminalTransport
             DevicePaidMinor: cihazTahsil,
             DeviceTicketTotalMinor: cihazToplam,
             DeviceRemainingMinor: cihazKalan,
-            FiscalReceiptNo: mailFisNo);
+            FiscalReceipt: maliFis);
     }
 }

@@ -430,9 +430,16 @@ public static class SaleToPoiResponseBuilder
     /// <c>"Event"</c>. nexo'nun <c>EventNotification</c> şemasına uyduğu İDDİA EDİLMİYOR — tüm
     /// alanlar <c>Restomenum</c> bloğunda.</para>
     /// </summary>
+    /// <param name="fiscal">
+    /// <b>W151</b> — fişin mali kimliği (fiş no, Z no, EKÜ no). Platform sözleşmesine EKLEMELİ ve
+    /// isteğe bağlı: bilinmiyorsa alanlar HİÇ yazılmaz ("yok" ile "0" ayrı beyanlar). Üçü ya
+    /// birlikte gider ya hiç — yarım kimlik Z sınırında çakışır.
+    /// </param>
+    /// <param name="deviceSerial">Cihaz serisi; kimliğin dördüncü ayağı. Bilinmiyorsa yazılmaz.</param>
     public static string BuildTicketClosed(
         string terminalId, string ticketId, string? saleSessionId,
-        IReadOnlyList<TicketPaymentRow> payments, long? totalMinor, long? paidMinor)
+        IReadOnlyList<TicketPaymentRow> payments, long? totalMinor, long? paidMinor,
+        FiscalReceiptId? fiscal = null, string? deviceSerial = null)
     {
         var satirlar = new JsonArray();
         foreach (var o in payments)
@@ -475,6 +482,13 @@ public static class SaleToPoiResponseBuilder
         if (saleSessionId is not null) ek["saleSessionId"] = saleSessionId;
         if (totalMinor is long t) ek["totalMinor"] = t;
         if (paidMinor is long pd) ek["paidMinor"] = pd;
+        if (fiscal is not null)
+        {
+            ek["fiscalReceiptNo"] = fiscal.ReceiptNo;
+            ek["fiscalZNo"] = fiscal.ZNo;
+            ek["fiscalEkuNo"] = fiscal.EkuNo;
+        }
+        if (!string.IsNullOrWhiteSpace(deviceSerial)) ek["deviceSerial"] = deviceSerial.Trim();
 
         return new JsonObject
         {

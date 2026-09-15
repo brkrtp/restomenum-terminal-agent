@@ -216,8 +216,13 @@ public sealed record TransportResult(
     ///
     /// <para>⚠️ Okuma başarısızsa alan <c>null</c> kalır. Tahmin edilmez: yanlış bir mali numara
     /// kaydetmek, hiç kaydetmemekten kötüdür.</para>
+    ///
+    /// <para><b>W151 — numara TEK BAŞINA kimlik değil.</b> Fiş numarası her Z raporunda
+    /// sıfırlanır (ölçüldü: Z=87'de 5'e ulaştı, Z=92'de 3 okundu, arada onlarca fiş kesildi).
+    /// Kimlik <see cref="FiscalReceiptId"/> üçlüsüdür; üçü aynı <c>FP3_Echo</c> yanıtından
+    /// gelir ve ya HEP BİRLİKTE vardır ya hiç yoktur.</para>
     /// </summary>
-    uint? FiscalReceiptNo = null,
+    FiscalReceiptId? FiscalReceipt = null,
 
     /// <summary>
     /// <b>W79 — kasanın İSTEDİĞİ tutar.</b> <see cref="ApprovedAmountMinor"/> ile aynı değerdir;
@@ -532,3 +537,14 @@ public interface ITerminalTransport
     /// </summary>
     Task<TicketVoidResult> VoidTicketAsync(string terminalId, CancellationToken ct = default);
 }
+
+/// <summary>
+/// <b>W151 — mali fişin KİMLİĞİ.</b> Türk ÖKC'de bir fiş <c>(EKÜ No, Z No, Fiş No)</c> üçlüsüyle
+/// tekildir; fiş numarası her Z raporunda 1'den başlar (ölçüldü 2026-09-15). Üçü aynı
+/// <c>FP3_Echo</c> yanıtından okunur: <c>FisNo − 1</c> (alan SONRAKİ numaradır), <c>ZNo</c>,
+/// <c>EkuNo</c>. Cihaz serisiyle birlikte platformun tekilleştirme anahtarıdır.
+/// </summary>
+/// <param name="ReceiptNo">Kesilen fişin numarası (Z içinde).</param>
+/// <param name="ZNo">Fişin ait olduğu Z dönemi.</param>
+/// <param name="EkuNo">Elektronik kayıt ünitesi numarası.</param>
+public sealed record FiscalReceiptId(uint ReceiptNo, uint ZNo, uint EkuNo);
