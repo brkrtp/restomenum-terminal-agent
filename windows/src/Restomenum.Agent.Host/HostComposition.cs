@@ -1,4 +1,4 @@
-using Microsoft.Extensions.DependencyInjection;
+﻿using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -109,9 +109,27 @@ public static class HostComposition
         // Eşleme kaynağı: config kanalı (Agent:DeviceConfigSetup) verilmişse CANLI depo (eklentiden pull);
         // yoksa YEREL DOSYA (bugünkü davranış — departments.json/payment-methods.json). §20.2: kaynak
         // değişebilir, arayüz (ILineDepartmentResolver/IPaymentMethodResolver) sabit.
-        var deviceConfig = DeviceConfigSetupParser.TryParse(builder.Configuration["Agent:DeviceConfigSetup"]);
+        // W150: kurulum sayfası dizeyi veri dizinine yazar (device-config.setup); DOSYA yapılandırmayı
+        // ezer. Dosya bozuksa yapılandırmaya DÜŞÜLMEZ — kanal kapalı kalır ve açılış logu söyler.
+        string? kurulumDosyasi = null;
+        {
+            var db = new AgentOptions().ResolveStorePath();
+            var yapilandirilmis = builder.Configuration.GetSection(AgentOptions.Section)["StorePath"];
+            if (!string.IsNullOrWhiteSpace(yapilandirilmis)) db = yapilandirilmis;
+            var dizin = Path.GetDirectoryName(db);
+            if (!string.IsNullOrWhiteSpace(dizin))
+            {
+                var yol = DeviceConfigSetupKaynagi.DosyaYolu(dizin);
+                try { if (File.Exists(yol)) kurulumDosyasi = File.ReadAllText(yol); }
+                catch (IOException) { kurulumDosyasi = ""; /* okunamadı = bozuk say; sessiz geri dönüş yok */ }
+                builder.Services.AddSingleton(new DeviceConfigSetupDosyasi(yol));
+            }
+        }
+        var deviceConfig = DeviceConfigSetupKaynagi.Coz(kurulumDosyasi, builder.Configuration["Agent:DeviceConfigSetup"], out var kurulumKaynagi);
+        builder.Services.AddSingleton(new DeviceConfigSetupKaynakBilgisi(kurulumKaynagi, deviceConfig?.BaseUri.Host));
         if (deviceConfig is not null)
         {
+            builder.Services.AddSingleton(deviceConfig);
             builder.Services.AddSingleton<DeviceMappingStore>(sp =>
             {
                 var o = sp.GetRequiredService<IOptions<AgentOptions>>().Value;
@@ -214,3 +232,10 @@ public static class HostComposition
         builder.Services.AddHostedService<AgentWorker>();
     }
 }
+
+/// <summary>W150: kurulum dizesinin yazılacağı dosya (veri dizini). Kurulum sayfası buraya yazar.</summary>
+public sealed record DeviceConfigSetupDosyasi(string Yol);
+
+/// <summary>W150: açılışta çözümlenen kaynak ("dosya" / "yapılandırma" / "yok" / "dosya BOZUK (…)") ve bağlı host.
+/// Sır TAŞIMAZ — kurulum sayfası ve açılış logu yalnız bunu görür.</summary>
+public sealed record DeviceConfigSetupKaynakBilgisi(string Kaynak, string? Host);

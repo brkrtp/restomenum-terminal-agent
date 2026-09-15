@@ -29,11 +29,14 @@ public sealed class AgentWorker : BackgroundService
     private readonly CommandStore _store;
 
     private readonly IKurulumIslemleri? _kurulum;
+    private readonly DeviceConfigSetupKaynakBilgisi? _eklentiKaynak;
 
     public AgentWorker(
         IOptions<AgentOptions> opt, ILogger<AgentWorker> log, IHostApplicationLifetime lifetime,
-        LocalSaleHandler handler, Outbox outbox, CommandStore store, IKurulumIslemleri? kurulum = null)
+        LocalSaleHandler handler, Outbox outbox, CommandStore store, IKurulumIslemleri? kurulum = null,
+        DeviceConfigSetupKaynakBilgisi? eklentiKaynak = null)
     {
+        _eklentiKaynak = eklentiKaynak;
         _opt = opt.Value;
         _log = log;
         _lifetime = lifetime;
@@ -91,6 +94,14 @@ public sealed class AgentWorker : BackgroundService
         }
 
         _log.LogInformation("yerel dinleyici ayakta: {Prefix} (yol {Path})", _opt.ListenPrefix, _opt.ListenPath);
+        // W150: kanalın kaynağı görünür olsun — "dosya BOZUK" sessizce eski adrese dönmek değil, uyarıdır.
+        if (_eklentiKaynak is not null)
+        {
+            if (_eklentiKaynak.Host is null && _eklentiKaynak.Kaynak != "yok")
+                _log.LogWarning("eklenti config kanalı KAPALI: {Kaynak}", _eklentiKaynak.Kaynak);
+            else
+                _log.LogInformation("eklenti config kanalı: {Kaynak} → {Host}", _eklentiKaynak.Kaynak, _eklentiKaynak.Host ?? "(yok)");
+        }
         KurulumSayfasiniGerekirseAc();
 
         // ── AÇILIŞ KURTARMASI DİNLEYİCİDEN SONRA, ARKA PLANDA ───────────────────────────
@@ -260,8 +271,9 @@ public sealed class AgentWorker : BackgroundService
 
     // ══ W149 — KURULUM SAYFASI ═══════════════════════════════════════════════════
     //
-    // ⚠️ /setup/enroll GÖVDESİ HİÇBİR YERE LOGLANMAZ — kayıt kodu 10 dakika boyunca cihaz
-    // bağlama yetkisi taşır. Bu yordamda gövde yalnız ayrıştırılır ve işleme geçer.
+    // ⚠️ /setup/enroll ve /setup/plugin GÖVDELERİ HİÇBİR YERE LOGLANMAZ — kayıt kodu 10 dakika
+    // boyunca cihaz bağlama yetkisi, kurulum dizesi ise eklenti sırrını taşır. Bu yordamda gövde
+    // yalnız ayrıştırılır ve işleme geçer; hata sebepleri de sırrı içermez (Core garantisi).
     private async Task KurulumAsync(HttpListenerContext ctx, string yol, CancellationToken ct)
     {
         if (_kurulum is null)
@@ -303,6 +315,15 @@ public sealed class AgentWorker : BackgroundService
                 sonuc = _kurulum.Esles();
                 _log.LogInformation("[kurulum] eşleştirme denemesi: {Sonuc}", sonuc.Basarili ? "başarılı" : "başarısız");
                 break;
+            case "plugin":
+            {
+                var ayar = KurulumIstek.Eklenti(govde, out var neden);
+                sonuc = ayar is null ? KurulumSonucu.Hata(neden ?? "kurulum dizesi okunamadı")
+                                     : await _kurulum.EklentiAyarlaAsync(ayar, ct);
+                _log.LogInformation("[kurulum] eklenti ayarı denemesi: {Sonuc} (host {Host})",
+                    sonuc.Basarili ? "başarılı" : "başarısız", ayar?.BaseUri.Host ?? "(çözülemedi)");
+                break;
+            }
             default:
                 Respond(ctx, 404, NOTFOUND);
                 return;
@@ -323,9 +344,10 @@ public sealed class AgentWorker : BackgroundService
         try
         {
             var d = _kurulum.Durum();
-            if (d.Kayitli && d.Esli) return;
+            if (d.Tamam) return;
             var url = _opt.ListenPrefix.TrimEnd('/') + KurulumIstek.Yol;
-            _log.LogWarning("kurulum eksik (kayıtlı={K}, eşli={E}) — sayfa açılıyor: {Url}", d.Kayitli, d.Esli, url);
+            _log.LogWarning("kurulum eksik (kayıtlı={K}, eşli={E}, eklenti={P}) — sayfa açılıyor: {Url}",
+                d.Kayitli, d.Esli, d.EklentiAdresi ?? "yok", url);
             System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(url) { UseShellExecute = true });
         }
         catch (Exception e)

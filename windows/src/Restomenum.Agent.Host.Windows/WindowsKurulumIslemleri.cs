@@ -1,4 +1,4 @@
-using System.Diagnostics;
+﻿using System.Diagnostics;
 using System.Text;
 using System.Text.RegularExpressions;
 using Microsoft.Extensions.DependencyInjection;
@@ -29,13 +29,17 @@ public sealed class WindowsKurulumIslemleri : IKurulumIslemleri
     private readonly DeviceIdentityHolder? _kimlik;
     private readonly IHostApplicationLifetime _lifetime;
     private readonly AgentOptions _opt;
+    private readonly DeviceConfigSetupKaynakBilgisi? _eklentiKaynak;
+    private readonly DeviceConfigSetupDosyasi? _eklentiDosya;
 
     public WindowsKurulumIslemleri(IServiceProvider services, ILoggerFactory logs, IGmpWrapper gmp,
         IDeviceKey key, IDeviceIdleGate kilit, IHostApplicationLifetime lifetime,
-        IOptions<AgentOptions> opt, DeviceIdentityHolder? kimlik = null)
+        IOptions<AgentOptions> opt, DeviceIdentityHolder? kimlik = null,
+        DeviceConfigSetupKaynakBilgisi? eklentiKaynak = null, DeviceConfigSetupDosyasi? eklentiDosya = null)
     {
         _services = services; _log = logs.CreateLogger("Kurulum"); _gmp = gmp; _key = key;
         _kilit = kilit; _kimlik = kimlik; _lifetime = lifetime; _opt = opt.Value;
+        _eklentiKaynak = eklentiKaynak; _eklentiDosya = eklentiDosya;
     }
 
     public KurulumDurumu Durum()
@@ -60,8 +64,57 @@ public sealed class WindowsKurulumIslemleri : IKurulumIslemleri
             }
         }
 
+        // Eklenti: bağlı host (sır değil). Dosya BOZUKSA kullanıcı bunu sayfada görmeli — sessiz
+        // "bağlantı yok" değil, "dosya bozuk, yeni dize yapıştırın".
+        if (_eklentiKaynak is { Host: null, Kaynak: var kaynak } && kaynak.StartsWith("dosya BOZUK", StringComparison.Ordinal))
+            not = (not is null ? "" : not + " ") + $"Eklenti kurulum dosyası bozuk ({kaynak}) — 4. adımdan yeni dize yapıştırın.";
+
         return new KurulumDurumu(kayitli, esli, ip, port, bilgi is null ? null : $"{bilgi.Brand.Trim()} {bilgi.Model.Trim()}",
-            bilgi?.Serial.Trim(), zNo, fisNo, KagitUyarisi: null, Not: not);
+            bilgi?.Serial.Trim(), zNo, fisNo, KagitUyarisi: null, Not: not, EklentiAdresi: _eklentiKaynak?.Host);
+    }
+
+    /// <summary>
+    /// W150: dizeyi ÖNCE eklentiyle canlı doğrular (oturum + eşleme çekimi — --config-smoke ile aynı
+    /// yol), SONRA veri dizinine atomik yazar. Doğrulanmamış sır diske girmez; giren sır loglanmaz.
+    /// Eski dosyanın yedeği ALINMAZ: eski sır zaten panelde geçersiz kılınmıştır, saklamak sızıntıdır.
+    /// </summary>
+    public async Task<KurulumSonucu> EklentiAyarlaAsync(DeviceConfigSetup ayar, CancellationToken ct)
+    {
+        if (_eklentiDosya is null)
+            return KurulumSonucu.Hata("Veri dizini bilinmiyor — eklenti ayarı kaydedilemez.");
+
+        var http = _services.GetRequiredService<HttpClient>();
+        var client = new DeviceConfigClient(http, ayar.BaseUri, ayar.Secret,
+            log: (m, d) => _log.LogInformation("[eklenti doğrulama] {Mesaj}", m));   // d sır taşımaz ama yine de basılmaz
+        MappingFetchResult sonuc;
+        try { sonuc = await client.FetchMappingAsync(currentVersion: null, ct); }
+        catch (Exception e) when (e is HttpRequestException or TaskCanceledException)
+        { return KurulumSonucu.Hata($"Eklentiye ulaşılamadı ({ayar.BaseUri.Host}): {e.GetType().Name}. Adres ve internet bağlantısını kontrol edin."); }
+
+        switch (sonuc)
+        {
+            case MappingFetchResult.AuthFailed:
+                return KurulumSonucu.Hata("Eklenti bu sırrı kabul etmedi (401). Panelden YENİ bir kurulum sırrı üretip o dizeyi yapıştırın.");
+            case MappingFetchResult.Failed f:
+                return KurulumSonucu.Hata($"Eklenti doğrulaması başarısız ({ayar.BaseUri.Host}): {f.Detail}");
+        }
+
+        try
+        {
+            var yol = _eklentiDosya.Yol;
+            var gecici = yol + ".yeni";
+            File.WriteAllText(gecici, DeviceConfigSetupParser.Kodla(ayar));
+            File.Move(gecici, yol, overwrite: true);
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            _log.LogError(e, "eklenti kurulum dosyası yazılamadı");
+            return KurulumSonucu.Hata($"Doğrulandı ama kaydedilemedi: {e.Message}");
+        }
+
+        var surum = sonuc is MappingFetchResult.Updated up ? $" (eşleme sürümü {up.Mapping.Version})" : "";
+        _log.LogInformation("eklenti kurulum dizesi doğrulandı ve yazıldı: host {Host}{Surum} — yeniden başlatma gerekli", ayar.BaseUri.Host, surum);
+        return KurulumSonucu.Tamam($"Eklenti bağlantısı doğrulandı{surum} ve kaydedildi.", yenidenBaslat: true);
     }
 
     public Task<KurulumSonucu> KaydolAsync(string kod, CancellationToken ct)

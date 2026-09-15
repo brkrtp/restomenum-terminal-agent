@@ -1,4 +1,4 @@
-using System.Net;
+﻿using System.Net;
 using System.Text;
 using System.Text.Json;
 
@@ -37,12 +37,20 @@ public interface IKurulumIslemleri
     /// <summary>Terminalle eşleşir (<c>StartPairingInit</c>). Terminal o an eşleştirme menüsünde olmalı.</summary>
     KurulumSonucu Esles();
 
-    /// <summary>Ajanı yeniden başlatır (IP değişikliğinden sonra).</summary>
+    /// <summary>
+    /// W150: eklenti kurulum dizesini CANLI doğrular (oturum + eşleme) ve ancak başarılıysa veri
+    /// dizinine yazar. Sır loglanmaz. Kanal açılışta kurulduğundan yeniden başlatma gerekir.
+    /// </summary>
+    Task<KurulumSonucu> EklentiAyarlaAsync(DeviceConfigSetup ayar, CancellationToken ct);
+
+    /// <summary>Ajanı yeniden başlatır (IP ya da eklenti değişikliğinden sonra).</summary>
     void YenidenBaslat();
 }
 
 /// <param name="Kayitli">Platforma kayıtlı mı (connectorId var mı).</param>
 /// <param name="Esli">Terminalle eşli mi (bu süreçte).</param>
+/// <param name="EklentiAdresi">Config kanalının bağlı olduğu eklenti sunucusu (yalnız host); <c>null</c> = kanal yok.
+/// Sır bu kayda HİÇ girmez — sayfa ve JSON yalnız adresi görür.</param>
 /// <param name="Not">Serbest metin: son hata ya da uyarı; <c>null</c> = yok.</param>
 public sealed record KurulumDurumu(
     bool Kayitli, bool Esli,
@@ -50,7 +58,12 @@ public sealed record KurulumDurumu(
     string? CihazModeli = null, string? CihazSeri = null,
     uint? ZNo = null, uint? FisNo = null,
     bool? KagitUyarisi = null,
-    string? Not = null);
+    string? Not = null,
+    string? EklentiAdresi = null)
+{
+    /// <summary>Üç adım da tamam mı: kayıt, eşleşme, eklenti. Açılışta sayfa buna göre kendiliğinden açılır.</summary>
+    public bool Tamam => Kayitli && Esli && EklentiAdresi is not null;
+}
 
 /// <param name="YenidenBaslatmaGerekli">Ayar yazıldı ama etkili olması için ajan yeniden başlamalı.</param>
 public sealed record KurulumSonucu(bool Basarili, string Mesaj, bool YenidenBaslatmaGerekli = false)
@@ -95,6 +108,16 @@ public static class KurulumIstek
         return (ip, port);
     }
 
+    /// <summary><c>{"setup":"base64…"}</c> → çözülmüş ve kurallara vurulmuş eklenti ayarı. Sebep sırrı içermez.</summary>
+    public static DeviceConfigSetup? Eklenti(string govde, out string? neden)
+    {
+        neden = null;
+        var dize = Alan(govde, "setup", out neden);
+        if (dize is null) return null;
+        if (dize.Length > 4096) { neden = "kurulum dizesi çok uzun"; return null; }
+        return DeviceConfigSetupParser.TryParse(dize, out neden);
+    }
+
     private static string? Alan(string govde, string ad, out string? neden)
     {
         neden = null;
@@ -119,6 +142,7 @@ public static class KurulumIstek
         terminalIp = d.TerminalIp, terminalPort = d.TerminalPort,
         deviceModel = d.CihazModeli, deviceSerial = d.CihazSeri,
         zNo = d.ZNo, fisNo = d.FisNo, paperWarning = d.KagitUyarisi, note = d.Not,
+        pluginHost = d.EklentiAdresi,
     });
 }
 
@@ -144,7 +168,8 @@ public static class KurulumSayfasi
  .kart h2{font-size:15px;margin:0 0 10px} .durum{font-weight:600}
  .ok{color:#1a7f37} .uyari{color:#b45309} .hata{color:#b91c1c}
  label{display:block;font-size:13px;color:#444;margin:8px 0 3px}
- input{width:100%;box-sizing:border-box;padding:8px;font-size:15px;border:1px solid #bbb;border-radius:6px}
+ input,textarea{width:100%;box-sizing:border-box;padding:8px;font-size:15px;border:1px solid #bbb;border-radius:6px;font-family:inherit}
+ textarea{font-family:ui-monospace,Consolas,monospace;font-size:12px;min-height:72px}
  button{margin-top:10px;padding:9px 16px;font-size:14px;border:0;border-radius:6px;background:#1d4ed8;color:#fff;cursor:pointer}
  button:disabled{background:#999} .msg{margin-top:8px;font-size:13px;min-height:18px}
  .kucuk{font-size:12px;color:#777;margin-top:6px} code{background:#eee;padding:1px 4px;border-radius:3px}
@@ -162,6 +187,9 @@ public static class KurulumSayfasi
         sb.Append(d.Esli
             ? $"<div class=\"durum ok\">✓ Terminal eşli{(d.CihazModeli is null ? "" : $": {E(d.CihazModeli)}")}{(d.CihazSeri is null ? "" : $" · seri {E(d.CihazSeri)}")}</div>"
             : "<div class=\"durum uyari\">⚠ Terminal eşleşmemiş — 2. ve 3. adımı tamamlayın</div>");
+        sb.Append(d.EklentiAdresi is not null
+            ? $"<div class=\"durum ok\">✓ Eklenti bağlı: {E(d.EklentiAdresi)}</div>"
+            : "<div class=\"durum uyari\">⚠ Eklenti bağlantısı yok — 4. adımı tamamlayın</div>");
         if (d.ZNo is not null || d.FisNo is not null)
             sb.Append($"<div class=\"kucuk\"><span class=\"sayac\">Z raporu: {d.ZNo}</span><span class=\"sayac\">Sıradaki fiş: {d.FisNo}</span>" +
                       (d.KagitUyarisi == true ? "<span class=\"sayac hata\">KÂĞIT BİTTİ</span>" : "") + "</div>");
@@ -193,6 +221,17 @@ public static class KurulumSayfasi
         sb.Append("<div class=\"kucuk\">Terminalde <b>Menü → GMP Eşleştirme</b> ekranını açın (şifre gerekebilir), ekran açıkken aşağıdaki düğmeye basın.</div>");
         sb.Append("<button id=\"esles\" onclick=\"esles()\">Eşleştir</button><div id=\"esMsg\" class=\"msg\"></div></div>");
 
+        // ── 4. EKLENTİ ─────────────────────────────────────────────────────────────
+        // Alan her durumda görünür: panelde "Kurulum sırrı üret" her basışta yeni sır üretir ve
+        // eskisini geçersiz kılar — bağlıyken de yeni dize yapıştırmak gerekebilir.
+        sb.Append("<div class=\"kart\"><h2>4. Eklenti bağlantısı</h2>");
+        sb.Append("<div class=\"kucuk\">RestoMenum panelinde <b>Eklenti Ayarları → Cihaz kurulumu</b> sekmesinde bu cihaz için " +
+                  "<b>Kurulum sırrı üret</b> deyin, çıkan dizeyi kopyalayıp buraya yapıştırın. " +
+                  "Yeni sır üretmek eskisini geçersiz kılar; o zaman yeni dizeyi yine buraya yapıştırın.</div>");
+        sb.Append("<label for=\"dize\">Kurulum dizesi</label><textarea id=\"dize\" autocomplete=\"off\" spellcheck=\"false\" placeholder=\"eyJ1cmwiOi…\"></textarea>");
+        sb.Append("<button id=\"eklenti\" onclick=\"eklentiKaydet()\">Doğrula ve kaydet</button><div id=\"dizeMsg\" class=\"msg\"></div>");
+        sb.Append("<div class=\"kucuk\">Dize önce eklentiyle canlı doğrulanır; geçerliyse kaydedilir ve ajan kendini yeniden başlatır.</div></div>");
+
         // ── JS ─────────────────────────────────────────────────────────────────────
         sb.Append("""
 <script>
@@ -213,6 +252,17 @@ async function terminalKaydet(){
   goster('ipMsg', j);
   if(j.ok && j.restartRequired){
     document.getElementById('ipMsg').textContent=j.message+' Ajan yeniden başlıyor…';
+    setTimeout(async function bekle(){ try{ await fetch('/setup/status'); location.reload(); }catch{ setTimeout(bekle,1000); } }, 3000);
+  }
+}
+async function eklentiKaydet(){
+  const b=document.getElementById('eklenti'); b.disabled=true;
+  document.getElementById('dizeMsg').textContent='Eklentiyle doğrulanıyor…';
+  const j=await post('/setup/plugin',{setup:document.getElementById('dize').value});
+  goster('dizeMsg', j); b.disabled=false;
+  if(j.ok && j.restartRequired){
+    document.getElementById('dize').value='';
+    document.getElementById('dizeMsg').textContent=j.message+' Ajan yeniden başlıyor…';
     setTimeout(async function bekle(){ try{ await fetch('/setup/status'); location.reload(); }catch{ setTimeout(bekle,1000); } }, 3000);
   }
 }
