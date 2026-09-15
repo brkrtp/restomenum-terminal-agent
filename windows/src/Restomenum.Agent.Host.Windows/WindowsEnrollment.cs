@@ -1,4 +1,4 @@
-using System.Net.Http.Json;
+﻿using System.Net.Http.Json;
 using System.Text.Json;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging;
@@ -35,18 +35,61 @@ namespace Restomenum.Agent.Host.Windows;
 /// </summary>
 public static class WindowsEnrollment
 {
+    /// <summary>
+    /// Açılış önyüklemesi. <b>W149: kayıtsız ajan artık ÖLMÜYOR.</b> Eskiden kod yoksa host hiç
+    /// çalışmıyordu (fail-closed) — yani kayıtsız bir ajanın kurulum sayfası sunacak bir dinleyicisi
+    /// de olmuyordu. Şimdi: kayıtlıysa geç; kod varsa dene; yoksa ya da başarısızsa <b>uyar ve
+    /// devam et</b> — kurulum sayfası kodu alacak. Satış zaten kayıtsızken güvenli tarafa düşer.
+    /// </summary>
     public static async Task EnsureEnrolledAsync(IServiceProvider services, CancellationToken ct = default)
     {
         var log = services.GetRequiredService<ILoggerFactory>().CreateLogger("Enrollment");
         var key = services.GetRequiredService<IDeviceKey>();
         var opt = services.GetRequiredService<IOptions<AgentOptions>>().Value;
 
-        // Zaten kayıtlı mı? WindowsDeviceKey.ConnectorId kalıcı dosyayı okur — doluysa kaydolma.
         if (!string.IsNullOrEmpty(key.ConnectorId))
         {
             log.LogInformation("cihaz zaten kayıtlı (connectorId mevcut) — kayıt atlanıyor");
             return;
         }
+
+        if (string.IsNullOrWhiteSpace(opt.EnrollmentCode))
+        {
+            log.LogWarning("cihaz kayıtlı DEĞİL ve yapılandırmada kod yok — kurulum sayfası bekleniyor: " +
+                           "{Prefix}setup", opt.ListenPrefix);
+            return;
+        }
+
+        var sonuc = await KaydolAsync(services, opt.EnrollmentCode, ct);
+        if (!sonuc.Basarili)
+            log.LogError("açılışta kayıt başarısız: {Mesaj} — kurulum sayfasından yeniden deneyin", sonuc.Mesaj);
+    }
+
+    /// <summary>
+    /// Verilen tek kullanımlık kodla kaydolur. <b>Fırlatmaz</b>; her başarısızlık okunabilir bir
+    /// mesajla döner — kurulum sayfası bunu olduğu gibi gösterir. Kod loglanmaz.
+    /// </summary>
+    public static async Task<KurulumSonucu> KaydolAsync(IServiceProvider services, string kod, CancellationToken ct = default)
+    {
+        var key = services.GetRequiredService<IDeviceKey>();
+        if (!string.IsNullOrEmpty(key.ConnectorId))
+            return KurulumSonucu.Tamam("Bu cihaz zaten kayıtlı.");
+        try
+        {
+            await KaydolIcAsync(services, kod, ct);
+            return KurulumSonucu.Tamam("Kayıt başarılı. Cihaz platforma bağlandı.");
+        }
+        catch (InvalidOperationException ex)
+        {
+            return KurulumSonucu.Hata(ex.Message);
+        }
+    }
+
+    private static async Task KaydolIcAsync(IServiceProvider services, string kod, CancellationToken ct)
+    {
+        var log = services.GetRequiredService<ILoggerFactory>().CreateLogger("Enrollment");
+        var key = services.GetRequiredService<IDeviceKey>();
+        var opt = services.GetRequiredService<IOptions<AgentOptions>>().Value;
 
         // Yalnız gerçek donanım anahtarı kaydolur. Dev anahtarı (DevDeviceKey) kimliğini appsettings'ten
         // alır; kalıcılaştırma seam'i (SetConnectorId) yoktur — onun için kayıt akışı geçerli değil.
@@ -56,10 +99,10 @@ public static class WindowsEnrollment
             return;
         }
 
-        if (string.IsNullOrWhiteSpace(opt.EnrollmentCode) || string.IsNullOrWhiteSpace(opt.EnrollUrl))
-            throw new InvalidOperationException(
-                "Cihaz kayıtlı değil ve Agent:EnrollmentCode / Agent:EnrollUrl eksik. İlk kurulumda " +
-                "tek kullanımlık kayıt kodu (TTL ~10 dk) ve kayıt ucu gereklidir.");
+        if (string.IsNullOrWhiteSpace(kod))
+            throw new InvalidOperationException("Kayıt kodu boş.");
+        if (string.IsNullOrWhiteSpace(opt.EnrollUrl))
+            throw new InvalidOperationException("Kayıt ucu (Agent:EnrollUrl) yapılandırılmamış — kurulum paketi hatalı.");
 
         // Değişmez #1: anahtar zaten kalıcı (WindowsDeviceKey ctor aç-ya-da-üret yaptı). Yalnız OKUYORUZ.
         var payload = new
@@ -67,7 +110,7 @@ public static class WindowsEnrollment
             serverId = opt.ServerId,
             data = new
             {
-                code = opt.EnrollmentCode,            // loglanMAZ
+                code = kod,                           // loglanMAZ
                 publicKey = key.PublicKeyPem,
                 fingerprint = key.Fingerprint,
                 platform = "windows",

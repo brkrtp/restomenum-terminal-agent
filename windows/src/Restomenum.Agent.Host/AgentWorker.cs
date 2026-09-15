@@ -28,15 +28,18 @@ public sealed class AgentWorker : BackgroundService
     private readonly Outbox _outbox;
     private readonly CommandStore _store;
 
+    private readonly IKurulumIslemleri? _kurulum;
+
     public AgentWorker(
         IOptions<AgentOptions> opt, ILogger<AgentWorker> log, IHostApplicationLifetime lifetime,
-        LocalSaleHandler handler, Outbox outbox, CommandStore store)
+        LocalSaleHandler handler, Outbox outbox, CommandStore store, IKurulumIslemleri? kurulum = null)
     {
         _opt = opt.Value;
         _log = log;
         _lifetime = lifetime;
         _handler = handler;
         _outbox = outbox;
+        _kurulum = kurulum;
         _store = store;
     }
 
@@ -66,7 +69,18 @@ public sealed class AgentWorker : BackgroundService
         {
             listener = new HttpListener();
             listener.Prefixes.Add(_opt.ListenPrefix);
-            listener.Start();
+            // W149: kurulum sayfası ajanı yeniden başlatabiliyor; yeni süreç, eskisi portu
+            // bırakana kadar bağlanamaz. Kısa ve SINIRLI yeniden deneme — sonsuz değil.
+            for (var deneme = 1; ; deneme++)
+            {
+                try { listener.Start(); break; }
+                catch (HttpListenerException) when (deneme < 10)
+                {
+                    await Task.Delay(500, ct);
+                    listener = new HttpListener();
+                    listener.Prefixes.Add(_opt.ListenPrefix);
+                }
+            }
         }
         catch (Exception e)
         {
@@ -77,6 +91,7 @@ public sealed class AgentWorker : BackgroundService
         }
 
         _log.LogInformation("yerel dinleyici ayakta: {Prefix} (yol {Path})", _opt.ListenPrefix, _opt.ListenPath);
+        KurulumSayfasiniGerekirseAc();
 
         // ── AÇILIŞ KURTARMASI DİNLEYİCİDEN SONRA, ARKA PLANDA ───────────────────────────
         // ⚠️ Bu ikisi eskiden `listener.Start()`'tan ÖNCE ve BEKLEYEREK çalışıyordu; ölçülen bedeli:
@@ -127,6 +142,12 @@ public sealed class AgentWorker : BackgroundService
         try
         {
             var yol = ctx.Request.Url?.AbsolutePath.TrimEnd('/') ?? "";
+
+            // W149: KURULUM SAYFASI — /nexo'dan ÖNCE ve ondan bağımsız. Kayıtsız/eşleşmemiş
+            // ajanın da bu sayfayı sunabilmesi bütün özelliğin varlık sebebi.
+            if (yol.StartsWith(KurulumIstek.Yol, StringComparison.OrdinalIgnoreCase))
+            { await KurulumAsync(ctx, yol, ct); return; }
+
             if (!string.Equals(yol, _opt.ListenPath.TrimEnd('/'), StringComparison.OrdinalIgnoreCase))
             { Respond(ctx, 404, "{\"error\":\"not found\"}"); return; }
             if (!string.Equals(ctx.Request.HttpMethod, "POST", StringComparison.OrdinalIgnoreCase))
@@ -236,6 +257,95 @@ public sealed class AgentWorker : BackgroundService
 
     /// <summary>Boş/eksik alanı logda "(yok)" göster — boş dize ile eksik alan ayırt edilsin.</summary>
     private static string Bos(string? s) => string.IsNullOrWhiteSpace(s) ? "(yok)" : s;
+
+    // ══ W149 — KURULUM SAYFASI ═══════════════════════════════════════════════════
+    //
+    // ⚠️ /setup/enroll GÖVDESİ HİÇBİR YERE LOGLANMAZ — kayıt kodu 10 dakika boyunca cihaz
+    // bağlama yetkisi taşır. Bu yordamda gövde yalnız ayrıştırılır ve işleme geçer.
+    private async Task KurulumAsync(HttpListenerContext ctx, string yol, CancellationToken ct)
+    {
+        if (_kurulum is null)
+        { Respond(ctx, 404, "{\"error\":\"setup not available on this platform\"}"); return; }
+
+        var alt = yol.Length > KurulumIstek.Yol.Length ? yol[(KurulumIstek.Yol.Length + 1)..] : "";
+        var get = string.Equals(ctx.Request.HttpMethod, "GET", StringComparison.OrdinalIgnoreCase);
+
+        if (alt == "" && get)
+        { RespondHtml(ctx, KurulumSayfasi.Html(_kurulum.Durum())); return; }
+        if (alt == "status" && get)
+        { Respond(ctx, 200, KurulumIstek.Json(_kurulum.Durum())); return; }
+        if (get)
+        { Respond(ctx, 404, NOTFOUND); return; }
+
+        string govde;
+        using (var reader = new StreamReader(ctx.Request.InputStream, ctx.Request.ContentEncoding ?? Encoding.UTF8))
+            govde = await reader.ReadToEndAsync(ct);
+
+        KurulumSonucu sonuc;
+        switch (alt)
+        {
+            case "enroll":
+            {
+                var kod = KurulumIstek.Kod(govde, out var neden);
+                sonuc = kod is null ? KurulumSonucu.Hata(neden ?? "kod okunamadı")
+                                    : await _kurulum.KaydolAsync(kod, ct);
+                _log.LogInformation("[kurulum] kayıt denemesi: {Sonuc}", sonuc.Basarili ? "başarılı" : "başarısız");
+                break;
+            }
+            case "terminal":
+            {
+                var t = KurulumIstek.Terminal(govde, out var neden);
+                sonuc = t is null ? KurulumSonucu.Hata(neden ?? "adres okunamadı")
+                                  : _kurulum.TerminalAyarla(t.Value.Ip, t.Value.Port);
+                break;
+            }
+            case "pair":
+                sonuc = _kurulum.Esles();
+                _log.LogInformation("[kurulum] eşleştirme denemesi: {Sonuc}", sonuc.Basarili ? "başarılı" : "başarısız");
+                break;
+            default:
+                Respond(ctx, 404, NOTFOUND);
+                return;
+        }
+
+        Respond(ctx, 200, KurulumIstek.Json(sonuc));
+
+        // Yanıt GİTTİKTEN sonra yeniden başlat — tarayıcı "yeniden başlıyor" mesajını görsün.
+        if (sonuc.Basarili && sonuc.YenidenBaslatmaGerekli)
+            _ = Task.Run(async () => { await Task.Delay(800, CancellationToken.None); _kurulum.YenidenBaslat(); });
+    }
+
+    /// <summary>Açılışta kayıtsız ya da eşleşmemişse kurulum sayfasını tarayıcıda açar — ilk kurulumda
+    /// kullanıcı hiçbir şey aramaz. Masaüstü yoksa (servis) sessizce geçer.</summary>
+    private void KurulumSayfasiniGerekirseAc()
+    {
+        if (_kurulum is null) return;
+        try
+        {
+            var d = _kurulum.Durum();
+            if (d.Kayitli && d.Esli) return;
+            var url = _opt.ListenPrefix.TrimEnd('/') + KurulumIstek.Yol;
+            _log.LogWarning("kurulum eksik (kayıtlı={K}, eşli={E}) — sayfa açılıyor: {Url}", d.Kayitli, d.Esli, url);
+            System.Diagnostics.Process.Start(new System.Diagnostics.ProcessStartInfo(url) { UseShellExecute = true });
+        }
+        catch (Exception e)
+        {
+            _log.LogInformation("kurulum sayfası kendiliğinden açılamadı ({Hata}) — elle açın: {Prefix}setup",
+                e.GetType().Name, _opt.ListenPrefix);
+        }
+    }
+
+    private const string NOTFOUND = "{\"error\":\"not found\"}";
+
+    private static void RespondHtml(HttpListenerContext ctx, string html)
+    {
+        var bytes = Encoding.UTF8.GetBytes(html);
+        ctx.Response.StatusCode = 200;
+        ctx.Response.ContentType = "text/html; charset=utf-8";
+        ctx.Response.ContentLength64 = bytes.Length;
+        ctx.Response.OutputStream.Write(bytes, 0, bytes.Length);
+        ctx.Response.Close();
+    }
 
     private static void Respond(HttpListenerContext ctx, int status, string json)
     {

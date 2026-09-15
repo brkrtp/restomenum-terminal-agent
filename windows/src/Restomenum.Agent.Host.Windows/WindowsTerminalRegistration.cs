@@ -1,4 +1,4 @@
-using Microsoft.Extensions.DependencyInjection;
+﻿using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Microsoft.Extensions.Options;
@@ -78,6 +78,8 @@ public static class WindowsTerminalRegistration
         // Cihaz kilidi satışınkinin TA KENDİSİ: ikinci bir kilit "cihaz başına tek işlem"i iki ayrı
         // yerde tanımlar ve bakım turu satışın ortasına girerdi.
         services.AddSingleton<IDeviceIdleGate>(sp => sp.GetRequiredService<LocalSaleHandler>());
+        // W149: kurulum sayfasının cihaza/dosyaya dokunan tarafı. Sayfa Core'da, işlemler burada.
+        services.AddSingleton<IKurulumIslemleri, WindowsKurulumIslemleri>();
         services.AddSingleton(sp =>
         {
             var log = sp.GetRequiredService<ILoggerFactory>().CreateLogger("DeviceDepartments");
