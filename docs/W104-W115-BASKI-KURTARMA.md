@@ -1535,3 +1535,67 @@ kendim o an kurmuştum. Testler gerçek taşımaya karşı yeniden yazıldı.
 > Sonucu elle kurup taşındığını doğrulamak, tesisatı test eder — hesabı değil.
 
 Mutasyon 5/5 kırmızı. **662/662 + 3/3** yeşil.
+
+---
+
+## W149 — kurulum sayfası: son kullanıcı cihazını KENDİSİ eşleştirir
+
+Kullanıcının sözü: *"Son kullanıcı kendi cihazını nasıl eşleştirecek, şu an çok
+saçma."* Haklıydı — kayıt kodu `appsettings.json`'a elle, IP `GMP.XML`'e elle,
+eşleşme yönetici komut satırından `--pair` ile. Bir restoran sahibi bunu yapamaz.
+
+Ajan zaten `127.0.0.1:7788`'de dinliyor; aynı dinleyici artık `/setup`'ta tek
+sayfalık bir kurulum ekranı sunuyor: kayıt kodu → terminal IP'si → eşleştir.
+Sayfa saf (`Kurulum.cs`, Core), cihaza dokunan taraf `IKurulumIslemleri`
+arkasında (Host.Windows). Dış kaynak yok — makine internetsizken de açılır.
+Kayıtsız/eşleşmemiş açılışta tarayıcı kendiliğinden açılır; kayıtsız ajan artık
+**ölmüyor**, sayfayı sunuyor.
+
+Kayıt kodu 10 dakika boyunca cihaz bağlama yetkisi taşır: `/setup/enroll`
+gövdesi **hiçbir yere loglanmaz**, log yalnız "başarılı/başarısız" der.
+
+Canlı (09-15 21:09, PID 14812): eski ikili `/setup` → 404; yeni → 200, durum
+JSON'u doğru; yanlış IP / kod yok / aynı adres yolları yan etkisiz reddedildi;
+kayıtlı+eşli cihazda tarayıcı **açılmadı** (doğru). **676/676** yeşil.
+
+---
+
+## W150 — eklenti kurulum dizesi de sayfadan; adres geçişi ürünün kendi yoluyla
+
+W149'un boşluğu peer'in akış tarifinde ortaya çıktı: kayıt kodu **platformun**
+enroll ucuna gider; eklentinin kurulum dizesi (`base64{url,secret}`) hâlâ
+`appsettings.json`'da elle duruyordu. Aynı gün eklenti Cloudflare Workers'a
+taşındı ve sahadaki ajan eski tünel adresini taşıyordu — tam da bu alanın
+kullanıcı eliyle değişmesi gereken an.
+
+4. adım: dize yapıştırılır → ajan **önce** eklentiyle canlı doğrular (oturum +
+eşleme çekimi, `--config-smoke` ile aynı yol) → **ancak** başarılıysa veri
+dizinine `device-config.setup` atomik yazılır → ajan kendini yeniden başlatır.
+Kaynak önceliği **dosya > yapılandırma**; bozuk dosya yapılandırmaya **düşmez**
+(sessiz geri dönüş = kullanıcının "kaydettim" sandığı ayarın uygulanmaması),
+açılış logu ve sayfa "dosya BOZUK" der. Ret sebepleri ayrışır ve **sırrı
+içermez**; gövde loglanmaz; sayfa/JSON yalnız host'u görür.
+
+Canlı ölçüm (09-15 22:10) — ürünün kendi yolu ilk kez uçtan uca:
+
+```
+22:10:19.60  POST /setup/plugin
+22:10:19.97  [eklenti doğrulama] oturum açıldı  (yeni adres, mevcut sır)
+22:10:20.17  dosya yazıldı · yanıt ok/restartRequired · 0,53 sn
+22:10:20.98  "kurulum sayfası istedi: ajan yeniden başlatılıyor (--pair)"
+22:10:20     yeni süreç PID 14040 (argümanlar korundu)
+22:10:29     EŞLEŞME BAŞARILI
+22:10:31.67  dinleyici ayakta · "eklenti config kanalı: dosya → …workers.dev"
+22:10:31.79  eşleme v116 yeni adresten
+```
+
+Eski süreç temiz çıktı, tek süreç kaldı; dinleyici portu çekişmesi yaşanmadı
+(W149'daki sınırlı yeniden deneme devreye girmedi). GMP.XML/DLL hash'leri
+değişmedi. Bu aynı zamanda W149'un yeniden-başlatma yolunun ilk canlı sınavıydı.
+
+Mutasyon 3/3 kırmızı (bozuk dosya→yapılandırma, https şartı, öncelik tersi).
+**697/697 + 3/3** yeşil.
+
+> **Not:** ayar dosyasına elle betikle yazma girişimi oturumun izin denetimine
+> takılmıştı. İyi ki takıldı — değişiklik ürünün gerçek yolundan geçince o yol
+> da ölçülmüş oldu.
