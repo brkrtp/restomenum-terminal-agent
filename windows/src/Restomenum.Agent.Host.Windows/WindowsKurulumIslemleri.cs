@@ -1,4 +1,7 @@
 ﻿using System.Diagnostics;
+using System.Net;
+using System.Net.NetworkInformation;
+using System.Net.Sockets;
 using System.Text;
 using System.Text.RegularExpressions;
 using Microsoft.Extensions.DependencyInjection;
@@ -151,6 +154,70 @@ public sealed class WindowsKurulumIslemleri : IKurulumIslemleri
         var (bilgi, _) = _kimlik?.Oku() ?? (null, null);
         var cihaz = bilgi is null ? "" : $" {bilgi.Brand.Trim()} {bilgi.Model.Trim()} · seri {bilgi.Serial.Trim()}";
         return KurulumSonucu.Tamam($"Eşleşme başarılı.{cihaz}");
+    }
+
+    public async Task<IReadOnlyList<TerminalAday>> TerminalleriTaraAsync(CancellationToken ct)
+    {
+        // Yerel /24'ü terminal portunda (yapılandırılmış port, öntanımlı 7500) TCP ile yoklar.
+        // ⚠️ GMP çağrısı YOK — yalnız bağlan-kapat; satış sürerken bile güvenli, cihaz kilidi
+        // ALINMAZ. "Port açık" ile "doğrulanmış terminal" ayrı: yalnız aday listeliyoruz.
+        var (_, port) = GmpXmlAyar.Oku(GmpXmlYolu, _log);
+        var hedefPort = port ?? 7500;
+
+        var taban = YerelTaban();
+        if (taban is null) { _log.LogWarning("tarama: yerel IPv4 /24 bulunamadı"); return Array.Empty<TerminalAday>(); }
+
+        _log.LogInformation("terminal taraması başladı: {Taban}0/24 port {Port}", taban, hedefPort);
+        var bulunan = new System.Collections.Concurrent.ConcurrentBag<int>();
+        using var sinir = new SemaphoreSlim(64);
+        var isler = new List<Task>();
+        for (var son = 1; son <= 254; son++)
+        {
+            var oktet = son;
+            isler.Add(Task.Run(async () =>
+            {
+                await sinir.WaitAsync(ct);
+                try { if (await PortAcikMi($"{taban}{oktet}", hedefPort, 500, ct)) bulunan.Add(oktet); }
+                finally { sinir.Release(); }
+            }, ct));
+        }
+        try { await Task.WhenAll(isler); } catch (OperationCanceledException) { }
+
+        var adaylar = bulunan.OrderBy(x => x).Select(x => new TerminalAday($"{taban}{x}", hedefPort)).ToList();
+        _log.LogInformation("terminal taraması bitti: {Adet} aday", adaylar.Count);
+        return adaylar;
+    }
+
+    /// <summary>Yerel /24 tabanı, örn. "192.168.1." — yukarı, IPv4, loopback/APIPA olmayan ilk arayüz.</summary>
+    private static string? YerelTaban()
+    {
+        foreach (var ni in NetworkInterface.GetAllNetworkInterfaces())
+        {
+            if (ni.OperationalStatus != OperationalStatus.Up) continue;
+            if (ni.NetworkInterfaceType == NetworkInterfaceType.Loopback) continue;
+            foreach (var a in ni.GetIPProperties().UnicastAddresses)
+            {
+                if (a.Address.AddressFamily != AddressFamily.InterNetwork) continue;
+                var b = a.Address.GetAddressBytes();
+                if (b[0] == 127 || (b[0] == 169 && b[1] == 254)) continue;   // loopback / APIPA
+                return $"{b[0]}.{b[1]}.{b[2]}.";
+            }
+        }
+        return null;
+    }
+
+    private static async Task<bool> PortAcikMi(string ip, int port, int msTimeout, CancellationToken ct)
+    {
+        using var c = new TcpClient();
+        try
+        {
+            var baglan = c.ConnectAsync(ip, port);
+            var zaman = Task.Delay(msTimeout, ct);
+            if (await Task.WhenAny(baglan, zaman) != baglan) return false;   // zaman aşımı
+            await baglan;   // istisnayı yüzeye çıkar
+            return c.Connected;
+        }
+        catch { return false; }
     }
 
     public void YenidenBaslat()

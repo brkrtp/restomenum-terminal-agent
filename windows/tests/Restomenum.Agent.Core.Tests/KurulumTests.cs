@@ -1,4 +1,4 @@
-using Restomenum.Agent.Core;
+﻿using Restomenum.Agent.Core;
 using Xunit;
 
 namespace Restomenum.Agent.Core.Tests;
@@ -68,7 +68,9 @@ public class KurulumTests
         Assert.Contains("kayıtlı değil", html);
         Assert.Contains("eşleşmemiş", html);
         Assert.Contains("id=\"kod\"", html);                 // kod alanı VAR
-        Assert.Contains("value=\"192.168.1.189\"", html);    // mevcut IP dolu gelir
+        Assert.Contains("value=\"192.168.1.189\"", html);    // mevcut IP seçili seçenek olarak gelir
+        Assert.Contains("<select id=\"ip\"", html);          // W152: metin kutusu değil, seçim + tarama
+        Assert.Contains("Tara", html);                       // W152: ağ tarama düğmesi
         Assert.Contains("GMP Eşleştirme", html);             // kullanıcıya terminaldeki adım
     }
 
@@ -85,6 +87,46 @@ public class KurulumTests
         Assert.Contains("2B25035325", html);
         Assert.Contains("Z raporu: 93", html);
         Assert.Contains("Sıradaki fiş: 7", html);   // FisNo SONRAKİ numaradır — sayfa öyle der
+    }
+
+    [Fact]
+    public void Sayfa_IP_icin_selectbox_ve_elle_gir_secenegi_sunar()
+    {
+        // W152: kullanıcı IP'yi ya listeden seçer (tarama) ya elle girer — ikisi de olmalı.
+        var html = KurulumSayfasi.Html(new KurulumDurumu(true, false, TerminalIp: "192.168.1.189"));
+        Assert.Contains("<select id=\"ip\"", html);
+        Assert.Contains("__manuel__", html);                 // "elle gir" seçeneği
+        Assert.Contains("id=\"ipManuel\"", html);            // elle giriş kutusu
+        Assert.Contains("/setup/scan", html);                // tarama ucu JS'te
+    }
+
+    [Fact]
+    public void Sayfa_IP_yoksa_placeholder_secenek_gosterir_deger_uydurmaz()
+    {
+        var html = KurulumSayfasi.Html(new KurulumDurumu(true, false, TerminalIp: null));
+        Assert.DoesNotContain("value=\"192.168.1.189\"", html);
+        Assert.Contains("tarayın ya da elle girin", html);   // boş durum açık anlatılır
+    }
+
+    [Fact]
+    public void Tarama_JSON_u_adaylari_ve_agi_tasir()
+    {
+        var j = KurulumIstek.JsonTarama(
+            new[] { new TerminalAday("192.168.1.189", 7500), new TerminalAday("192.168.1.50", 7500) },
+            "192.168.1.0/24");
+        Assert.Contains("\"count\":2", j);
+        Assert.Contains("\"subnet\":\"192.168.1.0/24\"", j);
+        Assert.Contains("\"ip\":\"192.168.1.189\"", j);
+        Assert.Contains("\"port\":7500", j);
+    }
+
+    [Fact]
+    public void Tarama_bos_sonuc_uydurmaz()
+    {
+        var j = KurulumIstek.JsonTarama(System.Array.Empty<TerminalAday>(), null);
+        Assert.Contains("\"count\":0", j);
+        Assert.Contains("\"subnet\":null", j);
+        Assert.Contains("\"found\":[]", j);
     }
 
     [Fact]

@@ -286,6 +286,14 @@ public sealed class AgentWorker : BackgroundService
         { RespondHtml(ctx, KurulumSayfasi.Html(_kurulum.Durum())); return; }
         if (alt == "status" && get)
         { Respond(ctx, 200, KurulumIstek.Json(_kurulum.Durum())); return; }
+        if (alt == "scan" && get)
+        {
+            // W152: ağ taraması cihaza GMP çağrısı yapmaz (bağlan-kapat), o yüzden GET güvenli.
+            var adaylar = await _kurulum.TerminalleriTaraAsync(ct);
+            var ag = adaylar.Count > 0 ? adaylar[0].Ip[..(adaylar[0].Ip.LastIndexOf('.') + 1)] + "0/24" : null;
+            Respond(ctx, 200, KurulumIstek.JsonTarama(adaylar, ag));
+            return;
+        }
         if (get)
         { Respond(ctx, 404, NOTFOUND); return; }
 
