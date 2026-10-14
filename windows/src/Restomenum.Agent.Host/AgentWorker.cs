@@ -138,7 +138,7 @@ public sealed class AgentWorker : BackgroundService
             Temizle();
         }, ct);
 
-        using var iptalKaydi = ct.Register(() => { try { listener.Stop(); } catch { /* kapanış */ } });
+        using var iptalKaydi = ct.Register(() => { try { listener.Stop(); } catch (Exception e) { KapanisHatasi("dinleyici durdurma", e); } });
         var drainLoop = DrainLoopAsync(ct);
         try
         {
@@ -155,9 +155,9 @@ public sealed class AgentWorker : BackgroundService
         }
         finally
         {
-            try { listener.Close(); } catch { /* kapanış */ }
-            try { await drainLoop; } catch { /* kapanış */ }
-            try { await acilisIsleri; } catch { /* kapanış */ }
+            try { listener.Close(); } catch (Exception e) { KapanisHatasi("dinleyici kapatma", e); }
+            try { await drainLoop; } catch (Exception e) { KapanisHatasi("periyodik döngü", e); }
+            try { await acilisIsleri; } catch (Exception e) { KapanisHatasi("açılış işleri", e); }
         }
     }
 
@@ -291,6 +291,18 @@ public sealed class AgentWorker : BackgroundService
             try { Respond(ctx, 500, "{\"error\":\"internal\"}"); }
             catch (Exception yazim) { _log.LogWarning("500 yanıtı yazılamadı: {Tur}", yazim.GetType().Name); }
         }
+    }
+
+    /// <summary>
+    /// Kapanış hatası YUTULMAZ (boş catch yok) ama kapanışı durdurmaz. Beklenen (iptal, kapatılmış
+    /// nesne) Debug, kalanı Warning; yalnız tür + adım loglanır — mesaj istek gövdesi taşıyabilir.
+    /// </summary>
+    private void KapanisHatasi(string adim, Exception e)
+    {
+        if (e is OperationCanceledException or ObjectDisposedException)
+            _log.LogDebug("kapanış: {Adim} — beklenen {Tur}", adim, e.GetType().Name);
+        else
+            _log.LogWarning("kapanış: {Adim} hata verdi — {Tur}", adim, e.GetType().Name);
     }
 
     /// <summary>Boş/eksik alanı logda "(yok)" göster — boş dize ile eksik alan ayırt edilsin.</summary>
