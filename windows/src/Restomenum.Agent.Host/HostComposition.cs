@@ -20,11 +20,19 @@ namespace Restomenum.Agent.Host;
 /// </summary>
 public static class HostComposition
 {
+    /// <summary>Windows servis adı — kurulum betiği ve kurtarma ayarı denetimi aynı adı kullanır.</summary>
+    public const string ServisAdi = "RestomenumAgent";
+
     public static void AddAgentBaseServices(HostApplicationBuilder builder)
     {
-        // Windows'ta servis olarak çalışır (açılışta başlar, çökerse SCM yeniden başlatır).
-        // Windows dışında sessizce hiçbir şey yapmaz — bu sayede aynı ikili geliştirmede de çalışır.
-        builder.Services.AddWindowsService(o => o.ServiceName = "RestomenumAgent");
+        // Windows'ta servis olarak çalışır (açılışta başlar). Windows dışında sessizce hiçbir şey
+        // yapmaz — bu sayede aynı ikili geliştirmede de çalışır.
+        // ⚠️ "Çökerse yeniden başlat" SCM KURTARMA EYLEMİYLE olur ve kendiliğinden KURULMAZ:
+        // windows/README.md §"Servis kurulumu" (sc.exe failure). Kurulum sayfası yeniden başlatmadan
+        // önce bu ayarı okur (YenidenBaslatmaKarari); yoksa işlemi değişiklik yapmadan reddeder.
+        builder.Services.AddWindowsService(o => o.ServiceName = ServisAdi);
+        // RM-0389: kurulum işlemleri sırasında yeni satış girişini kapatan TEK kapı.
+        builder.Services.AddSingleton<BakimKapisi>();
 
         builder.Services
             .AddOptions<AgentOptions>()

@@ -67,3 +67,34 @@ netleşmeli — aksi hâlde TR'de çalışmayan bir agent çıkar.
 - **`SENT_TO_TERMINAL` sonrası SALE'i tekrarlamayın** (§12.2/6). Belirsizlik `UNKNOWN` akışıyla,
   yalnız **sorgu** ile çözülür.
 - Protokolü buraya yeniden yazmayın — Android README tek kaynaktır.
+
+---
+
+## 5. Servis kurulumu
+
+Ajan `RestomenumAgent` adlı Windows servisi olarak, **LocalSystem** hesabıyla çalışır (cihaz anahtarı
+makine kapsamlıdır). Kurulum ve güncelleme **yönetici** PowerShell'de:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File servis-kur.ps1 -Exe "C:\...\Restomenum.Agent.Host.Windows.exe"
+```
+
+Betik servisi oluşturur ve **kurtarma eylemini** kurar:
+
+```
+sc.exe failure RestomenumAgent reset= 86400 actions= restart/5000/restart/5000/restart/30000
+sc.exe failureflag RestomenumAgent 1
+```
+
+> ⚠️ **Kurtarma eylemi şarttır.** Kurulum sayfası (`http://127.0.0.1:7788/setup`) terminal adresi,
+> eklenti dizesi ya da "Cihazı kaldır" sonrası ajanı, süreçten çıkıp servis yöneticisinin yeniden
+> açmasına bırakarak başlatır. Eylem yoksa servis kapalı kalırdı; bu yüzden ajan ayarı açılışta ve her
+> işlemden önce okur, yoksa işlemi **değişiklik yapmadan reddeder** ve günlüğe KRİTİK yazar.
+
+Eski Ingenico servisleri (`restomenum-api`, `restomenum-gmp3`) aynı cihaza bağlanır; ajan servisi
+kurulduğunda onlar durdurulmalı ve başlangıç türü **Manuel** yapılmalıdır.
+
+**Çalışma dizini:** GMP DLL'i `GMP.XML`'i çalışma dizininden okur; servisin çalışma dizini
+`C:\Windows\System32`'dir. Giriş noktası bu yüzden açılışta çalışma dizinini ajanın kendi dizinine
+çevirir; komut satırındaki göreli yollar (`--check-tax`) ve göreli `Agent:StorePath` başlangıç
+dizinine göre çözülür.

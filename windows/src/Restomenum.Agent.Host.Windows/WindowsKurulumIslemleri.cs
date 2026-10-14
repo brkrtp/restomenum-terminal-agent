@@ -1,4 +1,5 @@
-﻿using System.Diagnostics;
+﻿using System.Runtime.InteropServices;
+using System.Diagnostics;
 using System.Net;
 using System.Net.NetworkInformation;
 using System.Net.Sockets;
@@ -220,45 +221,39 @@ public sealed class WindowsKurulumIslemleri : IKurulumIslemleri
         catch { return false; }
     }
 
-    public KurulumSonucu Kaldir()
+    public KurulumSonucu Kaldir(int bekleyenBildirim, int yarimKomut)
     {
-        // Satış sürerken kimlik sökülmez: uçuştaki komutun sonucu eski kimlikle bildirilecek.
+        // Bakım kapısı çağıranda kapandı (yeni satış girmez). Cihaz kilidi ikinci savunma: kapı
+        // dışından gelen bir terminal işi (açılış kurtarması) sürüyorsa kimlik sökülmez.
         using var k = _kilit.TryAcquire();
-        if (k is null) return KurulumSonucu.Hata("Şu an bir satış sürüyor. Satış bitince tekrar deneyin.");
+        if (k is null) return KurulumSonucu.Hata("Şu an terminalde bir işlem sürüyor. Bitince tekrar deneyin.");
 
         var storeDir = Path.GetDirectoryName(_opt.ResolveStorePath());
         if (string.IsNullOrEmpty(storeDir)) return KurulumSonucu.Hata("Veri dizini bilinmiyor — kaldırma yapılamaz.");
-        var connectorYolu = Path.Combine(storeDir, "connector.id");
         var eskiKimlik = _key.ConnectorId;
 
-        try
-        {
-            // connectorId sır DEĞİL, kimliktir: platformdaki eski kaydı bulabilmek için adı
-            // değiştirilerek saklanır. Eklenti dizesi SIR taşır: EklentiAyarlaAsync'teki kuralla
-            // aynı sebeple yedeği alınmaz, silinir.
-            if (File.Exists(connectorYolu))
-                File.Move(connectorYolu, connectorYolu + $".kaldirildi-{DateTime.Now:yyyyMMdd-HHmmss}");
-            if (_eklentiDosya is not null && File.Exists(_eklentiDosya.Yol))
-                File.Delete(_eklentiDosya.Yol);
-        }
-        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
-        {
-            _log.LogError(e, "cihaz kaldırılamadı");
-            return KurulumSonucu.Hata($"Kaldırılamadı: {e.Message}");
-        }
+        var sonuc = CihazKaldirma.Uygula(Path.Combine(storeDir, "connector.id"), _eklentiDosya?.Yol,
+            bekleyenBildirim, yarimKomut, DateTime.Now);
+        if (sonuc.Basarili && sonuc.YenidenBaslatmaGerekli)
+            _log.LogWarning("cihaz kaldırıldı: eski connectorId {Eski}, eklenti bağlantısı silindi — yeniden başlatma gerekli",
+                string.IsNullOrEmpty(eskiKimlik) ? "(yoktu)" : eskiKimlik);
+        return sonuc;
+    }
 
-        _log.LogWarning("cihaz kaldırıldı: eski connectorId {Eski}, eklenti bağlantısı silindi — yeniden başlatma gerekli",
-            string.IsNullOrEmpty(eskiKimlik) ? "(yoktu)" : eskiKimlik);
-        return KurulumSonucu.Tamam(
-            "Cihaz kaldırıldı. Yeniden kurmak için eklentiden yeni eşleştirme kodu ve kurulum dizesi alın.",
-            yenidenBaslat: true);
+    public string? YenidenBaslatmaEngeli()
+    {
+        if (!Microsoft.Extensions.Hosting.WindowsServices.WindowsServiceHelpers.IsWindowsService())
+            return YenidenBaslatmaKarari.Engel(servisModu: false, eylemTurleri: null);
+        return YenidenBaslatmaKarari.Engel(servisModu: true, ServisKurtarmaAyari.EylemTurleri(HostComposition.ServisAdi));
     }
 
     public void YenidenBaslat()
     {
         // Windows servisi olarak çalışırken kendini başlatmak servisi KAPATIR ve ajanı servisin
         // dışında bırakır (sahada ölçüldü, 2026-10-14). Servis yöneticisine bırak: kodla çık,
-        // kurtarma eylemi (sc failure … restart) servisi yeniden açsın.
+        // kurtarma eylemi (sc failure … restart) servisi yeniden açsın. Buraya yalnız iki ön koşul
+        // sağlanınca gelinir (AgentWorker.KurulumAsync): kurtarma eylemi okundu ve bakım kapısı
+        // kapalı/boş — yani süren satış YOK ve yenisi giremiyor.
         if (Microsoft.Extensions.Hosting.WindowsServices.WindowsServiceHelpers.IsWindowsService())
         {
             _log.LogWarning("kurulum sayfası istedi: servis yeniden başlatılıyor (servis yöneticisi açacak)");
@@ -330,4 +325,69 @@ public static class GmpXmlAyar
             return $"GMP.XML yazılamadı: {e.Message}";
         }
     }
+}
+
+/// <summary>
+/// RM-0389: servisin SCM kurtarma eylemlerini <c>QueryServiceConfig2(SERVICE_CONFIG_FAILURE_ACTIONS)</c>
+/// ile okur. <c>sc qfailure</c> çıktısını ayrıştırmak yerine API: çıktı sistem diline bağlı.
+/// </summary>
+internal static class ServisKurtarmaAyari
+{
+    /// <returns>Eylem türleri (<c>SC_ACTION.Type</c>) sırayla; <c>null</c> = okunamadı.</returns>
+    public static IReadOnlyList<int>? EylemTurleri(string servisAdi)
+    {
+        IntPtr scm = IntPtr.Zero, svc = IntPtr.Zero, buf = IntPtr.Zero;
+        try
+        {
+            scm = OpenSCManagerW(null, null, ScManagerConnect);
+            if (scm == IntPtr.Zero) return null;
+            svc = OpenServiceW(scm, servisAdi, ServiceQueryConfig);
+            if (svc == IntPtr.Zero) return null;
+
+            QueryServiceConfig2W(svc, ServiceConfigFailureActions, IntPtr.Zero, 0, out var gerekli);
+            if (gerekli <= 0) return null;
+            buf = Marshal.AllocHGlobal(gerekli);
+            if (!QueryServiceConfig2W(svc, ServiceConfigFailureActions, buf, gerekli, out _)) return null;
+
+            var fa = Marshal.PtrToStructure<ServiceFailureActions>(buf);
+            var turler = new List<int>(fa.cActions);
+            var boyut = Marshal.SizeOf<ScAction>();
+            for (var i = 0; i < fa.cActions; i++)
+                turler.Add(Marshal.PtrToStructure<ScAction>(fa.lpsaActions + i * boyut).Type);
+            return turler;
+        }
+        catch { return null; }
+        finally
+        {
+            if (buf != IntPtr.Zero) Marshal.FreeHGlobal(buf);
+            if (svc != IntPtr.Zero) CloseServiceHandle(svc);
+            if (scm != IntPtr.Zero) CloseServiceHandle(scm);
+        }
+    }
+
+    private const uint ScManagerConnect = 0x0001;
+    private const uint ServiceQueryConfig = 0x0001;
+    private const uint ServiceConfigFailureActions = 2;
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct ServiceFailureActions
+    {
+        public int dwResetPeriod;
+        public IntPtr lpRebootMsg;
+        public IntPtr lpCommand;
+        public int cActions;
+        public IntPtr lpsaActions;
+    }
+
+    [StructLayout(LayoutKind.Sequential)]
+    private struct ScAction { public int Type; public int Delay; }
+
+    [DllImport("advapi32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    private static extern IntPtr OpenSCManagerW(string? machine, string? database, uint access);
+    [DllImport("advapi32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    private static extern IntPtr OpenServiceW(IntPtr scm, string name, uint access);
+    [DllImport("advapi32.dll", SetLastError = true, CharSet = CharSet.Unicode)]
+    private static extern bool QueryServiceConfig2W(IntPtr svc, uint level, IntPtr buffer, int size, out int needed);
+    [DllImport("advapi32.dll", SetLastError = true)]
+    private static extern bool CloseServiceHandle(IntPtr h);
 }

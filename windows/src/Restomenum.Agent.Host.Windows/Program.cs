@@ -8,11 +8,6 @@ using Restomenum.Agent.Host.Windows;
 // (HostComposition), üstüne donanıma bağlı gerçek kayıtlar (WindowsDeviceKey + GmpTerminalTransport)
 // eklenir. Bu proje net8.0-windows'tur ve yalnız Windows'ta derlenir/çalışır.
 
-// GMPSmartDLL GMP.XML'i ÇALIŞMA dizininden okur. Servis olarak açılınca bu C:\Windows\System32
-// olur ve DLL oradaki başka bir GMP.XML'le (COM1, TCP kapalı) cihaza ulaşamaz (sahada ölçüldü,
-// 2026-10-14). Her zaman ajanın kendi dizini.
-Directory.SetCurrentDirectory(AppContext.BaseDirectory);
-
 // --pair: ELLE eşleştirme provizyonu; --void: ELLE açık-fiş temizliği (bakım). Yapılandırma
 // sağlayıcısını bozmasın diye argümanlardan ayıklanır.
 bool eslesModu = args.Contains("--pair");
@@ -58,6 +53,18 @@ var configArgs = args
     .ToArray();
 
 var builder = Host.CreateApplicationBuilder(configArgs);
+
+// ── ÇALIŞMA DİZİNİ (RM-0389) ────────────────────────────────────────────────────────────
+// GMPSmartDLL GMP.XML'i ÇALIŞMA dizininden okur. Servis olarak açılınca bu C:\Windows\System32
+// olur ve DLL oradaki başka bir GMP.XML'le (COM1, TCP kapalı) cihaza ulaşamaz (sahada ölçüldü,
+// 2026-10-14). Bu yüzden DLL'e dokunan her şeyden önce çalışma dizini ajanın kendi dizini olur.
+// Sıra önemli: (1) builder ÖNCE kuruldu — içerik kökü ve appsettings eskisi gibi başlangıç
+// dizininden (konsol) ya da ajan dizininden (servis) gelir; (2) komut satırı ve yapılandırmadaki
+// GÖRELİ yollar dizin değişmeden önce başlangıç dizinine göre sabitlenir; (3) sonra dizin değişir.
+var baslangicDizini = Directory.GetCurrentDirectory();
+taxDosya = Yollar.Tam(taxDosya, baslangicDizini);
+AgentOptions.BaslangicDizini = baslangicDizini;
+Directory.SetCurrentDirectory(AppContext.BaseDirectory);
 
 // --config-smoke: config kanalını (session+mapping) canlı uca dener ve ÇIKAR. Cihaz anahtarı/terminal/
 // dinleyici YOK — tam DI'dan ÖNCE kısa devre, yönetici gerekmez. Yalnız Agent:DeviceConfigSetup + ağ.

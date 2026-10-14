@@ -30,12 +30,16 @@ public sealed class AgentWorker : BackgroundService
 
     private readonly IKurulumIslemleri? _kurulum;
     private readonly DeviceConfigSetupKaynakBilgisi? _eklentiKaynak;
+    private readonly BakimKapisi _bakim;
+    /// <summary>RM-0389: süreç başına kurulum istek anahtarı — sayfaya gömülür, her POST'ta geri gelmeli.</summary>
+    private readonly string _kurulumAnahtari = KurulumGuvenlik.YeniAnahtar();
 
     public AgentWorker(
         IOptions<AgentOptions> opt, ILogger<AgentWorker> log, IHostApplicationLifetime lifetime,
         LocalSaleHandler handler, Outbox outbox, CommandStore store, IKurulumIslemleri? kurulum = null,
-        DeviceConfigSetupKaynakBilgisi? eklentiKaynak = null)
+        DeviceConfigSetupKaynakBilgisi? eklentiKaynak = null, BakimKapisi? bakim = null)
     {
+        _bakim = bakim ?? new BakimKapisi();
         _eklentiKaynak = eklentiKaynak;
         _opt = opt.Value;
         _log = log;
@@ -66,6 +70,11 @@ public sealed class AgentWorker : BackgroundService
                 "sebep giderildikten sonra operatör yeniden göndermeli.", reddedilen);
         var yarim = _store.Pending().Count;
         if (yarim > 0) _log.LogWarning("{Adet} komut yarım kalmış — açılışta terminale sorulacak", yarim);
+
+        // RM-0389: servis kurtarma ayarı yoksa kurulum sayfası ajanı yeniden başlatamaz — açılışta söyle.
+        var yenidenBaslatmaEngeli = _kurulum?.YenidenBaslatmaEngeli();
+        if (yenidenBaslatmaEngeli is not null)
+            _log.LogCritical("KURULUM SAYFASI YENİDEN BAŞLATAMAZ: {Engel}", yenidenBaslatmaEngeli);
 
         HttpListener listener;
         try
@@ -199,6 +208,17 @@ public sealed class AgentWorker : BackgroundService
                 return;
             }
 
+            // RM-0389: para/fiş değiştiren her istek BAKIM KAPISINDAN girer ve yanıtı (bildirim dahil)
+            // dönene kadar içeride sayılır. Kapı kapalıysa istek KABUL EDİLMEZ — hiçbir şey denenmez,
+            // kasa "ulaşılamadı" görür; kurulum işlemi bitince ajan yeniden başlar.
+            using var giris = _bakim.Gir();
+            if (giris is null)
+            {
+                _log.LogWarning("istek reddedildi: ajan bakımda (kurulum işlemi) — kategori {Kategori} [{Kaynak}]", kategori ?? "Payment", Kaynak());
+                Respond(ctx, 503, "{\"error\":\"MAINTENANCE\"}");
+                return;
+            }
+
             // W110 — ELLE FİŞ TAMAMLAMA. Ödeme yolundan AYRI: niyeti para almak değil, alınmış
             // parayı taşıyan fişi tamamlamak. İkisini aynı ayrıştırıcıya koymak, tek bir `if`
             // hatasının satışı da bozması demekti.
@@ -279,11 +299,25 @@ public sealed class AgentWorker : BackgroundService
         if (_kurulum is null)
         { Respond(ctx, 404, "{\"error\":\"setup not available on this platform\"}"); return; }
 
+        // RM-0389: kurulum uçları yalnız bu bilgisayardan ve yalnız kendi sayfasından (CSRF/DNS
+        // yeniden bağlama). Ret sebebi loglanır; anahtarın kendisi loglanmaz.
+        var red = KurulumGuvenlik.Denetle(ctx.Request.HttpMethod,
+            ctx.Request.RemoteEndPoint is { } uc && IPAddress.IsLoopback(uc.Address),
+            ctx.Request.Headers["Host"], ctx.Request.Headers["Origin"], ctx.Request.ContentType,
+            ctx.Request.Headers[KurulumGuvenlik.AnahtarBasligi], _kurulumAnahtari, DinleyiciPortu());
+        if (red is not null)
+        {
+            _log.LogWarning("[kurulum] istek reddedildi: {Neden} ({Yontem} {Yol}, istemci {Istemci})",
+                red, ctx.Request.HttpMethod, yol, ctx.Request.RemoteEndPoint?.ToString() ?? "?");
+            Respond(ctx, 403, KurulumIstek.Json(KurulumSonucu.Hata(red)));
+            return;
+        }
+
         var alt = yol.Length > KurulumIstek.Yol.Length ? yol[(KurulumIstek.Yol.Length + 1)..] : "";
         var get = string.Equals(ctx.Request.HttpMethod, "GET", StringComparison.OrdinalIgnoreCase);
 
         if (alt == "" && get)
-        { RespondHtml(ctx, KurulumSayfasi.Html(_kurulum.Durum())); return; }
+        { RespondHtml(ctx, KurulumSayfasi.Html(_kurulum.Durum(), _kurulumAnahtari)); return; }
         if (alt == "status" && get)
         { Respond(ctx, 200, KurulumIstek.Json(_kurulum.Durum())); return; }
         if (alt == "scan" && get)
@@ -300,6 +334,27 @@ public sealed class AgentWorker : BackgroundService
         string govde;
         using (var reader = new StreamReader(ctx.Request.InputStream, ctx.Request.ContentEncoding ?? Encoding.UTF8))
             govde = await reader.ReadToEndAsync(ct);
+
+        // RM-0389: ajanı yeniden başlatan ya da kimliğini söken işlemler. ÖNCE yeniden başlatma
+        // mümkün mü (servis kurtarma ayarı), SONRA bakım kapısı (yeni satış girmez, uçuştaki biter);
+        // ikisi de geçmezse HİÇBİR değişiklik yapılmaz.
+        var bakimli = alt is "terminal" or "plugin" or "remove";
+        if (bakimli)
+        {
+            var engel = _kurulum.YenidenBaslatmaEngeli();
+            if (engel is not null)
+            {
+                _log.LogCritical("[kurulum] {Islem} reddedildi — ajan yeniden başlatılamaz: {Engel}", alt, engel);
+                Respond(ctx, 200, KurulumIstek.Json(KurulumSonucu.Hata(engel)));
+                return;
+            }
+            if (!await _bakim.BakimaAlAsync(BakimBeklemesi, ct))
+            {
+                Respond(ctx, 200, KurulumIstek.Json(KurulumSonucu.Hata(
+                    "Şu an bir satış sürüyor ya da başka bir kurulum işlemi yapılıyor. Satış bitince tekrar deneyin.")));
+                return;
+            }
+        }
 
         KurulumSonucu sonuc;
         switch (alt)
@@ -333,21 +388,46 @@ public sealed class AgentWorker : BackgroundService
                 break;
             }
             case "remove":
+            {
+                // Bakım kapısı kapalı: yeni satış girmez. Bekleyenler kapı kapandıktan SONRA sayılır,
+                // yoksa sayımla kapanış arasına bir satış sığabilirdi.
+                var esik = DateTimeOffset.UtcNow.AddHours(-LocalSaleHandler.UnknownKurtarmaSaati).ToUnixTimeMilliseconds();
                 sonuc = KurulumIstek.KaldirmaOnayi(govde, out var onayNedeni)
-                    ? _kurulum.Kaldir()
+                    ? _kurulum.Kaldir(_outbox.Depth(), _store.Pending(unknownEsigi: esik).Count)
                     : KurulumSonucu.Hata(onayNedeni ?? "onay okunamadı");
-                _log.LogWarning("[kurulum] cihaz kaldırma denemesi: {Sonuc}", sonuc.Basarili ? "başarılı" : "başarısız");
+                _log.LogWarning("[kurulum] cihaz kaldırma denemesi: {Sonuc} — {Mesaj}",
+                    sonuc.Basarili ? "başarılı" : "başarısız", sonuc.Mesaj);
                 break;
+            }
             default:
+                if (bakimli) _bakim.BakimdanCik();
                 Respond(ctx, 404, NOTFOUND);
                 return;
         }
 
-        Respond(ctx, 200, KurulumIstek.Json(sonuc));
+        var yenidenBaslat = sonuc.Basarili && sonuc.YenidenBaslatmaGerekli;
+        // Başarısız ya da yeniden başlatma gerektirmeyen işlem kapıyı açar; başarılı olan AÇMAZ —
+        // yapılandırması değişmiş/kimliği sökülmüş süreç yeniden başlayana kadar satış almamalı.
+        if (bakimli && !yenidenBaslat) _bakim.BakimdanCik();
 
-        // Yanıt GİTTİKTEN sonra yeniden başlat — tarayıcı "yeniden başlıyor" mesajını görsün.
-        if (sonuc.Basarili && sonuc.YenidenBaslatmaGerekli)
+        // Yanıt GİTTİKTEN sonra yeniden başlat — tarayıcı "yeniden başlıyor" mesajını görsün. Yanıtın
+        // ulaşması koşul DEĞİL: tarayıcı kapanmış olsa da işlem tamamlanmıştır, yeniden başlatma kurulur.
+        try { Respond(ctx, 200, KurulumIstek.Json(sonuc)); }
+        catch (Exception e) when (e is HttpListenerException or ObjectDisposedException or IOException)
+        { _log.LogWarning("[kurulum] yanıt yazılamadı ({Hata}) — işlem yine de tamamlandı", e.GetType().Name); }
+
+        if (yenidenBaslat)
             _ = Task.Run(async () => { await Task.Delay(800, CancellationToken.None); _kurulum.YenidenBaslat(); });
+    }
+
+    /// <summary>Bakım için uçuştaki satışların bitmesini bekleme tavanı (kart penceresi + bildirim).</summary>
+    private static readonly TimeSpan BakimBeklemesi = TimeSpan.FromSeconds(120);
+
+    /// <summary>Dinleyici portu (Host/Origin denetimi için). <c>http://+:7788/</c> gibi joker önekler de okunur.</summary>
+    private int DinleyiciPortu()
+    {
+        var m = System.Text.RegularExpressions.Regex.Match(_opt.ListenPrefix, @":(\d+)/?");
+        return m.Success ? int.Parse(m.Groups[1].Value) : 80;
     }
 
     /// <summary>Açılışta kayıtsız ya da eşleşmemişse kurulum sayfasını tarayıcıda açar — ilk kurulumda

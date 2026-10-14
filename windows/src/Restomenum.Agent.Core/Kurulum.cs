@@ -52,11 +52,18 @@ public interface IKurulumIslemleri
     Task<IReadOnlyList<TerminalAday>> TerminalleriTaraAsync(CancellationToken ct);
 
     /// <summary>
-    /// Kurulu cihazı KALDIRIR: platform kaydı (connectorId) ve eklenti bağlantısı silinir, ajan
-    /// kurulmamış duruma döner ve yeni bir kayıt koduyla baştan kurulabilir. Satış sürüyorsa
-    /// reddeder. Cihaz anahtarı ve GMP.XML KORUNUR — aynı makine aynı kimlikle yeniden kaydolur.
+    /// Kurulu cihazı KALDIRIR (<see cref="CihazKaldirma"/>): eklenti bağlantısı silinir, platform
+    /// kaydı (connectorId) adı değiştirilerek saklanır; ajan kurulmamış duruma döner. Satış
+    /// sürüyorsa ya da bildirilmemiş/yarım iş varsa reddeder. Cihaz anahtarı ve GMP.XML KORUNUR.
+    /// Çağıran, işlemden ÖNCE <see cref="BakimKapisi"/>'ni kapatmış olmalı.
     /// </summary>
-    KurulumSonucu Kaldir();
+    KurulumSonucu Kaldir(int bekleyenBildirim, int yarimKomut);
+
+    /// <summary>
+    /// Yeniden başlatma şu an mümkün değilse sebebi (<see cref="YenidenBaslatmaKarari"/>);
+    /// <c>null</c> = mümkün. Yeniden başlatma gerektiren işlemler bundan ÖNCE sorar.
+    /// </summary>
+    string? YenidenBaslatmaEngeli();
 
     /// <summary>Ajanı yeniden başlatır (IP ya da eklenti değişikliğinden sonra).</summary>
     void YenidenBaslat();
@@ -139,13 +146,13 @@ public static class KurulumIstek
 
     /// <summary>
     /// <c>{"confirm":"KALDIR"}</c> — kaldırma geri alınamaz, açık onay sözcüğü şart. Büyük/küçük
-    /// harf ve Türkçe ı/İ farkı gözetilmez; başka her şey reddedilir.
+    /// harf ve i/ı/İ farkı gözetilmez (kaldır, kaldir, KALDİR hepsi geçer); başka her şey reddedilir.
     /// </summary>
     public static bool KaldirmaOnayi(string govde, out string? neden)
     {
         var v = Alan(govde, "confirm", out neden);
         if (v is null) return false;
-        if (v.ToUpper(new System.Globalization.CultureInfo("tr-TR")) != "KALDIR")
+        if (v.ToUpper(new System.Globalization.CultureInfo("tr-TR")).Replace('İ', 'I') != "KALDIR")
         { neden = "onay için kutuya KALDIR yazın"; return false; }
         return true;
     }
@@ -156,6 +163,7 @@ public static class KurulumIstek
         try
         {
             using var doc = JsonDocument.Parse(govde);
+            if (doc.RootElement.ValueKind != JsonValueKind.Object) { neden = "gövde bir JSON nesnesi değil"; return null; }
             if (!doc.RootElement.TryGetProperty(ad, out var v) || v.ValueKind != JsonValueKind.String)
             { neden = $"'{ad}' alanı yok"; return null; }
             var s = v.GetString()?.Trim();
@@ -194,7 +202,8 @@ public static class KurulumIstek
 /// </summary>
 public static class KurulumSayfasi
 {
-    public static string Html(KurulumDurumu d)
+    /// <param name="anahtar">Süreç başına üretilen istek anahtarı (<see cref="KurulumGuvenlik"/>); her POST'ta geri gelir.</param>
+    public static string Html(KurulumDurumu d, string anahtar = "")
     {
         static string E(string? s) => WebUtility.HtmlEncode(s ?? "");
         var sb = new StringBuilder(12288);
@@ -390,10 +399,12 @@ public static class KurulumSayfasi
         sb.Append("<div class=\"foot\">RESTOMENUM AGENT · LOCAL SETUP CONSOLE</div>");
 
         // ── JS ───────────────────────────────────────────────────────────────────────
+        // Anahtar onaltılık (KurulumGuvenlik.YeniAnahtar); yine de kaçırılır — tırnak kıramasın.
+        sb.Append($"</div><script>\nconst ANAHTAR='{System.Web.HttpUtility.JavaScriptStringEncode(anahtar)}';");
         sb.Append("""
-</div><script>
+
 async function post(yol, govde){
-  const r = await fetch(yol,{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(govde)});
+  const r = await fetch(yol,{method:'POST',headers:{'Content-Type':'application/json','X-Kurulum-Anahtari':ANAHTAR},body:JSON.stringify(govde)});
   let j; try{ j = await r.json(); }catch{ j = {ok:false,message:'sunucu yanıtı okunamadı ('+r.status+')'}; }
   return j;
 }

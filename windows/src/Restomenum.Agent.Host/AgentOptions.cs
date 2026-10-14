@@ -1,4 +1,5 @@
 using System.ComponentModel.DataAnnotations;
+using Restomenum.Agent.Core;
 
 namespace Restomenum.Agent.Host;
 
@@ -88,9 +89,17 @@ public sealed class AgentOptions
     /// </summary>
     public bool UseInsecureDevKey { get; set; }
 
+    /// <summary>
+    /// RM-0389: sürecin BAŞLADIĞI dizin. Windows giriş noktası çalışma dizinini GMP DLL'i için
+    /// ajan dizinine çeviriyor; göreli <see cref="StorePath"/> yine başlangıç dizinine göre çözülür
+    /// (değişiklikten önceki davranış). <c>null</c> = o anki çalışma dizini.
+    /// </summary>
+    public static string? BaslangicDizini { get; set; }
+
     public string ResolveStorePath()
     {
-        if (!string.IsNullOrWhiteSpace(StorePath)) return StorePath!;
+        if (!string.IsNullOrWhiteSpace(StorePath))
+            return Yollar.Tam(StorePath, BaslangicDizini ?? Directory.GetCurrentDirectory())!;
         var kok = Environment.GetFolderPath(Environment.SpecialFolder.CommonApplicationData);
         if (string.IsNullOrWhiteSpace(kok)) kok = Path.GetTempPath();
         var dizin = Path.Combine(kok, "Restomenum", "Agent");
