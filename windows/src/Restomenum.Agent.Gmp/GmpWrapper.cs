@@ -698,6 +698,5 @@ public sealed partial class GmpWrapper : IGmpWrapper
     }
 
     private static bool Bos(string? s) => string.IsNullOrWhiteSpace(s);
-    private static string? Deger(string? s) => Bos(s) ? null : s!.Trim();   // boş → null, değilse kırpılmış
 
 }
