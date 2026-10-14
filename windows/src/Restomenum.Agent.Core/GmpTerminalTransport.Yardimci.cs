@@ -1,4 +1,4 @@
-namespace Restomenum.Agent.Core;
+﻿namespace Restomenum.Agent.Core;
 
 /// <summary>
 /// <b>YARDIMCILAR</b> — <see cref="GmpTerminalTransport"/>'un parçası (W43 bölmesi).
@@ -54,7 +54,7 @@ public sealed partial class GmpTerminalTransport
 
     private static TicketState Cevir(GmpTicket t, bool acik) => new(
         HasOpenTicket: acik, TotalAmountMinor: t.TotalAmountMinor, PaidAmountMinor: t.PaidAmountMinor,
-        Rrn: t.Rrn, CardLast4: t.CardLast4, PaymentCount: t.PaymentCount,
+        Rrn: t.Rrn, CardLast4: t.CardLast4, ApprovalCode: t.ApprovalCode, PaymentCount: t.PaymentCount,
         LastPaymentErrorCode: t.LastPaymentErrorCode, LastPaymentErrorText: t.LastPaymentErrorText,
         LastPaymentAppErrorCode: t.LastPaymentAppErrorCode,
         LastPaymentAppErrorText: t.LastPaymentAppErrorText,

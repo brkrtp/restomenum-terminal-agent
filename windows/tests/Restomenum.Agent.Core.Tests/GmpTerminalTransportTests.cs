@@ -1414,11 +1414,13 @@ public class GmpTerminalTransportTests
     public async Task TamOdeme_fis_basilir_ve_KAPANIR()
     {
         var (t, g, _) = Kur();
-        g.AfterPayment = new GmpTicket(3000, 3000, 1, GmpPaymentTypes.Card, "RRN1", "4242");
+        g.AfterPayment = new GmpTicket(3000, 3000, 1, GmpPaymentTypes.Card, "RRN1", "4242", ApprovalCode: "123456");
         var r = await t.SaleAsync(Req());
 
         Assert.Equal(TransportOutcome.Approved, r.Outcome);
         Assert.Equal("RRN1", r.Rrn);
+        Assert.Equal("123456", r.ApprovalCode);   // RM-0396: onay kodu sonuca taşınır
+        Assert.Null(r.Scheme);                    // Ingenico kart şeması vermez (README)
         // ⚠️ Sıraya `Payment` ile baskı arasında bir OptionFlags+GetTicket EKLENDİ (K-26): fiş
         // kapanınca deftere yazılacak ödeme satırları kapatMADAN ÖNCE okunmalı — `Close` sonrası
         // fiş erişilemez olur ve o satırların kaynağı kaybolur.
@@ -1589,6 +1591,22 @@ public class GmpTerminalTransportTests
         Assert.Equal(ProbeVerdict.Landed, p.Verdict);
         Assert.Equal(1000, p.ApprovedAmountMinor);
         Assert.Equal(2000, p.RemainingMinor);   // kalan var ve bu ARIZA DEĞİL
+    }
+
+    [Fact]
+    public async Task Probe_Landed_bankanin_ONAY_KODUNU_tasir()
+    {
+        // RM-0396: kurtarma yolu da onay kodunu taşımalı (sahada 2026-10-14 approvalCode hep NULL'dı).
+        var (t, g, _) = Kur();
+        g.Ticket = new GmpTicket(3000, 0, 0, 0);
+        g.Codes["Payment"] = GmpCodes.Timeout;
+        await t.SaleAsync(Req(oturum: "oturum-A"));
+
+        g.Ticket = new GmpTicket(3000, 3000, 1, GmpPaymentTypes.Card, "RRN9", "8012", ApprovalCode: "654321");
+        var p = await t.ProbeAsync(Req(oturum: "oturum-A"));
+
+        Assert.Equal(ProbeVerdict.Landed, p.Verdict);
+        Assert.Equal("654321", p.ApprovalCode);
     }
 
     [Fact]

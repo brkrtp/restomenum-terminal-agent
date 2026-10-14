@@ -437,7 +437,10 @@ public sealed record PaymentProbe(
     string? Info = null,
 
     /// <summary>Cihazın ham hata izi (<c>AdditionalResponse</c>) — teşhis metni, dallanma için DEĞİL.</summary>
-    string? ProviderResultCode = null);
+    string? ProviderResultCode = null,
+
+    /// <summary>RM-0396: bankanın onay kodu (bkz. <see cref="GmpTicket.ApprovalCode"/>); günlüğe yazılmaz.</summary>
+    string? ApprovalCode = null);
 
 /// <summary>Terminaldeki açık fişin durumu — ham okuma.</summary>
 public sealed record TicketState(
@@ -471,7 +474,10 @@ public sealed record TicketState(
     bool PaymentsAreComplete = false,
 
     /// <summary><c>ST_PaymentErrMessage.AppErrorMsg</c> — ayrı tutuluyor, birleştirme teşhisi kör eder.</summary>
-    string? LastPaymentAppErrorText = null)
+    string? LastPaymentAppErrorText = null,
+
+    /// <summary>RM-0396: bankanın onay kodu (bkz. <see cref="GmpTicket.ApprovalCode"/>); günlüğe yazılmaz.</summary>
+    string? ApprovalCode = null)
 {
     /// <summary>Fiş tamamen ödenmiş mi? Sahadaki kurtarma mantığının aynısı.</summary>
     public bool IsFullyPaid => TotalAmountMinor > 0 && PaidAmountMinor >= TotalAmountMinor;

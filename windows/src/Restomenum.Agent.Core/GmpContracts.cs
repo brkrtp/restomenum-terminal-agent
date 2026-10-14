@@ -479,7 +479,13 @@ public readonly record struct GmpTicket(
     /// (W102). Bu yüzden <b>bayrak yokluğu tek başına karar dayanağı yapılmaz</b>;
     /// <see cref="TicketFlags"/> yalnız SET olan bitlere bakar.</para>
     /// </summary>
-    uint TransactionFlags = 0)
+    uint TransactionFlags = 0,
+
+    /// <summary>
+    /// RM-0396: bankanın onay (provizyon) kodu — son dolu banka kaydının <c>authorizeCode</c>'u.
+    /// Referans alanıdır, kart verisi değil (§12.3); yine de günlüğe YAZILMAZ. <c>null</c> = yok.
+    /// </summary>
+    string? ApprovalCode = null)
 {
     public bool IsFullyPaid => TotalAmountMinor > 0 && PaidAmountMinor >= TotalAmountMinor;
     public long RemainingMinor => Math.Max(0, TotalAmountMinor - PaidAmountMinor);

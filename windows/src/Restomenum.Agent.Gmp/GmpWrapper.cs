@@ -609,6 +609,7 @@ public sealed partial class GmpWrapper : IGmpWrapper
         int lastType = 0;
         string? rrn = null;
         string? last4 = null;
+        string? onayKodu = null;   // RM-0396: son dolu banka kaydının onay kodu (günlüğe YAZILMAZ)
         string? errCode = null;
         string? appErrCode = null;
         string? errText = null;
@@ -657,6 +658,7 @@ public sealed partial class GmpWrapper : IGmpWrapper
                 if (bank is not null)
                 {
                     rrn = string.IsNullOrWhiteSpace(bank.rrn) ? null : bank.rrn;
+                    onayKodu = string.IsNullOrWhiteSpace(bank.authorizeCode) ? null : bank.authorizeCode.Trim();
                     var pan = bank.stCard?.pan;
                     if (!string.IsNullOrEmpty(pan))
                     {
@@ -686,6 +688,7 @@ public sealed partial class GmpWrapper : IGmpWrapper
         // okunmuş olmalı hem de dizi o kadarını taşıyabilmiş olmalı.
         return new GmpTicket(total, paid, count, lastType, rrn, last4, errCode, errText, appErrCode,
             appErrText, satirlar, PaymentsAreComplete: dolu == count && uzunluk >= count,
+            ApprovalCode: onayKodu,
             TotalDiscountMinor: indirim, TotalTaxMinor: kdv,
             PrinterLines: yaziciSatirlari, PrinterLineCount: t.totalNumberOfPrinterLines,
             // W104: HAM taşınır. Ödeme satırlarının aksine burada pencere/kırpma yok — cihazın
