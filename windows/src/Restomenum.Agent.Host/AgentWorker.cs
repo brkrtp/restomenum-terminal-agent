@@ -286,7 +286,10 @@ public sealed class AgentWorker : BackgroundService
         catch (Exception e) when (e is not OperationCanceledException)
         {
             _log.LogError(e, "istek işlenemedi");
-            try { Respond(ctx, 500, "{\"error\":\"internal\"}"); } catch { /* bağlantı kopmuş olabilir */ }
+            // Yanıt yazımı zaten başlamış ya da bağlantı kopmuş olabilir: 500 yazılamazsa istisna YUTULMAZ,
+            // türü uyarı olarak loglanır (proje kuralı: boş catch yok). Asıl hata yukarıda loglandı.
+            try { Respond(ctx, 500, "{\"error\":\"internal\"}"); }
+            catch (Exception yazim) { _log.LogWarning("500 yanıtı yazılamadı: {Tur}", yazim.GetType().Name); }
         }
     }
 
