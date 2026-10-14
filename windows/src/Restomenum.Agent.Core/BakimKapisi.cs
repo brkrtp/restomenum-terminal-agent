@@ -94,11 +94,5 @@ public sealed class BakimKapisi
             if (Interlocked.Exchange(ref _bitti, 1) != 0) return;
             if (!_kapaliTut) _k.Ac();
         }
-
-        /// <summary>
-        /// <see cref="KapaliTut"/> denmiş olsa bile kapıyı açar: beklenen yeniden başlatma
-        /// GERÇEKLEŞMEDİ ve süreç çalışmaya devam ediyor — sonsuza kadar satışa kapalı kalmamalı.
-        /// </summary>
-        public void KapiyiAc() => _k.Ac();
     }
 }

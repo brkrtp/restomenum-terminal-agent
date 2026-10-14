@@ -351,7 +351,7 @@ public sealed class AgentWorker : BackgroundService
         { _log.LogWarning("[kurulum] yanıt yazılamadı ({Hata}) — işlem yine de tamamlandı", e.GetType().Name); }
 
         if (yanit.YenidenBaslat)
-            _ = Task.Run(async () => { await Task.Delay(800, CancellationToken.None); if (!_kurulumIsleyici.YenidenBaslat(out var tur)) _log.LogError("[kurulum] ajan yeniden başlatılamadı ({Tur}) — bakım kapısı açıldı, elle yeniden başlatın", tur); });
+            _ = Task.Run(async () => { await Task.Delay(800, CancellationToken.None); if (!_kurulumIsleyici.YenidenBaslat(out var tur)) _log.LogError("[kurulum] ajan yeniden başlatılamadı ({Tur}) — satış kapalı kalıyor, elle yeniden başlatın", tur); });
     }
 
     /// <summary>Bakım için uçuştaki satışların bitmesini bekleme tavanı (kart penceresi + bildirim).</summary>

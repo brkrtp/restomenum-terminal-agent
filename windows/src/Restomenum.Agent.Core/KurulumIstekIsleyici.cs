@@ -27,18 +27,20 @@ public sealed class KurulumIstekIsleyici(
 {
     private const string NotFound = "{\"error\":\"not found\"}";
 
-    /// <summary>Yeniden başlatma bekleyen bakımın sahipliği; başlatma başarısızsa kapı bununla açılır.</summary>
-    private BakimKapisi.BakimSahipligi? _yenidenBaslatmaBekleyen;
+    /// <summary>Bekleyen yeniden başlatmadan önceki işlem yarıda mı kaldı (değişikliğin durumu belirsiz)?</summary>
+    private volatile bool _durumBelirsiz;
     /// <summary>Yeniden başlatma başarısız olduysa sayfa ve durum bunu söyler.</summary>
     private volatile string? _yenidenBaslatmaHatasi;
 
-    public const string ElleYenidenBaslatin =
-        "Ajan kendini yeniden başlatamadı. Değişiklik kaydedildi ama etkili olması için ajanı elle yeniden başlatın " +
-        "(servis: Restart-Service RestomenumAgent; konsol: pencereyi kapatıp yeniden açın).";
+    private const string ElleYenidenBaslatin =
+        "elle yeniden başlatın (servis: Restart-Service RestomenumAgent; konsol: pencereyi kapatıp yeniden açın). " +
+        "Yeniden başlatılana kadar satış alınmaz.";
 
     /// <summary>
-    /// Yanıt yazıldıktan sonra çağrılır. Başlatma başarısızsa (false ya da istisna) kapı AÇILIR ve
-    /// durum "elle yeniden başlatın" der (denetim 3, Fable: konsol modunda kapı sonsuza kadar kapalı kalıyordu).
+    /// Yanıt yazıldıktan sonra çağrılır. Yeniden başlatmaya YALNIZ bir değişiklik yapıldıktan ya da
+    /// işlem yarıda kaldıktan sonra gelinir; başlatma başarısızsa (false ya da istisna) kapı KAPALI
+    /// KALIR — açmak süreci ESKİ ayarla satışa açardı (son denetim, Codex: yeni terminal adresi diskte,
+    /// eski bağlantı bellekte). Durum "elle yeniden başlatın" der; yeni süreç kapı açık başlar.
     /// </summary>
     public bool YenidenBaslat() => YenidenBaslat(out _);
 
@@ -49,8 +51,9 @@ public sealed class KurulumIstekIsleyici(
         try { basladi = islem.YenidenBaslat(); if (!basladi) hataTuru = "başlatılamadı"; }
         catch (Exception e) { basladi = false; hataTuru = e.GetType().Name; }
         if (basladi) return true;
-        Interlocked.Exchange(ref _yenidenBaslatmaBekleyen, null)?.KapiyiAc();
-        _yenidenBaslatmaHatasi = ElleYenidenBaslatin;
+        _yenidenBaslatmaHatasi = (_durumBelirsiz
+            ? "Kurulum işlemi yarıda kaldı ve durum doğrulanamadı; ajan yeniden başlatılamadı — "
+            : "Ayar kaydedildi ama ajan yeniden başlatılamadı — ") + ElleYenidenBaslatin;
         return false;
     }
 
@@ -146,7 +149,7 @@ public sealed class KurulumIstekIsleyici(
         {
             // Değişiklik yapıldı mı bilinmiyor: süreç satış almasın, temiz açılışla durum diskten okunsun.
             sahiplik.KapaliTut();
-            _yenidenBaslatmaBekleyen = sahiplik;
+            _durumBelirsiz = true;
             return new(200, KurulumIstek.Json(KurulumSonucu.Hata(
                 "İşlem beklenmedik bir hatayla yarıda kaldı. Güvenlik için ajan yeniden başlatılıyor; " +
                 "açıldıktan sonra sayfayı yenileyip durumu kontrol edin.")),
@@ -154,7 +157,7 @@ public sealed class KurulumIstekIsleyici(
         }
 
         var yenidenBaslat = sonuc.Basarili && sonuc.YenidenBaslatmaGerekli;
-        if (yenidenBaslat) { sahiplik.KapaliTut(); _yenidenBaslatmaBekleyen = sahiplik; }
+        if (yenidenBaslat) { sahiplik.KapaliTut(); _durumBelirsiz = false; }
         return new(200, KurulumIstek.Json(sonuc), YenidenBaslat: yenidenBaslat,
             Log: $"{i.AltYol} denemesi: {(sonuc.Basarili ? "başarılı" : "başarısız")} — {sonuc.Mesaj}");
     }

@@ -221,11 +221,16 @@ public class KurulumIstekIsleyiciTests
         Assert.Null(kapi.Gir());
     }
 
-    // ── YENİDEN BAŞLATMA BAŞARISIZSA kapı açılır, sayfa "elle yeniden başlatın" der ────────────
+    // ── YENİDEN BAŞLATMA BAŞARISIZSA kapı KAPALI kalır, sayfa "elle yeniden başlatın" der ───────
+    // Son denetim (Codex, facc86c): yeniden başlatma yalnız bir değişiklik yapıldıktan (ya da durum
+    // belirsizken) denenir. Başarısız olunca kapıyı açmak, süreci ESKİ ayarla satışa açıyordu — yeni
+    // terminal adresi diskte, eski bağlantı bellekte. Değişiklik yapılmayan yollar zaten yeniden
+    // başlatmaya hiç gelmez ve kapıyı açar (yukarıdaki port/başarısız/engel testleri).
 
-    private static async Task<(KurulumIstekIsleyici, SahteIslemler, BakimKapisi)> YenidenBaslatmaBekleyen()
+    private static async Task<(KurulumIstekIsleyici, SahteIslemler, BakimKapisi)> YenidenBaslatmaBekleyen(Exception? islemIstisnasi = null)
     {
         var (isleyici, islem, kapi) = Kur();
+        islem.TerminalFirlat = islemIstisnasi;
         var y = await isleyici.IsleAsync(Istek("POST", "terminal", "{\"ip\":\"127.0.0.1\"}"), default);
         Assert.True(y.YenidenBaslat);
         Assert.Null(kapi.Gir());
@@ -233,32 +238,49 @@ public class KurulumIstekIsleyiciTests
     }
 
     [Fact]
-    public async Task Yeniden_baslatma_basarisiz_donerse_kapi_ACILIR_ve_durum_elle_baslatin_der()
+    public async Task Degisiklikten_sonra_yeniden_baslatma_basarisizsa_kapi_KAPALI_kalir_ve_elle_baslatin_der()
     {
-        // Denetim 3 (Fable): konsol modunda yeni süreç başlatılamazsa kapı sonsuza kadar kapalı kalıyordu.
         var (isleyici, islem, kapi) = await YenidenBaslatmaBekleyen();
         islem.YenidenBaslatSonucu = () => false;
         Assert.False(isleyici.YenidenBaslat());
-        KapiAcik(kapi);
+        Assert.Null(kapi.Gir());                                         // eski ayarla satış YOK
         var durum = await isleyici.IsleAsync(Istek("GET", "status"), default);
         Assert.Contains("elle yeniden", durum.Govde);
+        Assert.Contains("kaydedildi", durum.Govde);
     }
 
     [Fact]
-    public async Task Yeniden_baslatma_istisna_atarsa_da_kapi_ACILIR()
+    public async Task Yeniden_baslatma_istisna_atarsa_da_kapi_KAPALI_kalir()
     {
         var (isleyici, islem, kapi) = await YenidenBaslatmaBekleyen();
         islem.YenidenBaslatSonucu = () => throw new System.ComponentModel.Win32Exception(5);
-        Assert.False(isleyici.YenidenBaslat());
-        KapiAcik(kapi);
+        Assert.False(isleyici.YenidenBaslat(out var tur));
+        Assert.Equal("Win32Exception", tur);
+        Assert.Null(kapi.Gir());
     }
 
     [Fact]
-    public async Task Yeniden_baslatma_basarili_donerse_kapi_KAPALI_kalir()
+    public async Task Islem_yarida_kaldiysa_ve_yeniden_baslatma_basarisizsa_kapi_KAPALI_durum_DOGRULANAMADI_der()
+    {
+        // Fable R05: istisna yolunda da sahiplik bekleyen yeniden başlatmaya bağlı; kesinlik iddiası yok.
+        var (isleyici, islem, kapi) = await YenidenBaslatmaBekleyen(new IOException("disk"));
+        islem.YenidenBaslatSonucu = () => false;
+        Assert.False(isleyici.YenidenBaslat());
+        Assert.Null(kapi.Gir());
+        var durum = await isleyici.IsleAsync(Istek("GET", "status"), default);
+        Assert.Contains("elle yeniden", durum.Govde);
+        Assert.Contains("rulanamad", durum.Govde);   // "doğrulanamadı" — Türkçe harfler JSON'da kaçışlı
+        Assert.DoesNotContain("kaydedildi", durum.Govde);
+    }
+
+    [Fact]
+    public async Task Yeniden_baslatma_basarili_donerse_kapi_KAPALI_kalir_ve_not_yok()
     {
         var (isleyici, islem, kapi) = await YenidenBaslatmaBekleyen();
         Assert.True(isleyici.YenidenBaslat());
         Assert.Equal(1, islem.YenidenBaslatCagrisi);
         Assert.Null(kapi.Gir());
+        var durum = await isleyici.IsleAsync(Istek("GET", "status"), default);
+        Assert.DoesNotContain("elle yeniden", durum.Govde);
     }
 }
