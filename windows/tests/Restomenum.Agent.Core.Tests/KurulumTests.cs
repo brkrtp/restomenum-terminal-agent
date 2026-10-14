@@ -150,6 +150,77 @@ public class KurulumTests
         Assert.DoesNotContain("<b>hata</b>", html);
     }
 
+    // ── KALDIRMA ────────────────────────────────────────────────────────────────
+
+    [Fact]
+    public void Kaldirma_yalniz_acik_KALDIR_onayiyla_kabul_edilir()
+    {
+        // Yanlışlıkla basılan bir düğme cihazı platformdan koparmamalı: onay sözcüğü şart.
+        Assert.True(KurulumIstek.KaldirmaOnayi("{\"confirm\":\"KALDIR\"}", out var ok));
+        Assert.Null(ok);
+        Assert.True(KurulumIstek.KaldirmaOnayi("{\"confirm\":\"  kaldır \"}", out _));   // büyük/küçük, Türkçe ı
+        Assert.True(KurulumIstek.KaldirmaOnayi("{\"confirm\":\"kaldir\"}", out _));      // Türkçe klavyesiz yazım
+        Assert.True(KurulumIstek.KaldirmaOnayi("{\"confirm\":\"KALDİR\"}", out _));
+
+        Assert.False(KurulumIstek.KaldirmaOnayi("{}", out var yok));
+        Assert.Contains("yok", yok);
+        Assert.False(KurulumIstek.KaldirmaOnayi("{\"confirm\":\"evet\"}", out var yanlis));
+        Assert.Contains("KALDIR", yanlis);
+        Assert.False(KurulumIstek.KaldirmaOnayi("json degil", out var bozuk));
+        Assert.Contains("JSON", bozuk);
+    }
+
+    [Fact]
+    public void Sayfa_kurulu_cihazda_kaldirma_bolumunu_onay_alaniyla_gosterir()
+    {
+        var html = KurulumSayfasi.Html(new KurulumDurumu(Kayitli: true, Esli: true, EklentiAdresi: "x.workers.dev"));
+        Assert.Contains("Cihazı kaldır", html);
+        Assert.Contains("id=\"kaldirOnay\"", html);
+        Assert.Contains("/setup/remove", html);
+    }
+
+    [Fact]
+    public void Sayfa_yalniz_eklenti_bagliyken_de_kaldirma_bolumunu_gosterir()
+    {
+        // Kaydı olmayan ama eklenti dizesi kalmış cihaz da temizlenebilmeli (kart koşulu VEYA).
+        var html = KurulumSayfasi.Html(new KurulumDurumu(Kayitli: false, Esli: false, EklentiAdresi: "x.workers.dev"));
+        Assert.Contains("id=\"kaldirOnay\"", html);
+    }
+
+    [Fact]
+    public void Kaldirma_dugmesi_onayi_sunucunun_bekledigi_ALANLA_gonderir()
+    {
+        // Alan adı JS'te değişirse düğme hiç çalışmaz ama başka hiçbir test bunu görmezdi (Fable C).
+        var html = KurulumSayfasi.Html(new KurulumDurumu(true, true, EklentiAdresi: "x"));
+        Assert.Contains("post('/setup/remove',{confirm:document.getElementById('kaldirOnay').value})", html);
+    }
+
+    [Fact]
+    public void Sayfa_istek_anahtarini_gomer_ve_her_POST_ta_gonderir()
+    {
+        var html = KurulumSayfasi.Html(new KurulumDurumu(true, true), anahtar: "abc123");
+        Assert.Contains("const ANAHTAR='abc123'", html);
+        Assert.Contains("'X-Kurulum-Anahtari':ANAHTAR", html);
+        Assert.Contains("'Content-Type':'application/json'", html);
+    }
+
+    [Fact]
+    public void Govde_nesne_degilse_sebep_soylenir_istisna_firlatilmaz()
+    {
+        Assert.False(KurulumIstek.KaldirmaOnayi("[1,2]", out var neden));
+        Assert.Contains("nesne", neden);
+        Assert.Null(KurulumIstek.Kod("\"metin\"", out var n2));
+        Assert.Contains("nesne", n2);
+    }
+
+    [Fact]
+    public void Sayfa_hic_kurulmamis_cihazda_kaldirma_bolumunu_GOSTERMEZ()
+    {
+        // Kaldırılacak kayıt da eklenti de yokken düğme yalnız kafa karıştırır.
+        var html = KurulumSayfasi.Html(new KurulumDurumu(Kayitli: false, Esli: false));
+        Assert.DoesNotContain("id=\"kaldirOnay\"", html);
+    }
+
     // ── JSON ────────────────────────────────────────────────────────────────────
 
     [Fact]

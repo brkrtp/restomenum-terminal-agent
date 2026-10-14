@@ -69,7 +69,7 @@ public sealed class LocalSaleHandler : IDeviceIdleGate
     private readonly SemaphoreSlim _kurtarmaKilidi = new(1, 1);
 
     /// <summary>Açılışta yoklanacak <c>UNKNOWN</c> kayıtların yaş sınırı (saat).</summary>
-    private const int UnknownKurtarmaSaati = 24;
+    public const int UnknownKurtarmaSaati = 24;
 
     /// <summary>
     /// Kayıp kapanış kurtarmasının YAŞ EŞİĞİ (saniye, W76). Normal akışın kapanış→outbox aralığı
