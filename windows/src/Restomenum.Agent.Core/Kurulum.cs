@@ -52,12 +52,13 @@ public interface IKurulumIslemleri
     Task<IReadOnlyList<TerminalAday>> TerminalleriTaraAsync(CancellationToken ct);
 
     /// <summary>
-    /// Kurulu cihazı KALDIRIR (<see cref="CihazKaldirma"/>): eklenti bağlantısı silinir, platform
-    /// kaydı (connectorId) adı değiştirilerek saklanır; ajan kurulmamış duruma döner. Satış
-    /// sürüyorsa ya da bildirilmemiş/yarım iş varsa reddeder. Cihaz anahtarı ve GMP.XML KORUNUR.
-    /// Çağıran, işlemden ÖNCE <see cref="BakimKapisi"/>'ni kapatmış olmalı.
+    /// Kurulu cihazı KALDIRIR (<see cref="CihazKaldirici"/>): eklenti bağlantısı silinir, platform
+    /// kaydı (connectorId) adı değiştirilerek saklanır; ajan kurulmamış duruma döner. Terminalde iş
+    /// sürüyorsa ya da bekleyen/reddedilmiş/yarım iş varsa reddeder. Cihaz anahtarı ve GMP.XML KORUNUR.
+    /// Çağıran, işlemden ÖNCE <see cref="BakimKapisi"/>'ni kapatmış olmalı; <paramref name="say"/>
+    /// cihaz kilidi alındıktan SONRA çağrılır.
     /// </summary>
-    KurulumSonucu Kaldir(int bekleyenBildirim, int yarimKomut);
+    KurulumSonucu Kaldir(Func<BekleyenIsler> say);
 
     /// <summary>
     /// Yeniden başlatma şu an mümkün değilse sebebi (<see cref="YenidenBaslatmaKarari"/>);
@@ -127,7 +128,10 @@ public static class KurulumIstek
         {
             using var doc = JsonDocument.Parse(govde);
             if (doc.RootElement.TryGetProperty("port", out var p) && p.ValueKind == JsonValueKind.Number)
-                port = p.GetInt32();
+            {
+                // Denetim 2 (Codex 1): GetInt32 taşan sayıda FormatException atıyordu.
+                if (!p.TryGetInt32(out port)) { neden = $"port {p.GetRawText()} aralık dışı"; return null; }
+            }
         }
         catch (JsonException) { /* ip zaten okundu; port varsayılan */ }
         if (port is < 1 or > 65535) { neden = $"port {port} aralık dışı"; return null; }

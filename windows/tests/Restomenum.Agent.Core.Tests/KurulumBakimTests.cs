@@ -4,27 +4,29 @@ using Xunit;
 namespace Restomenum.Agent.Core.Tests;
 
 /// <summary>
-/// <b>RM-0389 — kurulum sayfasının ajanı yeniden başlatan / kimliği söken işlemleri.</b> Denetim
-/// (Codex + Fable, ed0cffa) dört açık buldu: kaldırma satış ortasına denk gelebiliyordu, başka bir
-/// site tarayıcı üzerinden kaldırmayı tetikleyebiliyordu, yarım kalan kaldırma geri dönülemez bir
-/// ara duruma düşüyordu ve servis kurtarma ayarı yokken "yeniden başlıyor" yalan oluyordu. Buradaki
+/// <b>RM-0389 — kurulum sayfasının ajanı yeniden başlatan / kimliği söken işlemleri.</b> Denetimler
+/// (Codex + Fable, ed0cffa ve 7c430dc) şunları buldu: kaldırma satış ya da arka plan bildirimi
+/// ortasına denk gelebiliyordu, başka bir site tarayıcı üzerinden kaldırmayı tetikleyebiliyordu,
+/// yarım kalan kaldırma geri dönülemez bir ara duruma düşüyordu, servis kurtarma ayarı eksikken
+/// "yeniden başlıyor" yalan oluyordu ve çözülmemiş eski satışlar kontrolden kaçıyordu. Buradaki
 /// çiviler bunların her birini ayrı ayrı tutar.
 /// </summary>
 public class KurulumBakimTests
 {
-    // ── BAKIM KAPISI: yeni satış girişini atomik kapatır, uçuştakini bekler ────────────────
+    // ── BAKIM KAPISI: yeni girişi atomik kapatır, içeridekini bekler, sahipliği güvenle bırakır ──
 
     [Fact]
-    public void Bakimdayken_yeni_satis_GIREMEZ()
+    public async Task Bakimdayken_yeni_is_GIREMEZ()
     {
         var k = new BakimKapisi();
-        Assert.True(k.BakimaAlAsync(TimeSpan.FromSeconds(1)).Result);
+        using var s = await k.BakimaAlAsync(TimeSpan.FromSeconds(1));
+        Assert.NotNull(s);
         Assert.Null(k.Gir());
         Assert.True(k.Bakimda);
     }
 
     [Fact]
-    public async Task Bakim_ucustaki_satisin_BITMESINI_bekler()
+    public async Task Bakim_icerideki_isin_BITMESINI_bekler()
     {
         var k = new BakimKapisi();
         var satis = k.Gir();
@@ -32,37 +34,101 @@ public class KurulumBakimTests
 
         var bakim = k.BakimaAlAsync(TimeSpan.FromSeconds(5));
         await Task.Delay(100);
-        Assert.False(bakim.IsCompleted);          // satış sürüyor → bakım başlamadı
-        Assert.Null(k.Gir());                     // ama yeni satış artık giremez (kapı kapandı)
+        Assert.False(bakim.IsCompleted);          // iş sürüyor → bakım başlamadı
+        Assert.Null(k.Gir());                     // ama yeni iş artık giremez (kapı kapandı)
 
         satis!.Dispose();
-        Assert.True(await bakim);
+        using var s = await bakim;
+        Assert.NotNull(s);
+    }
+
+    [Fact]
+    public async Task Iki_isten_biri_cikinca_bakim_HALA_bekler()
+    {
+        var k = new BakimKapisi();
+        var a = k.Gir()!;
+        var b = k.Gir()!;
+        var bakim = k.BakimaAlAsync(TimeSpan.FromSeconds(5));
+        a.Dispose();
+        await Task.Delay(100);
+        Assert.False(bakim.IsCompleted);
+        b.Dispose();
+        using var s = await bakim;
+        Assert.NotNull(s);
+    }
+
+    [Fact]
+    public async Task Ayni_girisi_iki_kez_birakmak_sayaci_bir_kez_dusurur()
+    {
+        var k = new BakimKapisi();
+        var a = k.Gir()!;
+        var b = k.Gir()!;
+        a.Dispose();
+        a.Dispose();                               // ikinci bırakma b'yi "çıkmış" saymamalı
+        var bakim = k.BakimaAlAsync(TimeSpan.FromSeconds(5));
+        await Task.Delay(100);
+        Assert.False(bakim.IsCompleted);
+        b.Dispose();
+        using var s = await bakim;
+        Assert.NotNull(s);
     }
 
     [Fact]
     public async Task Bakim_suresi_dolarsa_kapiyi_GERI_ACAR()
     {
-        // Bitmeyen bir satış yüzünden ajan sonsuza kadar satışa kapalı kalmamalı.
+        // Bitmeyen bir iş yüzünden ajan sonsuza kadar satışa kapalı kalmamalı.
         var k = new BakimKapisi();
         using var satis = k.Gir();
-        Assert.False(await k.BakimaAlAsync(TimeSpan.FromMilliseconds(150)));
+        Assert.Null(await k.BakimaAlAsync(TimeSpan.FromMilliseconds(150)));
         Assert.False(k.Bakimda);
         using var yeni = k.Gir();
         Assert.NotNull(yeni);
     }
 
     [Fact]
-    public async Task Ayni_anda_iki_bakim_istegi_ikincisini_reddeder()
+    public async Task Bakim_beklerken_iptal_edilirse_kapiyi_GERI_ACAR()
     {
         var k = new BakimKapisi();
-        Assert.True(await k.BakimaAlAsync(TimeSpan.FromSeconds(1)));
-        Assert.False(await k.BakimaAlAsync(TimeSpan.FromSeconds(1)));
-        k.BakimdanCik();
-        Assert.NotNull(k.Gir());
+        using var satis = k.Gir();
+        using var iptal = new CancellationTokenSource(100);
+        Assert.Null(await k.BakimaAlAsync(TimeSpan.FromSeconds(30), iptal.Token));
+        Assert.False(k.Bakimda);
     }
 
     [Fact]
-    public async Task Yogun_eszamanli_giriste_bakim_basladiktan_sonra_HICBIR_satis_girmez()
+    public async Task Sahiplik_birakilinca_kapi_ACILIR_KapaliTut_denince_ACILMAZ()
+    {
+        var k = new BakimKapisi();
+        using (var s = await k.BakimaAlAsync(TimeSpan.FromSeconds(1))) { Assert.NotNull(s); }
+        using (var g = k.Gir()) Assert.NotNull(g);
+
+        var s2 = await k.BakimaAlAsync(TimeSpan.FromSeconds(1));
+        s2!.KapaliTut();
+        s2.Dispose();
+        Assert.Null(k.Gir());                      // yeniden başlatma bekleniyor
+    }
+
+    [Fact]
+    public async Task Ayni_anda_iki_bakim_istegi_ikincisini_reddeder()
+    {
+        var k = new BakimKapisi();
+        using var s = await k.BakimaAlAsync(TimeSpan.FromSeconds(1));
+        Assert.Null(await k.BakimaAlAsync(TimeSpan.FromSeconds(1)));
+    }
+
+    [Fact]
+    public async Task Istisna_atan_is_de_kapidan_CIKAR()
+    {
+        // Arka plan işi (kurtarma/bildirim) patlarsa sayaç asılı kalmamalı — yoksa bakım hiç başlamaz.
+        var k = new BakimKapisi();
+        try { using var g = k.Gir(); throw new InvalidOperationException(); }
+        catch (InvalidOperationException) { }
+        using var s = await k.BakimaAlAsync(TimeSpan.FromMilliseconds(200));
+        Assert.NotNull(s);
+    }
+
+    [Fact]
+    public async Task Yogun_eszamanli_giriste_bakim_basladiktan_sonra_HICBIR_is_girmez()
     {
         var k = new BakimKapisi();
         var bakimdanSonraGiren = 0;
@@ -79,7 +145,8 @@ public class KurulumBakimTests
         })).ToArray();
 
         await Task.Delay(50);
-        Assert.True(await k.BakimaAlAsync(TimeSpan.FromSeconds(5)));
+        using var s = await k.BakimaAlAsync(TimeSpan.FromSeconds(5));
+        Assert.NotNull(s);
         Volatile.Write(ref bakimBasladi, true);
         await Task.Delay(100);
         dur.Cancel();
@@ -89,7 +156,9 @@ public class KurulumBakimTests
 
     // ── KALDIRMA: sıra, kısmi durum, bekleyen iş ─────────────────────────────────────────
 
-    private static (string dizin, string connector, string eklenti) GeciciKurulum(bool connectorVar = true, bool eklentiVar = true)
+    private static readonly DateTime Saat = new(2026, 10, 14, 14, 6, 50);
+
+    private static (CihazKaldirici kaldirici, string connector, string eklenti) GeciciKurulum(bool connectorVar = true, bool eklentiVar = true)
     {
         var dizin = Path.Combine(Path.GetTempPath(), "rm0389-" + Guid.NewGuid().ToString("N"));
         Directory.CreateDirectory(dizin);
@@ -97,14 +166,16 @@ public class KurulumBakimTests
         var e = Path.Combine(dizin, "device-config.setup");
         if (connectorVar) File.WriteAllText(c, "conn_eski");
         if (eklentiVar) File.WriteAllText(e, "sir");
-        return (dizin, c, e);
+        return (new CihazKaldirici(c, e, () => Saat), c, e);
     }
+
+    private static BekleyenIsler Bos() => new(0, 0, 0);
 
     [Fact]
     public void Kaldirma_eklentiyi_SILER_kimligi_adini_degistirip_SAKLAR()
     {
-        var (dizin, c, e) = GeciciKurulum();
-        var s = CihazKaldirma.Uygula(c, e, bekleyenBildirim: 0, yarimKomut: 0, new DateTime(2026, 10, 14, 14, 6, 50));
+        var (k, c, e) = GeciciKurulum();
+        var s = k.Uygula(Bos);
         Assert.True(s.Basarili);
         Assert.True(s.YenidenBaslatmaGerekli);
         Assert.False(File.Exists(e));                 // sır: yedek YOK
@@ -113,15 +184,18 @@ public class KurulumBakimTests
     }
 
     [Theory]
-    [InlineData(1, 0, "bildirilmemiş")]
-    [InlineData(0, 2, "yarım")]
-    public void Bekleyen_is_varken_kimlik_SOKULMEZ(int bildirim, int komut, string beklenen)
+    [InlineData(1, 0, 0, "bildirilmemiş")]
+    [InlineData(0, 1, 0, "kalıcı olarak reddettiği")]
+    [InlineData(0, 0, 2, "kesinleşmemiş")]
+    public void Bekleyen_reddedilen_ya_da_cozulmemis_is_varken_kimlik_SOKULMEZ(int bildirim, int reddedilen, int yarim, string beklenen)
     {
-        var (_, c, e) = GeciciKurulum();
-        var s = CihazKaldirma.Uygula(c, e, bildirim, komut, DateTime.Now);
+        // Codex 4: yaş sınırı YOK — 24 saatten eski çözülmemiş satış da, kalıcı reddedilmiş bildirim de engeller.
+        var (k, c, e) = GeciciKurulum();
+        var s = k.Uygula(() => new BekleyenIsler(bildirim, reddedilen, yarim));
         Assert.False(s.Basarili);
         Assert.Contains(beklenen, s.Mesaj);
-        Assert.True(File.Exists(c));   // hiçbir şey değişmedi
+        Assert.DoesNotContain("birkaç dakika", s.Mesaj);   // Fable C: gerçek süreyi söyle, uydurma
+        Assert.True(File.Exists(c));
         Assert.True(File.Exists(e));
     }
 
@@ -129,11 +203,12 @@ public class KurulumBakimTests
     public void Eklenti_silinemezse_kimlige_DOKUNULMAZ()
     {
         // Sıra önemli: önce eklenti, sonra kimlik. Eklenti silinemezse ajan hâlâ tam kurulu kalır.
-        var (_, c, e) = GeciciKurulum();
-        using (File.Open(e, FileMode.Open, FileAccess.Read, FileShare.None))   // Windows'ta silmeyi engeller
+        // Yalnız Windows'ta ölçülebilir: Unix'te açık dosya silinebilir.
+        if (!OperatingSystem.IsWindows()) return;
+        var (k, c, e) = GeciciKurulum();
+        using (File.Open(e, FileMode.Open, FileAccess.Read, FileShare.None))
         {
-            if (!OperatingSystem.IsWindows()) return;   // Unix'te açık dosya silinebilir; bu yol orada ölçülemez
-            var s = CihazKaldirma.Uygula(c, e, 0, 0, DateTime.Now);
+            var s = k.Uygula(Bos);
             Assert.False(s.Basarili);
             Assert.Contains("hiçbir şey değişmedi", s.Mesaj);
             Assert.DoesNotContain("process", s.Mesaj, StringComparison.OrdinalIgnoreCase);   // ham istisna metni yok
@@ -144,9 +219,8 @@ public class KurulumBakimTests
     [Fact]
     public void Yarim_kalan_kaldirma_tekrar_denenince_KALDIGI_YERDEN_tamamlanir()
     {
-        // Eklenti önceki denemede silinmiş, kimlik taşınamamıştı: ikinci deneme yalnız kalanı yapar.
-        var (_, c, e) = GeciciKurulum(connectorVar: true, eklentiVar: false);
-        var s = CihazKaldirma.Uygula(c, e, 0, 0, DateTime.Now);
+        var (k, c, _) = GeciciKurulum(connectorVar: true, eklentiVar: false);
+        var s = k.Uygula(Bos);
         Assert.True(s.Basarili);
         Assert.False(File.Exists(c));
     }
@@ -154,8 +228,8 @@ public class KurulumBakimTests
     [Fact]
     public void Kaldirilacak_bir_sey_yoksa_yeniden_baslatmaz()
     {
-        var (_, c, e) = GeciciKurulum(connectorVar: false, eklentiVar: false);
-        var s = CihazKaldirma.Uygula(c, e, 0, 0, DateTime.Now);
+        var (k, _, _) = GeciciKurulum(connectorVar: false, eklentiVar: false);
+        var s = k.Uygula(Bos);
         Assert.True(s.Basarili);
         Assert.False(s.YenidenBaslatmaGerekli);
     }
@@ -187,6 +261,17 @@ public class KurulumBakimTests
         Assert.Contains("anahtar", Post(anahtar: "yanlis"));
     }
 
+    [Theory]
+    [InlineData("HEAD")]
+    [InlineData("OPTIONS")]
+    [InlineData("PUT")]
+    [InlineData("DELETE")]
+    public void GET_POST_disi_yontem_guvenlikten_GECMEZ(string yontem)
+    {
+        // Fable A: denetim yalnız POST'a bakıyordu; HEAD ön sorgusuz gelir.
+        Assert.Contains("yöntem", KurulumGuvenlik.Denetle(yontem, true, "127.0.0.1:7788", null, null, null, Anahtar, 7788));
+    }
+
     [Fact]
     public void Uzak_istemci_ve_yabanci_Host_REDDEDILIR()
     {
@@ -204,21 +289,31 @@ public class KurulumBakimTests
         Assert.NotEqual(a, KurulumGuvenlik.YeniAnahtar());
     }
 
-    // ── SERVİS KURTARMA: ayar yoksa "yeniden başlıyor" DENMEZ ────────────────────────────
+    // ── SERVİS KURTARMA: TÜM eylemler yeniden başlatma olmalı ────────────────────────────
+
+    private const int R = YenidenBaslatmaKarari.ScActionRestart;
 
     [Fact]
     public void Servis_degilse_yeniden_baslatma_serbest()
         => Assert.Null(YenidenBaslatmaKarari.Engel(servisModu: false, eylemTurleri: null));
 
     [Fact]
-    public void Servis_kurtarma_eylemi_yeniden_baslatsa_serbest()
-        => Assert.Null(YenidenBaslatmaKarari.Engel(true, new[] { YenidenBaslatmaKarari.ScActionRestart, 1, 1 }));
+    public void Servis_kurtarma_eylemlerinin_hepsi_yeniden_baslatsa_serbest()
+        => Assert.Null(YenidenBaslatmaKarari.Engel(true, new[] { R, R, R }));
+
+    [Fact]
+    public void Ilk_eylem_yeniden_baslatip_sonraki_YOKSA_engel()
+    {
+        // Codex 3: N'inci hata N'inci eylemi kullanır, son eylem tekrarlanır — [RESTART, NONE] ikinci
+        // yeniden başlatmada servisi kapalı bırakır.
+        Assert.Contains("sc.exe failure", YenidenBaslatmaKarari.Engel(true, new[] { R, 0 }));
+        Assert.Contains("sc.exe failure", YenidenBaslatmaKarari.Engel(true, new[] { R, R, 2 }));
+    }
 
     [Fact]
     public void Servis_kurtarma_eylemi_yoksa_ya_da_okunamadiysa_ENGEL_ve_cozum_komutu()
     {
-        var yok = YenidenBaslatmaKarari.Engel(true, Array.Empty<int>());
-        Assert.Contains("sc.exe failure", yok);
+        Assert.Contains("sc.exe failure", YenidenBaslatmaKarari.Engel(true, Array.Empty<int>()));
         Assert.Contains("sc.exe failure", YenidenBaslatmaKarari.Engel(true, new[] { 0 }));   // SC_ACTION_NONE
         Assert.Contains("okunamadı", YenidenBaslatmaKarari.Engel(true, null));
     }

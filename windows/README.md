@@ -76,7 +76,7 @@ Ajan `RestomenumAgent` adlı Windows servisi olarak, **LocalSystem** hesabıyla 
 makine kapsamlıdır). Kurulum ve güncelleme **yönetici** PowerShell'de:
 
 ```powershell
-powershell -ExecutionPolicy Bypass -File servis-kur.ps1 -Exe "C:\...\Restomenum.Agent.Host.Windows.exe"
+powershell -ExecutionPolicy Bypass -File servisKur.ps1 -Exe "C:\...\Restomenum.Agent.Host.Windows.exe"
 ```
 
 Betik servisi oluşturur ve **kurtarma eylemini** kurar:
@@ -88,7 +88,8 @@ sc.exe failureflag RestomenumAgent 1
 
 > ⚠️ **Kurtarma eylemi şarttır.** Kurulum sayfası (`http://127.0.0.1:7788/setup`) terminal adresi,
 > eklenti dizesi ya da "Cihazı kaldır" sonrası ajanı, süreçten çıkıp servis yöneticisinin yeniden
-> açmasına bırakarak başlatır. Eylem yoksa servis kapalı kalırdı; bu yüzden ajan ayarı açılışta ve her
+> açmasına bırakarak başlatır. SCM N'inci hatada N'inci eylemi kullanır; eylemlerin HEPSİ `restart` değilse
+> servis bir gün kapalı kalabilirdi. Bu yüzden ajan ayarı açılışta ve her
 > işlemden önce okur, yoksa işlemi **değişiklik yapmadan reddeder** ve günlüğe KRİTİK yazar.
 
 Eski Ingenico servisleri (`restomenum-api`, `restomenum-gmp3`) aynı cihaza bağlanır; ajan servisi

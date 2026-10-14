@@ -162,7 +162,7 @@ public static class HostComposition
             builder.Services.AddHostedService(sp => new DeviceConfigPoller(
                 sp.GetRequiredService<DeviceConfigClient>(), sp.GetRequiredService<IDeviceMappingStore>(),
                 sp.GetRequiredService<ILogger<DeviceConfigPoller>>(),
-                tazeleyici: sp.GetService<DeviceDepartmentRefresher>()));
+                tazeleyici: sp.GetService<DeviceDepartmentRefresher>(), bakim: sp.GetRequiredService<BakimKapisi>()));
         }
         else
         {

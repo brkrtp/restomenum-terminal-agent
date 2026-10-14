@@ -31,8 +31,7 @@ public sealed class AgentWorker : BackgroundService
     private readonly IKurulumIslemleri? _kurulum;
     private readonly DeviceConfigSetupKaynakBilgisi? _eklentiKaynak;
     private readonly BakimKapisi _bakim;
-    /// <summary>RM-0389: süreç başına kurulum istek anahtarı — sayfaya gömülür, her POST'ta geri gelmeli.</summary>
-    private readonly string _kurulumAnahtari = KurulumGuvenlik.YeniAnahtar();
+    private readonly KurulumIstekIsleyici? _kurulumIsleyici;
 
     public AgentWorker(
         IOptions<AgentOptions> opt, ILogger<AgentWorker> log, IHostApplicationLifetime lifetime,
@@ -48,6 +47,11 @@ public sealed class AgentWorker : BackgroundService
         _outbox = outbox;
         _kurulum = kurulum;
         _store = store;
+        // RM-0389: kurulum istek anahtarı süreç başına üretilir (sayfaya gömülür, her POST'ta geri gelmeli).
+        // Bekleyen iş YAŞ SINIRI OLMADAN ve kalıcı reddedilenler dahil sayılır (denetim 2, Codex 4).
+        if (kurulum is not null)
+            _kurulumIsleyici = new KurulumIstekIsleyici(kurulum, _bakim, KurulumGuvenlik.YeniAnahtar(), DinleyiciPortu(),
+                () => new BekleyenIsler(_outbox.Depth(), _outbox.RejectedCount(), _store.Pending().Count), BakimBeklemesi);
     }
 
     protected override async Task ExecuteAsync(CancellationToken ct)
@@ -124,12 +128,12 @@ public sealed class AgentWorker : BackgroundService
         // girer. Kurtarmanın kendisi zaten hiçbir zaman SALE tekrarlamıyor; yalnız soruyor.
         var acilisIsleri = Task.Run(async () =>
         {
-            try { await _handler.RecoverPendingAsync(ct); }
+            try { await KapidanAsync(() => _handler.RecoverPendingAsync(ct)); }
             catch (Exception e) when (e is not OperationCanceledException) { _log.LogError(e, "açılış kurtarması hata verdi"); }
             // AÇILIŞ = bağlantının yeniden kurulduğu an. Geri çekilme BİR TURLUK atlanıyor:
             // kuyrukta bekleyen kayıtların bekleme sebebi çoğu zaman ağın gitmiş olmasıdır ve
             // ağ geri geldiğinde beklemeye devam etmenin bir anlamı yok (W20).
-            try { await _handler.DrainOutboxAsync(ct, ignoreBackoff: true); }
+            try { await KapidanAsync(() => _handler.DrainOutboxAsync(ct, ignoreBackoff: true)); }
             catch (Exception e) when (e is not OperationCanceledException) { _log.LogError(e, "açılış drain hata verdi"); }
             Temizle();
         }, ct);
@@ -296,127 +300,42 @@ public sealed class AgentWorker : BackgroundService
     // yalnız ayrıştırılır ve işleme geçer; hata sebepleri de sırrı içermez (Core garantisi).
     private async Task KurulumAsync(HttpListenerContext ctx, string yol, CancellationToken ct)
     {
-        if (_kurulum is null)
+        if (_kurulumIsleyici is null || _kurulum is null)
         { Respond(ctx, 404, "{\"error\":\"setup not available on this platform\"}"); return; }
 
-        // RM-0389: kurulum uçları yalnız bu bilgisayardan ve yalnız kendi sayfasından (CSRF/DNS
-        // yeniden bağlama). Ret sebebi loglanır; anahtarın kendisi loglanmaz.
-        var red = KurulumGuvenlik.Denetle(ctx.Request.HttpMethod,
+        // Gövde yalnız POST'ta okunur; yöntem/güvenlik/doğrulama kararları Core'da (KurulumIstekIsleyici).
+        var govde = "";
+        if (string.Equals(ctx.Request.HttpMethod, "POST", StringComparison.OrdinalIgnoreCase))
+        {
+            using var reader = new StreamReader(ctx.Request.InputStream, ctx.Request.ContentEncoding ?? Encoding.UTF8);
+            govde = await reader.ReadToEndAsync(ct);
+        }
+        var istek = new KurulumIstegi(
+            ctx.Request.HttpMethod,
+            yol.Length > KurulumIstek.Yol.Length ? yol[(KurulumIstek.Yol.Length + 1)..] : "",
             ctx.Request.RemoteEndPoint is { } uc && IPAddress.IsLoopback(uc.Address),
             ctx.Request.Headers["Host"], ctx.Request.Headers["Origin"], ctx.Request.ContentType,
-            ctx.Request.Headers[KurulumGuvenlik.AnahtarBasligi], _kurulumAnahtari, DinleyiciPortu());
-        if (red is not null)
+            ctx.Request.Headers[KurulumGuvenlik.AnahtarBasligi], govde);
+
+        var yanit = await _kurulumIsleyici.IsleAsync(istek, ct);
+        if (yanit.Log is not null)
         {
-            _log.LogWarning("[kurulum] istek reddedildi: {Neden} ({Yontem} {Yol}, istemci {Istemci})",
-                red, ctx.Request.HttpMethod, yol, ctx.Request.RemoteEndPoint?.ToString() ?? "?");
-            Respond(ctx, 403, KurulumIstek.Json(KurulumSonucu.Hata(red)));
-            return;
+            if (yanit.Log.StartsWith("KRİTİK", StringComparison.Ordinal)) _log.LogCritical("[kurulum] {Mesaj}", yanit.Log);
+            else if (yanit.Durum >= 400) _log.LogWarning("[kurulum] {Mesaj} (istemci {Istemci})", yanit.Log, ctx.Request.RemoteEndPoint?.ToString() ?? "?");
+            else _log.LogInformation("[kurulum] {Mesaj}", yanit.Log);
         }
-
-        var alt = yol.Length > KurulumIstek.Yol.Length ? yol[(KurulumIstek.Yol.Length + 1)..] : "";
-        var get = string.Equals(ctx.Request.HttpMethod, "GET", StringComparison.OrdinalIgnoreCase);
-
-        if (alt == "" && get)
-        { RespondHtml(ctx, KurulumSayfasi.Html(_kurulum.Durum(), _kurulumAnahtari)); return; }
-        if (alt == "status" && get)
-        { Respond(ctx, 200, KurulumIstek.Json(_kurulum.Durum())); return; }
-        if (alt == "scan" && get)
-        {
-            // W152: ağ taraması cihaza GMP çağrısı yapmaz (bağlan-kapat), o yüzden GET güvenli.
-            var adaylar = await _kurulum.TerminalleriTaraAsync(ct);
-            var ag = adaylar.Count > 0 ? adaylar[0].Ip[..(adaylar[0].Ip.LastIndexOf('.') + 1)] + "0/24" : null;
-            Respond(ctx, 200, KurulumIstek.JsonTarama(adaylar, ag));
-            return;
-        }
-        if (get)
-        { Respond(ctx, 404, NOTFOUND); return; }
-
-        string govde;
-        using (var reader = new StreamReader(ctx.Request.InputStream, ctx.Request.ContentEncoding ?? Encoding.UTF8))
-            govde = await reader.ReadToEndAsync(ct);
-
-        // RM-0389: ajanı yeniden başlatan ya da kimliğini söken işlemler. ÖNCE yeniden başlatma
-        // mümkün mü (servis kurtarma ayarı), SONRA bakım kapısı (yeni satış girmez, uçuştaki biter);
-        // ikisi de geçmezse HİÇBİR değişiklik yapılmaz.
-        var bakimli = alt is "terminal" or "plugin" or "remove";
-        if (bakimli)
-        {
-            var engel = _kurulum.YenidenBaslatmaEngeli();
-            if (engel is not null)
-            {
-                _log.LogCritical("[kurulum] {Islem} reddedildi — ajan yeniden başlatılamaz: {Engel}", alt, engel);
-                Respond(ctx, 200, KurulumIstek.Json(KurulumSonucu.Hata(engel)));
-                return;
-            }
-            if (!await _bakim.BakimaAlAsync(BakimBeklemesi, ct))
-            {
-                Respond(ctx, 200, KurulumIstek.Json(KurulumSonucu.Hata(
-                    "Şu an bir satış sürüyor ya da başka bir kurulum işlemi yapılıyor. Satış bitince tekrar deneyin.")));
-                return;
-            }
-        }
-
-        KurulumSonucu sonuc;
-        switch (alt)
-        {
-            case "enroll":
-            {
-                var kod = KurulumIstek.Kod(govde, out var neden);
-                sonuc = kod is null ? KurulumSonucu.Hata(neden ?? "kod okunamadı")
-                                    : await _kurulum.KaydolAsync(kod, ct);
-                _log.LogInformation("[kurulum] kayıt denemesi: {Sonuc}", sonuc.Basarili ? "başarılı" : "başarısız");
-                break;
-            }
-            case "terminal":
-            {
-                var t = KurulumIstek.Terminal(govde, out var neden);
-                sonuc = t is null ? KurulumSonucu.Hata(neden ?? "adres okunamadı")
-                                  : _kurulum.TerminalAyarla(t.Value.Ip, t.Value.Port);
-                break;
-            }
-            case "pair":
-                sonuc = _kurulum.Esles();
-                _log.LogInformation("[kurulum] eşleştirme denemesi: {Sonuc}", sonuc.Basarili ? "başarılı" : "başarısız");
-                break;
-            case "plugin":
-            {
-                var ayar = KurulumIstek.Eklenti(govde, out var neden);
-                sonuc = ayar is null ? KurulumSonucu.Hata(neden ?? "kurulum dizesi okunamadı")
-                                     : await _kurulum.EklentiAyarlaAsync(ayar, ct);
-                _log.LogInformation("[kurulum] eklenti ayarı denemesi: {Sonuc} (host {Host})",
-                    sonuc.Basarili ? "başarılı" : "başarısız", ayar?.BaseUri.Host ?? "(çözülemedi)");
-                break;
-            }
-            case "remove":
-            {
-                // Bakım kapısı kapalı: yeni satış girmez. Bekleyenler kapı kapandıktan SONRA sayılır,
-                // yoksa sayımla kapanış arasına bir satış sığabilirdi.
-                var esik = DateTimeOffset.UtcNow.AddHours(-LocalSaleHandler.UnknownKurtarmaSaati).ToUnixTimeMilliseconds();
-                sonuc = KurulumIstek.KaldirmaOnayi(govde, out var onayNedeni)
-                    ? _kurulum.Kaldir(_outbox.Depth(), _store.Pending(unknownEsigi: esik).Count)
-                    : KurulumSonucu.Hata(onayNedeni ?? "onay okunamadı");
-                _log.LogWarning("[kurulum] cihaz kaldırma denemesi: {Sonuc} — {Mesaj}",
-                    sonuc.Basarili ? "başarılı" : "başarısız", sonuc.Mesaj);
-                break;
-            }
-            default:
-                if (bakimli) _bakim.BakimdanCik();
-                Respond(ctx, 404, NOTFOUND);
-                return;
-        }
-
-        var yenidenBaslat = sonuc.Basarili && sonuc.YenidenBaslatmaGerekli;
-        // Başarısız ya da yeniden başlatma gerektirmeyen işlem kapıyı açar; başarılı olan AÇMAZ —
-        // yapılandırması değişmiş/kimliği sökülmüş süreç yeniden başlayana kadar satış almamalı.
-        if (bakimli && !yenidenBaslat) _bakim.BakimdanCik();
 
         // Yanıt GİTTİKTEN sonra yeniden başlat — tarayıcı "yeniden başlıyor" mesajını görsün. Yanıtın
         // ulaşması koşul DEĞİL: tarayıcı kapanmış olsa da işlem tamamlanmıştır, yeniden başlatma kurulur.
-        try { Respond(ctx, 200, KurulumIstek.Json(sonuc)); }
+        try
+        {
+            if (yanit.Html) RespondHtml(ctx, yanit.Govde);
+            else Respond(ctx, yanit.Durum, yanit.Govde);
+        }
         catch (Exception e) when (e is HttpListenerException or ObjectDisposedException or IOException)
         { _log.LogWarning("[kurulum] yanıt yazılamadı ({Hata}) — işlem yine de tamamlandı", e.GetType().Name); }
 
-        if (yenidenBaslat)
+        if (yanit.YenidenBaslat)
             _ = Task.Run(async () => { await Task.Delay(800, CancellationToken.None); _kurulum.YenidenBaslat(); });
     }
 
@@ -488,8 +407,23 @@ public sealed class AgentWorker : BackgroundService
     /// COMPLETED/EXPIRED/REJECTED siler): <c>UNKNOWN</c> bir kaydı atmak, çözülmemiş bir tahsilatı
     /// kaybetmektir.</para>
     /// </summary>
+    /// <summary>
+    /// RM-0389 (denetim 2, Codex 2): terminale, deftere ya da platforma dokunan ARKA PLAN işleri de
+    /// bakım kapısından girer. Kurtarma bir komutu COMPLETED yapıp terminal kilidini bırakır ve
+    /// bildirimi ondan SONRA kuyruğa koyar; kapı dışında kalsaydı kaldırma o arada kimliği sökebilir,
+    /// sonuç hiç bildirilemezdi. Bakımdayken iş o tur YAPILMAZ (kayıtlar durur, sonraki turda/açılışta).
+    /// </summary>
+    private async Task KapidanAsync(Func<Task> is_)
+    {
+        using var giris = _bakim.Gir();
+        if (giris is null) return;
+        await is_();
+    }
+
     private void Temizle()
     {
+        using var giris = _bakim.Gir();
+        if (giris is null) return;
         try
         {
             var sinir = DateTimeOffset.UtcNow.AddDays(-RetentionGun).ToUnixTimeMilliseconds();
@@ -520,7 +454,7 @@ public sealed class AgentWorker : BackgroundService
 
             // Günde bir: eski kayıtları temizle. Sürekli açık kalan bir kasada açılış tek başına yetmez.
             if (DateTimeOffset.UtcNow - _sonTemizlik >= TimeSpan.FromDays(1)) Temizle();
-            try { await _handler.DrainOutboxAsync(ct); }
+            try { await KapidanAsync(() => _handler.DrainOutboxAsync(ct)); }
             catch (Exception e) when (e is not OperationCanceledException) { _log.LogWarning(e, "periyodik drain hata verdi"); }
 
             // ── W31: ÇÖZÜLMEMİŞ KOMUTLAR PERİYODİK YOKLANIR ──────────────────────────
@@ -535,7 +469,7 @@ public sealed class AgentWorker : BackgroundService
             if (DateTimeOffset.UtcNow - _sonKurtarma >= TimeSpan.FromSeconds(60))
             {
                 _sonKurtarma = DateTimeOffset.UtcNow;
-                try { await _handler.RecoverPendingAsync(ct); }
+                try { await KapidanAsync(() => _handler.RecoverPendingAsync(ct)); }
                 catch (Exception e) when (e is not OperationCanceledException)
                 { _log.LogWarning(e, "periyodik kurtarma hata verdi"); }
             }

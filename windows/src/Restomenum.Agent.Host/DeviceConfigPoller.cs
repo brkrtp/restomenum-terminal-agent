@@ -1,4 +1,4 @@
-using Microsoft.Extensions.Hosting;
+﻿using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Logging;
 using Restomenum.Agent.Core;
 
@@ -30,10 +30,14 @@ public sealed class DeviceConfigPoller : BackgroundService
     /// </summary>
     private readonly DeviceDepartmentRefresher? _tazeleyici;
 
+    /// <summary>RM-0389: tur cihaza (bölüm tablosu) ve eklenti dosyasına dokunur; kurulum bakımı sürerken atlanır.</summary>
+    private readonly BakimKapisi? _bakim;
+
     public DeviceConfigPoller(DeviceConfigClient client, IDeviceMappingStore store,
         ILogger<DeviceConfigPoller> log, TimeSpan? interval = null, double jitter = 0.20,
-        DeviceDepartmentRefresher? tazeleyici = null)
+        DeviceDepartmentRefresher? tazeleyici = null, BakimKapisi? bakim = null)
     {
+        _bakim = bakim;
         _client = client;
         _store = store;
         _log = log;
@@ -52,8 +56,14 @@ public sealed class DeviceConfigPoller : BackgroundService
             // SIRA ÖNEMLİ (W56): ÖNCE cihaz tablosu, SONRA platformdan çekme. Cihazda bir KDV oranı
             // değişmişse bildirim aynı turda gider ve hemen ardından gelen `GET /mapping` yeni sürümü
             // getirir — tabloyu bir tur geç görmeyiz.
-            await CihazTablosunuTazeleAsync(ct);
-            await PollOnceAsync(ct);
+            using (var giris = _bakim is null ? (IDisposable?)NoopGiris.Ornek : _bakim.Gir())
+            {
+                if (giris is not null)
+                {
+                    await CihazTablosunuTazeleAsync(ct);
+                    await PollOnceAsync(ct);
+                }
+            }
             try { await Task.Delay(NextDelay(), ct); }
             catch (OperationCanceledException) { break; }
         }
@@ -115,4 +125,10 @@ public sealed class DeviceConfigPoller : BackgroundService
         var factor = 1.0 + (_rng.NextDouble() * 2 - 1) * _jitter;
         return TimeSpan.FromMilliseconds(_base.TotalMilliseconds * factor);
     }
+}
+
+file sealed class NoopGiris : IDisposable
+{
+    public static readonly NoopGiris Ornek = new();
+    public void Dispose() { }
 }

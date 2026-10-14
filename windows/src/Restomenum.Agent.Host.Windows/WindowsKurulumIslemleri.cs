@@ -221,10 +221,10 @@ public sealed class WindowsKurulumIslemleri : IKurulumIslemleri
         catch { return false; }
     }
 
-    public KurulumSonucu Kaldir(int bekleyenBildirim, int yarimKomut)
+    public KurulumSonucu Kaldir(Func<BekleyenIsler> say)
     {
-        // Bakım kapısı çağıranda kapandı (yeni satış girmez). Cihaz kilidi ikinci savunma: kapı
-        // dışından gelen bir terminal işi (açılış kurtarması) sürüyorsa kimlik sökülmez.
+        // Bakım kapısı çağıranda kapandı: yeni satış ve arka plan işi girmez, içeridekiler bitti.
+        // Cihaz kilidi ikinci savunma. Bekleyen iş kilit ALINDIKTAN SONRA sayılır (denetim 2, Fable B).
         using var k = _kilit.TryAcquire();
         if (k is null) return KurulumSonucu.Hata("Şu an terminalde bir işlem sürüyor. Bitince tekrar deneyin.");
 
@@ -232,8 +232,7 @@ public sealed class WindowsKurulumIslemleri : IKurulumIslemleri
         if (string.IsNullOrEmpty(storeDir)) return KurulumSonucu.Hata("Veri dizini bilinmiyor — kaldırma yapılamaz.");
         var eskiKimlik = _key.ConnectorId;
 
-        var sonuc = CihazKaldirma.Uygula(Path.Combine(storeDir, "connector.id"), _eklentiDosya?.Yol,
-            bekleyenBildirim, yarimKomut, DateTime.Now);
+        var sonuc = new CihazKaldirici(Path.Combine(storeDir, "connector.id"), _eklentiDosya?.Yol, () => DateTime.Now).Uygula(say);
         if (sonuc.Basarili && sonuc.YenidenBaslatmaGerekli)
             _log.LogWarning("cihaz kaldırıldı: eski connectorId {Eski}, eklenti bağlantısı silindi — yeniden başlatma gerekli",
                 string.IsNullOrEmpty(eskiKimlik) ? "(yoktu)" : eskiKimlik);
@@ -244,7 +243,9 @@ public sealed class WindowsKurulumIslemleri : IKurulumIslemleri
     {
         if (!Microsoft.Extensions.Hosting.WindowsServices.WindowsServiceHelpers.IsWindowsService())
             return YenidenBaslatmaKarari.Engel(servisModu: false, eylemTurleri: null);
-        return YenidenBaslatmaKarari.Engel(servisModu: true, ServisKurtarmaAyari.EylemTurleri(HostComposition.ServisAdi));
+        var turler = ServisKurtarmaAyari.EylemTurleri(HostComposition.ServisAdi, out var neden);
+        if (turler is null) _log.LogWarning("servis kurtarma ayarı okunamadı: {Neden}", neden);
+        return YenidenBaslatmaKarari.Engel(servisModu: true, turler);
     }
 
     public void YenidenBaslat()
@@ -333,21 +334,23 @@ public static class GmpXmlAyar
 /// </summary>
 internal static class ServisKurtarmaAyari
 {
-    /// <returns>Eylem türleri (<c>SC_ACTION.Type</c>) sırayla; <c>null</c> = okunamadı.</returns>
-    public static IReadOnlyList<int>? EylemTurleri(string servisAdi)
+    /// <returns>Eylem türleri (<c>SC_ACTION.Type</c>) sırayla; <c>null</c> = okunamadı ve sebebi <paramref name="neden"/>'de.</returns>
+    public static IReadOnlyList<int>? EylemTurleri(string servisAdi, out string? neden)
     {
+        neden = null;
         IntPtr scm = IntPtr.Zero, svc = IntPtr.Zero, buf = IntPtr.Zero;
         try
         {
             scm = OpenSCManagerW(null, null, ScManagerConnect);
-            if (scm == IntPtr.Zero) return null;
+            if (scm == IntPtr.Zero) { neden = $"OpenSCManager Win32 hata {Marshal.GetLastWin32Error()}"; return null; }
             svc = OpenServiceW(scm, servisAdi, ServiceQueryConfig);
-            if (svc == IntPtr.Zero) return null;
+            if (svc == IntPtr.Zero) { neden = $"OpenService({servisAdi}) Win32 hata {Marshal.GetLastWin32Error()}"; return null; }
 
             QueryServiceConfig2W(svc, ServiceConfigFailureActions, IntPtr.Zero, 0, out var gerekli);
-            if (gerekli <= 0) return null;
+            if (gerekli <= 0) { neden = $"QueryServiceConfig2 boyut sorgusu Win32 hata {Marshal.GetLastWin32Error()}"; return null; }
             buf = Marshal.AllocHGlobal(gerekli);
-            if (!QueryServiceConfig2W(svc, ServiceConfigFailureActions, buf, gerekli, out _)) return null;
+            if (!QueryServiceConfig2W(svc, ServiceConfigFailureActions, buf, gerekli, out _))
+            { neden = $"QueryServiceConfig2 Win32 hata {Marshal.GetLastWin32Error()}"; return null; }
 
             var fa = Marshal.PtrToStructure<ServiceFailureActions>(buf);
             var turler = new List<int>(fa.cActions);
@@ -356,7 +359,7 @@ internal static class ServisKurtarmaAyari
                 turler.Add(Marshal.PtrToStructure<ScAction>(fa.lpsaActions + i * boyut).Type);
             return turler;
         }
-        catch { return null; }
+        catch (Exception e) { neden = $"{e.GetType().Name} (Win32 hata {Marshal.GetLastWin32Error()})"; return null; }
         finally
         {
             if (buf != IntPtr.Zero) Marshal.FreeHGlobal(buf);
