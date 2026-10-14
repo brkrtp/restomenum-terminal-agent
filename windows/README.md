@@ -100,6 +100,18 @@ kurulduğunda onlar durdurulmalı ve başlangıç türü **Manuel** yapılmalıd
 çevirir; komut satırındaki göreli yollar (`--check-tax`) ve göreli `Agent:StorePath` başlangıç
 dizinine göre çözülür.
 
+**Eklentiden tek tık kayıt:** eklenti, ajanın kurulu olduğu bilgisayarda şu adresi yeni sekmede açar:
+
+```
+http://127.0.0.1:7788/setup#kod=<eşleştirme kodu>
+```
+
+Kod `#`'den sonra durur; sunucuya, günlüğe ve `Referer`'a gitmez. Sayfa kodu alana yerleştirir ve
+adresten siler; kayıt kullanıcı **Kaydol**'a bastığında yapılır, kendiliğinden yapılmaz (`127.0.0.1`'i
+her site açtırabilir). Kod `[A-Za-z0-9-]{4,64}` değilse yerleştirilmez. Sayfa başka sitenin
+çerçevesine gömülemez (`X-Frame-Options: DENY`, `frame-ancestors 'none'`). Sır (kurulum dizesi)
+bağlantıya **konmaz**.
+
 ---
 
 ## 6. Ingenico'nun sonuç alanları (RM-0396)

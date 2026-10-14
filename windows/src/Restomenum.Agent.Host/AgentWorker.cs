@@ -344,6 +344,7 @@ public sealed class AgentWorker : BackgroundService
         // ulaşması koşul DEĞİL: tarayıcı kapanmış olsa da işlem tamamlanmıştır, yeniden başlatma kurulur.
         try
         {
+            foreach (var b in yanit.Basliklar) ctx.Response.Headers[b.Key] = b.Value;
             if (yanit.Html) RespondHtml(ctx, yanit.Govde);
             else Respond(ctx, yanit.Durum, yanit.Govde);
         }

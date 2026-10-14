@@ -24,6 +24,18 @@ public static class KurulumGuvenlik
 {
     public const string AnahtarBasligi = "X-Kurulum-Anahtari";
 
+    /// <summary>
+    /// Her kurulum yanıtına eklenir. Sayfa eklentiden kod hazır gelmiş hâlde açılabildiği için başka
+    /// bir sitenin çerçevesine GÖMÜLEMEZ — yoksa görünmez çerçeveyle "Kaydol"a tıklatılabilirdi
+    /// (tıklama kaçırma). <c>no-referrer</c>: sayfa adresi dışarı sızmaz.
+    /// </summary>
+    public static readonly IReadOnlyList<KeyValuePair<string, string>> YanitBasliklari =
+    [
+        new("X-Frame-Options", "DENY"),
+        new("Content-Security-Policy", "frame-ancestors 'none'"),
+        new("Referrer-Policy", "no-referrer"),
+    ];
+
     public static string YeniAnahtar() => Convert.ToHexString(RandomNumberGenerator.GetBytes(32)).ToLowerInvariant();
 
     public static bool GetMi(string yontem) => string.Equals(yontem, "GET", StringComparison.OrdinalIgnoreCase);

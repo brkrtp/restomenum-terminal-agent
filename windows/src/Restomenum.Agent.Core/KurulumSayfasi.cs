@@ -150,10 +150,11 @@ public static class KurulumSayfasi
         // ── 1. KAYIT ────────────────────────────────────────────────────────────────
         sb.Append("<div class=\"card\"><h2><span class=\"n\">1</span>Platform kaydı</h2>");
         if (d.Kayitli)
-            sb.Append("<div class=\"hint\">Bu cihaz kayıtlı. Yeniden kaydetmek gerekmiyor.</div>");
+            sb.Append("<div class=\"hint\">Bu cihaz kayıtlı. Yeniden kaydetmek gerekmiyor.</div><div id=\"kodMsg\" class=\"msg\"></div>");
         else
             sb.Append("""
-<div class="hint">Eşleştirme kodunu <b>RestoMenum eklentisinden</b> alın — 10 dakika geçerli.</div>
+<div class="hint">RestoMenum eklentisinde <b>Bu bilgisayarda kur</b> derseniz kod buraya kendiliğinden gelir; ya da
+kodu eklentiden alıp yazın — 10 dakika geçerli.</div>
 <label for="kod">Eşleştirme kodu</label>
 <input id="kod" autocomplete="off" placeholder="örn. 8F3K-2QZ7">
 <button id="kaydol" onclick="kaydol()">Kaydol</button>
@@ -218,6 +219,27 @@ async function post(yol, govde){
 }
 function goster(id, j){ const el=document.getElementById(id); el.textContent=j.message||''; el.className='msg '+(j.ok?'ok':'hata'); }
 function bilgi(id, t){ const el=document.getElementById(id); el.textContent=t; el.className='msg info'; }
+
+// Tek tık kurulum: eklenti /setup#kod=… açar. Kod fragment'ta — sunucuya, günlüğe, Referer'a gitmez.
+// Yalnız alana YERLEŞİR; gönderen kullanıcının tıklamasıdır (127.0.0.1'i her site açtırabilir).
+function kodHashten(h){
+  const m=/^#(?:.*&)?kod=([^&]*)/.exec(h||'');
+  if(!m) return null;
+  let k; try{ k=decodeURIComponent(m[1]).trim(); }catch{ return null; }
+  return /^[A-Za-z0-9-]{4,64}$/.test(k) ? k : null;
+}
+function hashtenKodYerlestir(){
+  if(!location.hash) return;
+  const k=kodHashten(location.hash);
+  history.replaceState(null,'',location.pathname+location.search);
+  const alan=document.getElementById('kod');
+  if(!k){ if(alan) bilgi('kodMsg','Bağlantıdaki kod okunamadı; kodu eklentiden alıp elle yazın.'); return; }
+  if(!alan){ bilgi('kodMsg','Bu cihaz zaten kayıtlı; eklentiden gelen kod kullanılmadı.'); return; }
+  alan.value=k;
+  bilgi('kodMsg',"Kod eklentiden geldi. Bu bilgisayarı kaydetmek için Kaydol'a basın.");
+  document.getElementById('kaydol').focus();
+}
+hashtenKodYerlestir();
 
 async function kaydol(){
   const b=document.getElementById('kaydol'); b.disabled=true;
