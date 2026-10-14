@@ -81,6 +81,31 @@ public class KurulumIstekIsleyiciTests
         KapiAcik(kapi);
     }
 
+    [Theory]
+    [InlineData("pair")]
+    [InlineData("")]
+    [InlineData("status")]
+    public async Task HEAD_govdesiz_405_alir(string alt)
+    {
+        // Sahada ölçüldü (2026-10-14 15:12): HEAD'e gövde yazmak HttpListener'da istisna attı, 405 hiç
+        // ulaşmadı ve her HEAD bir ERR satırı üretti. HEAD yanıtında gövde OLAMAZ (RFC 9110 §9.3.2).
+        var (isleyici, _, kapi) = Kur();
+        var y = await isleyici.IsleAsync(Istek("HEAD", alt), default);
+        Assert.Equal(405, y.Durum);
+        Assert.Equal("", y.Govde);
+        Assert.True(y.Govdesiz);
+        KapiAcik(kapi);
+    }
+
+    [Theory]
+    [InlineData("HEAD", false)]
+    [InlineData("head", false)]
+    [InlineData("GET", true)]
+    [InlineData("POST", true)]
+    [InlineData("OPTIONS", true)]
+    public void HEAD_yanitina_hicbir_yolda_govde_yazilmaz(string yontem, bool yazilir)
+        => Assert.Equal(yazilir, HttpGovde.Yazilir(yontem));
+
     [Fact]
     public async Task GET_yalniz_sayfa_durum_ve_tarama_icindir_islem_yollari_405()
     {

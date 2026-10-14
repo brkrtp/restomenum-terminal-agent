@@ -374,21 +374,27 @@ public sealed class AgentWorker : BackgroundService
 
     private static void RespondHtml(HttpListenerContext ctx, string html)
     {
-        var bytes = Encoding.UTF8.GetBytes(html);
         ctx.Response.StatusCode = 200;
         ctx.Response.ContentType = "text/html; charset=utf-8";
-        ctx.Response.ContentLength64 = bytes.Length;
-        ctx.Response.OutputStream.Write(bytes, 0, bytes.Length);
-        ctx.Response.Close();
+        GovdeYazVeKapat(ctx, Encoding.UTF8.GetBytes(html));
     }
 
     private static void Respond(HttpListenerContext ctx, int status, string json)
     {
-        var bytes = Encoding.UTF8.GetBytes(json);
         ctx.Response.StatusCode = status;
         ctx.Response.ContentType = "application/json";
-        ctx.Response.ContentLength64 = bytes.Length;
-        ctx.Response.OutputStream.Write(bytes, 0, bytes.Length);
+        GovdeYazVeKapat(ctx, Encoding.UTF8.GetBytes(json));
+    }
+
+    /// <summary>HEAD'e gövde YAZILMAZ (HttpGovde): yalnız durum kodu ve boş gövde; diğer yöntemlerde gövde.</summary>
+    private static void GovdeYazVeKapat(HttpListenerContext ctx, byte[] bytes)
+    {
+        if (HttpGovde.Yazilir(ctx.Request.HttpMethod))
+        {
+            ctx.Response.ContentLength64 = bytes.Length;
+            ctx.Response.OutputStream.Write(bytes, 0, bytes.Length);
+        }
+        else ctx.Response.ContentLength64 = 0;
         ctx.Response.Close();
     }
 

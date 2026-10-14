@@ -1,11 +1,13 @@
-namespace Restomenum.Agent.Core;
+﻿namespace Restomenum.Agent.Core;
 
 /// <summary>Kurulum isteği, HTTP'den bağımsız. <paramref name="AltYol"/> <c>/setup/</c>'tan sonraki kısım ("" = sayfa).</summary>
 public sealed record KurulumIstegi(string Yontem, string AltYol, bool YerelIstemci, string? Host, string? Origin,
     string? IcerikTuru, string? Anahtar, string Govde);
 
 /// <param name="YenidenBaslat">Yanıt yazıldıktan sonra ajan yeniden başlatılmalı (yanıtın ulaşması koşul DEĞİL).</param>
-public sealed record KurulumYaniti(int Durum, string Govde, bool Html = false, bool YenidenBaslat = false, string? Log = null);
+/// <param name="Govdesiz">Yanıta gövde YAZILMAZ (HEAD) — yalnız durum kodu.</param>
+public sealed record KurulumYaniti(int Durum, string Govde, bool Html = false, bool YenidenBaslat = false, string? Log = null,
+    bool Govdesiz = false);
 
 /// <summary>
 /// <b>RM-0389 — kurulum isteklerinin yönlendirilmesi.</b> AgentWorker'dan ayrıldı: HTTP ayrıntısı
@@ -28,6 +30,8 @@ public sealed class KurulumIstekIsleyici(
     public async Task<KurulumYaniti> IsleAsync(KurulumIstegi i, CancellationToken ct)
     {
         var get = KurulumGuvenlik.GetMi(i.Yontem);
+        if (!HttpGovde.Yazilir(i.Yontem))
+            return new(405, "", Govdesiz: true, Log: $"yöntem reddedildi: {i.Yontem} /setup/{i.AltYol}");
         if (!get && !KurulumGuvenlik.PostMu(i.Yontem))
             return new(405, KurulumIstek.Json(KurulumSonucu.Hata($"yöntem desteklenmiyor ({i.Yontem})")),
                 Log: $"yöntem reddedildi: {i.Yontem} /setup/{i.AltYol}");
