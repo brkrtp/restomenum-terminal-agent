@@ -150,6 +150,41 @@ public class KurulumTests
         Assert.DoesNotContain("<b>hata</b>", html);
     }
 
+    // ── KALDIRMA ────────────────────────────────────────────────────────────────
+
+    [Fact]
+    public void Kaldirma_yalniz_acik_KALDIR_onayiyla_kabul_edilir()
+    {
+        // Yanlışlıkla basılan bir düğme cihazı platformdan koparmamalı: onay sözcüğü şart.
+        Assert.True(KurulumIstek.KaldirmaOnayi("{\"confirm\":\"KALDIR\"}", out var ok));
+        Assert.Null(ok);
+        Assert.True(KurulumIstek.KaldirmaOnayi("{\"confirm\":\"  kaldır \"}", out _));   // büyük/küçük, Türkçe ı
+
+        Assert.False(KurulumIstek.KaldirmaOnayi("{}", out var yok));
+        Assert.Contains("yok", yok);
+        Assert.False(KurulumIstek.KaldirmaOnayi("{\"confirm\":\"evet\"}", out var yanlis));
+        Assert.Contains("KALDIR", yanlis);
+        Assert.False(KurulumIstek.KaldirmaOnayi("json degil", out var bozuk));
+        Assert.Contains("JSON", bozuk);
+    }
+
+    [Fact]
+    public void Sayfa_kurulu_cihazda_kaldirma_bolumunu_onay_alaniyla_gosterir()
+    {
+        var html = KurulumSayfasi.Html(new KurulumDurumu(Kayitli: true, Esli: true, EklentiAdresi: "x.workers.dev"));
+        Assert.Contains("Cihazı kaldır", html);
+        Assert.Contains("id=\"kaldirOnay\"", html);
+        Assert.Contains("/setup/remove", html);
+    }
+
+    [Fact]
+    public void Sayfa_hic_kurulmamis_cihazda_kaldirma_bolumunu_GOSTERMEZ()
+    {
+        // Kaldırılacak kayıt da eklenti de yokken düğme yalnız kafa karıştırır.
+        var html = KurulumSayfasi.Html(new KurulumDurumu(Kayitli: false, Esli: false));
+        Assert.DoesNotContain("id=\"kaldirOnay\"", html);
+    }
+
     // ── JSON ────────────────────────────────────────────────────────────────────
 
     [Fact]

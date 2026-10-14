@@ -220,8 +220,51 @@ public sealed class WindowsKurulumIslemleri : IKurulumIslemleri
         catch { return false; }
     }
 
+    public KurulumSonucu Kaldir()
+    {
+        // Satış sürerken kimlik sökülmez: uçuştaki komutun sonucu eski kimlikle bildirilecek.
+        using var k = _kilit.TryAcquire();
+        if (k is null) return KurulumSonucu.Hata("Şu an bir satış sürüyor. Satış bitince tekrar deneyin.");
+
+        var storeDir = Path.GetDirectoryName(_opt.ResolveStorePath());
+        if (string.IsNullOrEmpty(storeDir)) return KurulumSonucu.Hata("Veri dizini bilinmiyor — kaldırma yapılamaz.");
+        var connectorYolu = Path.Combine(storeDir, "connector.id");
+        var eskiKimlik = _key.ConnectorId;
+
+        try
+        {
+            // connectorId sır DEĞİL, kimliktir: platformdaki eski kaydı bulabilmek için adı
+            // değiştirilerek saklanır. Eklenti dizesi SIR taşır: EklentiAyarlaAsync'teki kuralla
+            // aynı sebeple yedeği alınmaz, silinir.
+            if (File.Exists(connectorYolu))
+                File.Move(connectorYolu, connectorYolu + $".kaldirildi-{DateTime.Now:yyyyMMdd-HHmmss}");
+            if (_eklentiDosya is not null && File.Exists(_eklentiDosya.Yol))
+                File.Delete(_eklentiDosya.Yol);
+        }
+        catch (Exception e) when (e is IOException or UnauthorizedAccessException)
+        {
+            _log.LogError(e, "cihaz kaldırılamadı");
+            return KurulumSonucu.Hata($"Kaldırılamadı: {e.Message}");
+        }
+
+        _log.LogWarning("cihaz kaldırıldı: eski connectorId {Eski}, eklenti bağlantısı silindi — yeniden başlatma gerekli",
+            string.IsNullOrEmpty(eskiKimlik) ? "(yoktu)" : eskiKimlik);
+        return KurulumSonucu.Tamam(
+            "Cihaz kaldırıldı. Yeniden kurmak için eklentiden yeni eşleştirme kodu ve kurulum dizesi alın.",
+            yenidenBaslat: true);
+    }
+
     public void YenidenBaslat()
     {
+        // Windows servisi olarak çalışırken kendini başlatmak servisi KAPATIR ve ajanı servisin
+        // dışında bırakır (sahada ölçüldü, 2026-10-14). Servis yöneticisine bırak: kodla çık,
+        // kurtarma eylemi (sc failure … restart) servisi yeniden açsın.
+        if (Microsoft.Extensions.Hosting.WindowsServices.WindowsServiceHelpers.IsWindowsService())
+        {
+            _log.LogWarning("kurulum sayfası istedi: servis yeniden başlatılıyor (servis yöneticisi açacak)");
+            Environment.Exit(1);
+        }
+
         // Kendini aynı argümanlarla yeniden başlat, sonra dur. Yeni süreç dinleyici portunu eski
         // süreç bırakana kadar alamaz — AgentWorker bağlanmayı kısa aralıklarla yeniden dener.
         var exe = Environment.ProcessPath;

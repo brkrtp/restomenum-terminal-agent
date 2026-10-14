@@ -51,6 +51,13 @@ public interface IKurulumIslemleri
     /// </summary>
     Task<IReadOnlyList<TerminalAday>> TerminalleriTaraAsync(CancellationToken ct);
 
+    /// <summary>
+    /// Kurulu cihazı KALDIRIR: platform kaydı (connectorId) ve eklenti bağlantısı silinir, ajan
+    /// kurulmamış duruma döner ve yeni bir kayıt koduyla baştan kurulabilir. Satış sürüyorsa
+    /// reddeder. Cihaz anahtarı ve GMP.XML KORUNUR — aynı makine aynı kimlikle yeniden kaydolur.
+    /// </summary>
+    KurulumSonucu Kaldir();
+
     /// <summary>Ajanı yeniden başlatır (IP ya da eklenti değişikliğinden sonra).</summary>
     void YenidenBaslat();
 }
@@ -128,6 +135,19 @@ public static class KurulumIstek
         if (dize is null) return null;
         if (dize.Length > 4096) { neden = "kurulum dizesi çok uzun"; return null; }
         return DeviceConfigSetupParser.TryParse(dize, out neden);
+    }
+
+    /// <summary>
+    /// <c>{"confirm":"KALDIR"}</c> — kaldırma geri alınamaz, açık onay sözcüğü şart. Büyük/küçük
+    /// harf ve Türkçe ı/İ farkı gözetilmez; başka her şey reddedilir.
+    /// </summary>
+    public static bool KaldirmaOnayi(string govde, out string? neden)
+    {
+        var v = Alan(govde, "confirm", out neden);
+        if (v is null) return false;
+        if (v.ToUpper(new System.Globalization.CultureInfo("tr-TR")) != "KALDIR")
+        { neden = "onay için kutuya KALDIR yazın"; return false; }
+        return true;
     }
 
     private static string? Alan(string govde, string ad, out string? neden)
@@ -270,6 +290,10 @@ public static class KurulumSayfasi
  button:disabled{background:#1b2540; color:var(--dim); box-shadow:none; cursor:default}
  button.ghost{background:transparent; color:var(--cy); border:1px solid var(--cy); box-shadow:none}
  button.ghost:hover{background:rgba(0,240,255,.08); box-shadow:var(--glow) rgba(0,240,255,.35)}
+ .card.danger{border-color:rgba(255,77,109,.45)}
+ .card.danger h2{color:var(--err)}
+ .card.danger h2 .n{background:var(--err); box-shadow:var(--glow) rgba(255,77,109,.6)}
+ button.tehlike{background:var(--err); color:#fff; box-shadow:var(--glow) rgba(255,77,109,.45)}
 
  .msg{margin-top:10px; font-size:13px; min-height:18px; font-family:ui-monospace,Consolas,monospace}
  .msg.ok{color:var(--ok)} .msg.hata{color:var(--err)} .msg.info{color:var(--cy)}
@@ -351,6 +375,18 @@ public static class KurulumSayfasi
         sb.Append("<button id=\"eklenti\" onclick=\"eklentiKaydet()\">Doğrula ve kaydet</button><div id=\"dizeMsg\" class=\"msg\"></div>");
         sb.Append("<div class=\"hint\">Dize önce eklentiyle canlı doğrulanır; geçerliyse kaydedilir ve ajan yeniden başlar.</div></div>");
 
+        // ── 5. KALDIRMA (yalnız kurulu bir şey varken) ───────────────────────────────
+        if (d.Kayitli || d.EklentiAdresi is not null)
+        {
+            sb.Append("<div class=\"card danger\"><h2><span class=\"n\">!</span>Cihazı kaldır</h2>");
+            sb.Append("<div class=\"hint\">Platform kaydı ve eklenti bağlantısı bu bilgisayardan <b>silinir</b>; ajan " +
+                      "kurulmamış duruma döner. Yeniden kurmak için eklentiden <b>yeni bir eşleştirme kodu</b> ve " +
+                      "<b>kurulum dizesi</b> gerekir. Terminal adresi ve cihaz anahtarı korunur. Satış sürerken yapılamaz.</div>");
+            sb.Append("<label for=\"kaldirOnay\">Onaylamak için KALDIR yazın</label>");
+            sb.Append("<input id=\"kaldirOnay\" autocomplete=\"off\" placeholder=\"KALDIR\">");
+            sb.Append("<button class=\"tehlike\" id=\"kaldir\" onclick=\"kaldir()\">Cihazı kaldır</button><div id=\"kaldirMsg\" class=\"msg\"></div></div>");
+        }
+
         sb.Append("<div class=\"foot\">RESTOMENUM AGENT · LOCAL SETUP CONSOLE</div>");
 
         // ── JS ───────────────────────────────────────────────────────────────────────
@@ -430,6 +466,16 @@ async function eklentiKaydet(){
     document.getElementById('dize').value='';
     document.getElementById('dizeMsg').textContent=j.message+' Ajan yeniden başlıyor…';
     document.getElementById('dizeMsg').className='msg info';
+    setTimeout(async function bekle(){ try{ await fetch('/setup/status'); location.reload(); }catch{ setTimeout(bekle,1000); } }, 3000);
+  }
+}
+async function kaldir(){
+  const b=document.getElementById('kaldir'); b.disabled=true;
+  const j=await post('/setup/remove',{confirm:document.getElementById('kaldirOnay').value});
+  goster('kaldirMsg', j); b.disabled=false;
+  if(j.ok && j.restartRequired){
+    document.getElementById('kaldirMsg').textContent=j.message+' Ajan yeniden başlıyor…';
+    document.getElementById('kaldirMsg').className='msg info';
     setTimeout(async function bekle(){ try{ await fetch('/setup/status'); location.reload(); }catch{ setTimeout(bekle,1000); } }, 3000);
   }
 }

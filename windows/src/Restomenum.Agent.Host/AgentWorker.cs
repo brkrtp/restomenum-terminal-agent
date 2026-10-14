@@ -332,6 +332,12 @@ public sealed class AgentWorker : BackgroundService
                     sonuc.Basarili ? "başarılı" : "başarısız", ayar?.BaseUri.Host ?? "(çözülemedi)");
                 break;
             }
+            case "remove":
+                sonuc = KurulumIstek.KaldirmaOnayi(govde, out var onayNedeni)
+                    ? _kurulum.Kaldir()
+                    : KurulumSonucu.Hata(onayNedeni ?? "onay okunamadı");
+                _log.LogWarning("[kurulum] cihaz kaldırma denemesi: {Sonuc}", sonuc.Basarili ? "başarılı" : "başarısız");
+                break;
             default:
                 Respond(ctx, 404, NOTFOUND);
                 return;

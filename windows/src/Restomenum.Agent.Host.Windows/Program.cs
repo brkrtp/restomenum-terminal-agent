@@ -8,6 +8,11 @@ using Restomenum.Agent.Host.Windows;
 // (HostComposition), üstüne donanıma bağlı gerçek kayıtlar (WindowsDeviceKey + GmpTerminalTransport)
 // eklenir. Bu proje net8.0-windows'tur ve yalnız Windows'ta derlenir/çalışır.
 
+// GMPSmartDLL GMP.XML'i ÇALIŞMA dizininden okur. Servis olarak açılınca bu C:\Windows\System32
+// olur ve DLL oradaki başka bir GMP.XML'le (COM1, TCP kapalı) cihaza ulaşamaz (sahada ölçüldü,
+// 2026-10-14). Her zaman ajanın kendi dizini.
+Directory.SetCurrentDirectory(AppContext.BaseDirectory);
+
 // --pair: ELLE eşleştirme provizyonu; --void: ELLE açık-fiş temizliği (bakım). Yapılandırma
 // sağlayıcısını bozmasın diye argümanlardan ayıklanır.
 bool eslesModu = args.Contains("--pair");
