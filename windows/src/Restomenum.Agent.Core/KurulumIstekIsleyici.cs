@@ -27,6 +27,40 @@ public sealed class KurulumIstekIsleyici(
 {
     private const string NotFound = "{\"error\":\"not found\"}";
 
+    /// <summary>Yeniden başlatma bekleyen bakımın sahipliği; başlatma başarısızsa kapı bununla açılır.</summary>
+    private BakimKapisi.BakimSahipligi? _yenidenBaslatmaBekleyen;
+    /// <summary>Yeniden başlatma başarısız olduysa sayfa ve durum bunu söyler.</summary>
+    private volatile string? _yenidenBaslatmaHatasi;
+
+    public const string ElleYenidenBaslatin =
+        "Ajan kendini yeniden başlatamadı. Değişiklik kaydedildi ama etkili olması için ajanı elle yeniden başlatın " +
+        "(servis: Restart-Service RestomenumAgent; konsol: pencereyi kapatıp yeniden açın).";
+
+    /// <summary>
+    /// Yanıt yazıldıktan sonra çağrılır. Başlatma başarısızsa (false ya da istisna) kapı AÇILIR ve
+    /// durum "elle yeniden başlatın" der (denetim 3, Fable: konsol modunda kapı sonsuza kadar kapalı kalıyordu).
+    /// </summary>
+    public bool YenidenBaslat() => YenidenBaslat(out _);
+
+    public bool YenidenBaslat(out string? hataTuru)
+    {
+        hataTuru = null;
+        bool basladi;
+        try { basladi = islem.YenidenBaslat(); if (!basladi) hataTuru = "başlatılamadı"; }
+        catch (Exception e) { basladi = false; hataTuru = e.GetType().Name; }
+        if (basladi) return true;
+        Interlocked.Exchange(ref _yenidenBaslatmaBekleyen, null)?.KapiyiAc();
+        _yenidenBaslatmaHatasi = ElleYenidenBaslatin;
+        return false;
+    }
+
+    private KurulumDurumu Durum()
+    {
+        var d = islem.Durum();
+        var hata = _yenidenBaslatmaHatasi;
+        return hata is null ? d : d with { Not = d.Not is null ? hata : d.Not + " " + hata };
+    }
+
     public async Task<KurulumYaniti> IsleAsync(KurulumIstegi i, CancellationToken ct)
     {
         var get = KurulumGuvenlik.GetMi(i.Yontem);
@@ -44,8 +78,8 @@ public sealed class KurulumIstekIsleyici(
         {
             switch (i.AltYol)
             {
-                case "": return new(200, KurulumSayfasi.Html(islem.Durum(), anahtar), Html: true);
-                case "status": return new(200, KurulumIstek.Json(islem.Durum()));
+                case "": return new(200, KurulumSayfasi.Html(Durum(), anahtar), Html: true);
+                case "status": return new(200, KurulumIstek.Json(Durum()));
                 case "scan":
                 {
                     // W152: ağ taraması cihaza GMP çağrısı yapmaz (bağlan-kapat), o yüzden GET güvenli.
@@ -112,6 +146,7 @@ public sealed class KurulumIstekIsleyici(
         {
             // Değişiklik yapıldı mı bilinmiyor: süreç satış almasın, temiz açılışla durum diskten okunsun.
             sahiplik.KapaliTut();
+            _yenidenBaslatmaBekleyen = sahiplik;
             return new(200, KurulumIstek.Json(KurulumSonucu.Hata(
                 "İşlem beklenmedik bir hatayla yarıda kaldı. Güvenlik için ajan yeniden başlatılıyor; " +
                 "açıldıktan sonra sayfayı yenileyip durumu kontrol edin.")),
@@ -119,7 +154,7 @@ public sealed class KurulumIstekIsleyici(
         }
 
         var yenidenBaslat = sonuc.Basarili && sonuc.YenidenBaslatmaGerekli;
-        if (yenidenBaslat) sahiplik.KapaliTut();
+        if (yenidenBaslat) { sahiplik.KapaliTut(); _yenidenBaslatmaBekleyen = sahiplik; }
         return new(200, KurulumIstek.Json(sonuc), YenidenBaslat: yenidenBaslat,
             Log: $"{i.AltYol} denemesi: {(sonuc.Basarili ? "başarılı" : "başarısız")} — {sonuc.Mesaj}");
     }

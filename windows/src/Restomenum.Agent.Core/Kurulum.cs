@@ -66,8 +66,12 @@ public interface IKurulumIslemleri
     /// </summary>
     string? YenidenBaslatmaEngeli();
 
-    /// <summary>Ajanı yeniden başlatır (IP ya da eklenti değişikliğinden sonra).</summary>
-    void YenidenBaslat();
+    /// <summary>
+    /// Ajanı yeniden başlatır (IP ya da eklenti değişikliğinden sonra). <c>true</c> = yeniden başlatma
+    /// başladı (süreç çıkacak); <c>false</c> = başlatılamadı, süreç ÇALIŞMAYA DEVAM ediyor — çağıran
+    /// bakım kapısını açmalı ve kullanıcıya elle yeniden başlatmasını söylemeli.
+    /// </summary>
+    bool YenidenBaslat();
 }
 
 /// <summary>W152 — taramada bulunan aday. <paramref name="Ip"/> terminal portuna TCP bağlanabildi;

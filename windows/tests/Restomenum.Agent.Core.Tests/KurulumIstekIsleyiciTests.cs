@@ -1,4 +1,4 @@
-using Restomenum.Agent.Core;
+﻿using Restomenum.Agent.Core;
 using Xunit;
 
 namespace Restomenum.Agent.Core.Tests;
@@ -20,6 +20,10 @@ public class KurulumIstekIsleyiciTests
         public string? Engel;
         public KurulumSonucu TerminalSonucu = KurulumSonucu.Tamam("yazıldı", yenidenBaslat: true);
         public BekleyenIsler? GorulenSayim;
+        public BakimKapisi? Kapi;
+        public bool EklentiBakimdaydi;
+        public Func<bool> YenidenBaslatSonucu = () => true;
+        public int YenidenBaslatCagrisi;
 
         public KurulumDurumu Durum() => new(true, true);
         public Task<KurulumSonucu> KaydolAsync(string kod, CancellationToken ct) => Task.FromResult(KurulumSonucu.Tamam("ok"));
@@ -30,7 +34,11 @@ public class KurulumIstekIsleyiciTests
             return TerminalSonucu;
         }
         public KurulumSonucu Esles() { EslesCagrisi++; return KurulumSonucu.Tamam("eşli"); }
-        public Task<KurulumSonucu> EklentiAyarlaAsync(DeviceConfigSetup ayar, CancellationToken ct) => Task.FromResult(KurulumSonucu.Tamam("ok"));
+        public Task<KurulumSonucu> EklentiAyarlaAsync(DeviceConfigSetup ayar, CancellationToken ct)
+        {
+            EklentiBakimdaydi = Kapi?.Bakimda ?? false;
+            return Task.FromResult(KurulumSonucu.Tamam("ok", yenidenBaslat: true));
+        }
         public Task<IReadOnlyList<TerminalAday>> TerminalleriTaraAsync(CancellationToken ct) => Task.FromResult<IReadOnlyList<TerminalAday>>(Array.Empty<TerminalAday>());
         public KurulumSonucu Kaldir(Func<BekleyenIsler> say)
         {
@@ -39,13 +47,14 @@ public class KurulumIstekIsleyiciTests
             return KurulumSonucu.Tamam("kaldırıldı", yenidenBaslat: true);
         }
         public string? YenidenBaslatmaEngeli() => Engel;
-        public void YenidenBaslat() { }
+        public bool YenidenBaslat() { YenidenBaslatCagrisi++; return YenidenBaslatSonucu(); }
     }
 
     private static (KurulumIstekIsleyici isleyici, SahteIslemler islem, BakimKapisi kapi) Kur(Func<BekleyenIsler>? say = null)
     {
         var islem = new SahteIslemler();
         var kapi = new BakimKapisi();
+        islem.Kapi = kapi;
         var isleyici = new KurulumIstekIsleyici(islem, kapi, Anahtar, 7788,
             say ?? (() => new BekleyenIsler(0, 0, 0)), TimeSpan.FromSeconds(1));
         return (isleyici, islem, kapi);
@@ -197,5 +206,59 @@ public class KurulumIstekIsleyiciTests
         await isleyici.IsleAsync(Istek("POST", "remove", "{\"confirm\":\"KALDIR\"}"), default);
         Assert.Equal(1, islem.KaldirCagrisi);
         Assert.True(bakimdaydi);
+    }
+
+    // ── EKLENTİ DİZESİ de bakım kapısından geçer (denetim 3, Fable — bozma B12 yaşıyordu) ──────
+
+    [Fact]
+    public async Task Eklenti_ayari_BAKIM_kapisi_kapaliyken_yapilir_ve_kapiyi_kapali_tutar()
+    {
+        var (isleyici, islem, kapi) = Kur();
+        var dize = DeviceConfigSetupParser.Kodla(new DeviceConfigSetup(new Uri("https://eklenti.example/"), "sir"));
+        var y = await isleyici.IsleAsync(Istek("POST", "plugin", "{\"setup\":\"" + dize + "\"}"), default);
+        Assert.True(islem.EklentiBakimdaydi);
+        Assert.True(y.YenidenBaslat);
+        Assert.Null(kapi.Gir());
+    }
+
+    // ── YENİDEN BAŞLATMA BAŞARISIZSA kapı açılır, sayfa "elle yeniden başlatın" der ────────────
+
+    private static async Task<(KurulumIstekIsleyici, SahteIslemler, BakimKapisi)> YenidenBaslatmaBekleyen()
+    {
+        var (isleyici, islem, kapi) = Kur();
+        var y = await isleyici.IsleAsync(Istek("POST", "terminal", "{\"ip\":\"127.0.0.1\"}"), default);
+        Assert.True(y.YenidenBaslat);
+        Assert.Null(kapi.Gir());
+        return (isleyici, islem, kapi);
+    }
+
+    [Fact]
+    public async Task Yeniden_baslatma_basarisiz_donerse_kapi_ACILIR_ve_durum_elle_baslatin_der()
+    {
+        // Denetim 3 (Fable): konsol modunda yeni süreç başlatılamazsa kapı sonsuza kadar kapalı kalıyordu.
+        var (isleyici, islem, kapi) = await YenidenBaslatmaBekleyen();
+        islem.YenidenBaslatSonucu = () => false;
+        Assert.False(isleyici.YenidenBaslat());
+        KapiAcik(kapi);
+        var durum = await isleyici.IsleAsync(Istek("GET", "status"), default);
+        Assert.Contains("elle yeniden", durum.Govde);
+    }
+
+    [Fact]
+    public async Task Yeniden_baslatma_istisna_atarsa_da_kapi_ACILIR()
+    {
+        var (isleyici, islem, kapi) = await YenidenBaslatmaBekleyen();
+        islem.YenidenBaslatSonucu = () => throw new System.ComponentModel.Win32Exception(5);
+        Assert.False(isleyici.YenidenBaslat());
+        KapiAcik(kapi);
+    }
+
+    [Fact]
+    public async Task Yeniden_baslatma_basarili_donerse_kapi_KAPALI_kalir()
+    {
+        var (isleyici, islem, kapi) = await YenidenBaslatmaBekleyen();
+        Assert.True(isleyici.YenidenBaslat());
+        Assert.Equal(1, islem.YenidenBaslatCagrisi);
+        Assert.Null(kapi.Gir());
     }
 }

@@ -248,7 +248,7 @@ public sealed class WindowsKurulumIslemleri : IKurulumIslemleri
         return YenidenBaslatmaKarari.Engel(servisModu: true, turler);
     }
 
-    public void YenidenBaslat()
+    public bool YenidenBaslat()
     {
         // Windows servisi olarak çalışırken kendini başlatmak servisi KAPATIR ve ajanı servisin
         // dışında bırakır (sahada ölçüldü, 2026-10-14). Servis yöneticisine bırak: kodla çık,
@@ -259,18 +259,30 @@ public sealed class WindowsKurulumIslemleri : IKurulumIslemleri
         {
             _log.LogWarning("kurulum sayfası istedi: servis yeniden başlatılıyor (servis yöneticisi açacak)");
             Environment.Exit(1);
+            return true;   // ulaşılmaz
         }
 
         // Kendini aynı argümanlarla yeniden başlat, sonra dur. Yeni süreç dinleyici portunu eski
         // süreç bırakana kadar alamaz — AgentWorker bağlanmayı kısa aralıklarla yeniden dener.
         var exe = Environment.ProcessPath;
-        if (exe is null) { _log.LogError("yeniden başlatma: süreç yolu bilinmiyor"); return; }
+        if (exe is null) { _log.LogError("yeniden başlatma: süreç yolu bilinmiyor"); return false; }
         var args = Environment.GetCommandLineArgs().Skip(1);
         var psi = new ProcessStartInfo(exe) { WorkingDirectory = AppContext.BaseDirectory, UseShellExecute = false };
         foreach (var a in args) psi.ArgumentList.Add(a);
         _log.LogWarning("kurulum sayfası istedi: ajan yeniden başlatılıyor ({Args})", string.Join(' ', args));
-        Process.Start(psi);
+        // Yeni süreç başlatılamazsa DURMA: eski süreç çalışmaya devam eder, çağıran bakım kapısını açar
+        // ve kullanıcıya elle yeniden başlatmasını söyler (denetim 3, Fable).
+        try
+        {
+            if (Process.Start(psi) is null) { _log.LogError("yeniden başlatma: yeni süreç başlatılamadı (Process.Start null)"); return false; }
+        }
+        catch (Exception e) when (e is System.ComponentModel.Win32Exception or InvalidOperationException or IOException or UnauthorizedAccessException)
+        {
+            _log.LogError("yeniden başlatma: yeni süreç başlatılamadı ({Tur})", e.GetType().Name);
+            return false;
+        }
         _lifetime.StopApplication();
+        return true;
     }
 
     private static string GmpXmlYolu => Path.Combine(AppContext.BaseDirectory, "GMP.XML");
