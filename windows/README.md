@@ -110,6 +110,6 @@ Kart ödemesinde cihazın (`Json_FP3_Payment` → `stBankPayment`) döndürdüğ
 | Alan | Kaynak | Not |
 |---|---|---|
 | `rrn` | `stBankPayment.rrn` | |
-| `approvalCode` | `stBankPayment.authorizeCode` | son dolu banka kaydı; günlüğe yazılmaz |
+| `approvalCode` | `stBankPayment.authorizeCode` | son dolu ödeme kaydı (rrn/last4 ile aynı kayıt); banka kaydı değilse null; günlüğe yazılmaz |
 | `cardLast4` | `stBankPayment.stCard.pan` | cihaz PAN'ı maskeli verir (ilk 6 + son 4); yalnız son 4 tutulur |
 | `scheme` | — | **Ingenico kart şeması vermez** (ölçüldü 2026-10-14: yanıtta şema/marka alanı yok). Alan bilerek `null`; BIN'den türetmek ayrı bir tasarım kararıdır. |

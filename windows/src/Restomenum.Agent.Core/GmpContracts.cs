@@ -482,7 +482,7 @@ public readonly record struct GmpTicket(
     uint TransactionFlags = 0,
 
     /// <summary>
-    /// RM-0396: bankanın onay (provizyon) kodu — son dolu banka kaydının <c>authorizeCode</c>'u.
+    /// RM-0396: bankanın onay (provizyon) kodu — son dolu ödeme kaydının (rrn/last4 ile aynı kayıt) <c>authorizeCode</c>'u; banka kaydı değilse null.
     /// Referans alanıdır, kart verisi değil (§12.3); yine de günlüğe YAZILMAZ. <c>null</c> = yok.
     /// </summary>
     string? ApprovalCode = null)
