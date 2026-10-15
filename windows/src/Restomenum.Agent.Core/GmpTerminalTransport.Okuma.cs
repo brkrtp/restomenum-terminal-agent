@@ -319,7 +319,8 @@ public sealed partial class GmpTerminalTransport
             }
             return new PaymentProbe(ProbeVerdict.Landed,
                 ApprovedAmountMinor: delta,
-                RemainingMinor: simdi.RemainingMinor, Rrn: simdi.Rrn, CardLast4: simdi.CardLast4);
+                RemainingMinor: simdi.RemainingMinor, Rrn: simdi.Rrn, CardLast4: simdi.CardLast4,
+                ApprovalCode: simdi.ApprovalCode);
         }
 
         if (once is not null && simdi.PaymentCount == once.Value.PaymentCount)

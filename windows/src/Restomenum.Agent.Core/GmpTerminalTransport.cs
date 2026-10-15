@@ -563,6 +563,7 @@ public sealed partial class GmpTerminalTransport : ITerminalTransport
             MerchantDiscountMinor: isyeriIndirimi,
             Rrn: tk.Rrn,
             CardLast4: tk.CardLast4,
+            ApprovalCode: tk.ApprovalCode,
             ProviderResultCode: pr.ToString(),
             Info: bilgi,
             // W104: ödeme ALINDI (sonuç `Approved` KALIR) ama fiş basılamadı/kapanamadı.

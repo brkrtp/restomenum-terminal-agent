@@ -1,4 +1,4 @@
-namespace Restomenum.Agent.Core;
+﻿namespace Restomenum.Agent.Core;
 
 /// <summary>
 /// Test/geliştirme için terminal taklidi. Gerçek cihaz olmadan orkestrasyonun tüm dallarını
@@ -147,7 +147,7 @@ public sealed class SimulatorTransport : ITerminalTransport
             return new PaymentProbe(ProbeVerdict.Landed,
                 ApprovedAmountMinor: _ticket.PaidAmountMinor,
                 RemainingMinor: Math.Max(0, _ticket.TotalAmountMinor - _ticket.PaidAmountMinor),
-                Rrn: _ticket.Rrn, CardLast4: _ticket.CardLast4);
+                Rrn: _ticket.Rrn, CardLast4: _ticket.CardLast4, ApprovalCode: _ticket.ApprovalCode);
         }
         return new PaymentProbe(ProbeVerdict.NotLanded);
     }

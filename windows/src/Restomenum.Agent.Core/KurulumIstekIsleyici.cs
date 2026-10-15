@@ -7,7 +7,10 @@ public sealed record KurulumIstegi(string Yontem, string AltYol, bool YerelIstem
 /// <param name="YenidenBaslat">Yanıt yazıldıktan sonra ajan yeniden başlatılmalı (yanıtın ulaşması koşul DEĞİL).</param>
 /// <param name="Govdesiz">Yanıta gövde YAZILMAZ (HEAD) — yalnız durum kodu.</param>
 public sealed record KurulumYaniti(int Durum, string Govde, bool Html = false, bool YenidenBaslat = false, string? Log = null,
-    bool Govdesiz = false);
+    bool Govdesiz = false)
+{
+    public IReadOnlyList<KeyValuePair<string, string>> Basliklar { get; init; } = [];
+}
 
 /// <summary>
 /// <b>RM-0389 — kurulum isteklerinin yönlendirilmesi.</b> AgentWorker'dan ayrıldı: HTTP ayrıntısı
@@ -64,7 +67,11 @@ public sealed class KurulumIstekIsleyici(
         return hata is null ? d : d with { Not = d.Not is null ? hata : d.Not + " " + hata };
     }
 
-    public async Task<KurulumYaniti> IsleAsync(KurulumIstegi i, CancellationToken ct)
+    /// <summary>Her yanıt — ret ve 404 dahil — <see cref="KurulumGuvenlik.YanitBasliklari"/>'nı taşır.</summary>
+    public async Task<KurulumYaniti> IsleAsync(KurulumIstegi i, CancellationToken ct) =>
+        await IsleIcAsync(i, ct) with { Basliklar = KurulumGuvenlik.YanitBasliklari };
+
+    private async Task<KurulumYaniti> IsleIcAsync(KurulumIstegi i, CancellationToken ct)
     {
         var get = KurulumGuvenlik.GetMi(i.Yontem);
         if (!HttpGovde.Yazilir(i.Yontem))

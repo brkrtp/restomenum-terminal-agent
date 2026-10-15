@@ -237,7 +237,8 @@ public sealed class AgentOrchestrator
             // Para HAREKET ETTİ. `RemainingMinor > 0` olabilir ve bu arıza DEĞİLDİR: artımlı
             // modelde kasiyer kalanı ayrı bir ödemeyle ekleyecek.
             var result = new TransportResult(TransportOutcome.Approved,
-                ApprovedAmountMinor: sonuc.ApprovedAmountMinor, Rrn: sonuc.Rrn, CardLast4: sonuc.CardLast4);
+                ApprovedAmountMinor: sonuc.ApprovedAmountMinor, Rrn: sonuc.Rrn, CardLast4: sonuc.CardLast4,
+                ApprovalCode: sonuc.ApprovalCode);
             _store.Advance(cmd.CommandId, cmd.State, CommandState.COMPLETED,
                 terminalReference: sonuc.Rrn, resultJson: Serialize(result));
             return new AgentOutcome(AgentDecision.Approved, CommandState.COMPLETED, result,

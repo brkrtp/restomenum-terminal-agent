@@ -565,7 +565,7 @@ public sealed partial class GmpWrapper : IGmpWrapper
     /// ödemeyi "sayaç arttı → Landed → APPROVED" yaptırır. Bu durumda <c>PaymentCount = -1</c> döner;
     /// çağıran bunu "okunamadı" diye ele almalı, "ödeme yok" diye DEĞİL.</para>
     /// </summary>
-    private static GmpTicket Map(ST_TICKET t)
+    public static GmpTicket Map(ST_TICKET t)
     {
         long total = (long)t.TotalReceiptAmount + t.KatkiPayiAmount;
         long paid  = t.TotalReceiptPayment;
@@ -609,6 +609,7 @@ public sealed partial class GmpWrapper : IGmpWrapper
         int lastType = 0;
         string? rrn = null;
         string? last4 = null;
+        string? onayKodu = null;   // RM-0396: son dolu ödeme kaydının (rrn/last4 ile aynı) onay kodu; banka kaydı değilse null; günlüğe YAZILMAZ
         string? errCode = null;
         string? appErrCode = null;
         string? errText = null;
@@ -640,8 +641,8 @@ public sealed partial class GmpWrapper : IGmpWrapper
             // W79 §7: "banka açıkça reddetti" ile "bankaya HİÇ gidilmedi" ayrımı bu iki alandan
             // kuruluyor. Boş olmaları KANITTIR (yetkilendirme yok); `stan` kullanılmaz — ölçümle
             // çürütüldü (aynı olayda 0 ve 722 geldi).
-            var onay = Bos(bp?.authorizeCode) ? null : bp!.authorizeCode;
-            var satirRrn = Bos(bp?.rrn) ? null : bp!.rrn;
+            var onay = Deger(bp?.authorizeCode);
+            var satirRrn = Deger(bp?.rrn);
             satirlar.Add(new GmpPaymentLine((int)pl.typeOfPayment, pl.payAmount, bkm, ad, hata, uygKod,
                 onay, satirRrn));
         }
@@ -656,7 +657,8 @@ public sealed partial class GmpWrapper : IGmpWrapper
                 var bank = p.stBankPayment;
                 if (bank is not null)
                 {
-                    rrn = string.IsNullOrWhiteSpace(bank.rrn) ? null : bank.rrn;
+                    rrn = Deger(bank.rrn);
+                    onayKodu = Deger(bank.authorizeCode);
                     var pan = bank.stCard?.pan;
                     if (!string.IsNullOrEmpty(pan))
                     {
@@ -686,6 +688,7 @@ public sealed partial class GmpWrapper : IGmpWrapper
         // okunmuş olmalı hem de dizi o kadarını taşıyabilmiş olmalı.
         return new GmpTicket(total, paid, count, lastType, rrn, last4, errCode, errText, appErrCode,
             appErrText, satirlar, PaymentsAreComplete: dolu == count && uzunluk >= count,
+            ApprovalCode: onayKodu,
             TotalDiscountMinor: indirim, TotalTaxMinor: kdv,
             PrinterLines: yaziciSatirlari, PrinterLineCount: t.totalNumberOfPrinterLines,
             // W104: HAM taşınır. Ödeme satırlarının aksine burada pencere/kırpma yok — cihazın

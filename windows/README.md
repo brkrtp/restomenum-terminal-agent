@@ -99,3 +99,29 @@ kurulduğunda onlar durdurulmalı ve başlangıç türü **Manuel** yapılmalıd
 `C:\Windows\System32`'dir. Giriş noktası bu yüzden açılışta çalışma dizinini ajanın kendi dizinine
 çevirir; komut satırındaki göreli yollar (`--check-tax`) ve göreli `Agent:StorePath` başlangıç
 dizinine göre çözülür.
+
+**Eklentiden tek tık kayıt:** eklenti, ajanın kurulu olduğu bilgisayarda şu adresi yeni sekmede açar:
+
+```
+http://127.0.0.1:7788/setup#kod=<eşleştirme kodu>
+```
+
+Kod `#`'den sonra durur; sunucuya, günlüğe ve `Referer`'a gitmez. Sayfa kodu alana yerleştirir ve
+adresten siler; kayıt kullanıcı **Kaydol**'a bastığında yapılır, kendiliğinden yapılmaz (`127.0.0.1`'i
+her site açtırabilir). Kod `[A-Za-z0-9-]{4,64}` değilse yerleştirilmez. Sayfa başka sitenin
+çerçevesine gömülemez (`X-Frame-Options: DENY`, `frame-ancestors 'none'`). Sır (kurulum dizesi)
+bağlantıya **konmaz**.
+
+---
+
+## 6. Ingenico'nun sonuç alanları (RM-0396)
+
+Kart ödemesinde cihazın (`Json_FP3_Payment` → `stBankPayment`) döndürdüğü ve ajanın sonuca
+(`TransportResult` / `result_json` / nexo yanıtı) taşıdığı alanlar:
+
+| Alan | Kaynak | Not |
+|---|---|---|
+| `rrn` | `stBankPayment.rrn` | |
+| `approvalCode` | `stBankPayment.authorizeCode` | son dolu ödeme kaydı (rrn/last4 ile aynı kayıt); banka kaydı değilse null; günlüğe yazılmaz |
+| `cardLast4` | `stBankPayment.stCard.pan` | cihaz PAN'ı maskeli verir (ilk 6 + son 4); yalnız son 4 tutulur |
+| `scheme` | — | **Ingenico kart şeması vermez** (ölçüldü 2026-10-14: yanıtta şema/marka alanı yok). Alan bilerek `null`; BIN'den türetmek ayrı bir tasarım kararıdır. |

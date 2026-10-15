@@ -105,6 +105,21 @@ public class AgentOrchestratorTests : IDisposable
     }
 
     [Fact]
+    public async Task Kurtarmada_Landed_sonucu_ONAY_KODUNU_kalici_yazar()
+    {
+        // RM-0396: UNKNOWN → yoklama → Landed yolunda TransportResult onay kodunu da taşımalı.
+        var sim = new SimulatorTransport()
+            .Expect(new TransportResult(TransportOutcome.Unknown))
+            .WithTicket(new TicketState(HasOpenTicket: true, TotalAmountMinor: 24000,
+                PaidAmountMinor: 24000, Rrn: "RRN-K", CardLast4: "8012", ApprovalCode: "654321"));
+
+        var sonuc = await Orch(sim).HandleAsync(Req(), Gelecek);
+
+        Assert.Equal(AgentDecision.Approved, sonuc.Decision);
+        Assert.Contains("\"approvalCode\":\"654321\"", _store.Read("cmd1")!.ResultJson);
+    }
+
+    [Fact]
     public async Task Unknown_AslaYenidenGonderilmez()
     {
         var sim = new SimulatorTransport()
